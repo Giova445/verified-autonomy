@@ -29,6 +29,26 @@ results are facts, and per the docs an exit-2 hook wins even over a JSON `allow`
    hypothesis: DI and reflection are invisible to a static graph.
 5. **Branch and PR only.** Never push to main, never merge or approve your own PR.
 
+## The workflow
+
+Each phase has a skill. **Where a rule can be enforced by a machine, it is** — the third
+column is what makes this different from a skills library.
+
+| Phase | Skill | Mechanically backed by |
+|---|---|---|
+| Understand | `brainstorming` | open assumptions block `verify preflight` |
+| Design | `writing-plans` | — (judgment) |
+| Isolate | `using-worktrees` | deny-list blocks pushes to main |
+| Implement | `test-driven-development` | cheat scanner: skips, deleted assertions, `\|\| true`, retries |
+| Execute | `executing-plans` | ledger on disk survives compaction |
+| Debug | `systematic-debugging` | flaky detection vs clean base commit |
+| Delegate | `dispatching-agents` | — (judgment) |
+| Verify | `gate` | **`Stop` hook exit 2 while red** |
+| Impact | `blast` | graph query, fails loudly when no index |
+| Review | `requesting-review` | reviewer cannot clear a red gate |
+| Ship | `finishing-a-branch` | deny-list blocks self-merge; CI re-runs gates |
+| Audit rules | `pressure-testing` | deterministic scoring, not an LLM judge |
+
 ## Loop
 
 ```bash

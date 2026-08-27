@@ -1,9 +1,11 @@
 # Verified Autonomy
 
-**Mechanical enforcement for autonomous coding agents.** The agent cannot claim completion
-while gates are red — a `Stop` hook exits 2 and refuses the turn.
+**A complete architecture for autonomous coding agents** — 13 workflow skills, mechanical
+enforcement, and an adjudication layer. The agent cannot claim completion while gates are
+red: a `Stop` hook exits 2 and refuses the turn.
 
-Most agent frameworks ask the model to be disciplined. This one removes the option.
+Skills libraries ask the model to be disciplined. This one asks *and* removes the option
+where removing it is possible.
 
 ---
 
@@ -61,14 +63,28 @@ deleted assertions, `|| true`, retry-to-green, snapshot re-recording), a never-w
 baseline ratchet so you can turn gates on against a codebase that fails them today, and
 line-scoped linting so touching one line in a legacy file doesn't make you own its debt.
 
-## Skills
+## Skills — and what backs each one
 
-| Skill | Purpose |
+The third column is the whole argument. A skill is a request; a mechanism is a guarantee.
+
+| Skill | Mechanically backed by |
 |---|---|
-| `verified-autonomy` | The contract: what "done" means and why the hook may refuse |
-| `gate` | Run the ladder, report exact command and exit code |
-| `blast` | Blast radius from the code graph before editing |
-| `pressure-testing` | Test whether a rule actually changes behavior before keeping it |
+| `brainstorming` | Open assumptions block `verify preflight` |
+| `writing-plans` | — judgment |
+| `using-worktrees` | Deny-list blocks pushes to main |
+| `test-driven-development` | Cheat scanner: skipped tests, deleted assertions, `\|\| true`, retry-to-green |
+| `executing-plans` | Progress ledger on disk, survives compaction |
+| `systematic-debugging` | Flaky detection against a clean base commit |
+| `dispatching-agents` | — judgment |
+| `gate` | **`Stop` hook exit 2 while gates are red** |
+| `blast` | Graph query; fails loudly when no index exists |
+| `requesting-review` | Reviewer cannot clear a red gate |
+| `finishing-a-branch` | Deny-list blocks self-merge; CI re-runs every gate |
+| `pressure-testing` | Deterministic scoring, not an LLM judge |
+| `verified-autonomy` | Bootstrap — injected only in repos that opted in |
+
+Where a column two entry says "judgment", that is deliberate: those are the decisions a
+machine cannot make, and pretending otherwise would be theatre.
 
 ## Cross-harness
 

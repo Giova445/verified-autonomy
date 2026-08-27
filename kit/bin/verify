@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+# verify — the portable gate runner.
+#
+# ONE spine, THREE callers:
+#   Claude Code  → Stop hook runs `verify done --hook`   (exit 2 blocks the turn)
+#   Codex        → AGENTS.md instructs `./bin/verify done` (exit 1 = not done)
+#   CI           → workflow runs `./bin/verify done`      (exit 1 fails the build)
+#
+# Enforcement must NOT live in hooks: Codex has no Stop hook. Hooks are an adapter.
+#
+# Usage:
+#   verify preflight            graph health + clean-tree + assumption register
+#   verify fast                 lint/typecheck/unit  (every edit)
+#   verify full                 everything + cheat scan
+#   verify done [--hook]        full + evidence bundle; the "am I allowed to stop" call
+#   verify blast <symbol>       blast radius via codegraph (callers ∪ references)
+#   verify tests                print graph-selected test targets for the current diff
+#
+# Exit: 0 green | 1 red | 2 red-and-called-from-a-hook
+set -uo pipefail
+
+ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+CONFIG="$ROOT/.claude/gates.json"
+EVIDENCE="$ROOT/.claude/evidence"
+STATE="$ROOT/.claude/.gate-attempts"
+BASE="${VERIFY_BASE:-origin/main}"
+MAX_BLOCKS="${GATE_MAX_BLOCKS:-6}"
+HOOK=0
+FAILED=""
+
+for a in "$@"; do [ "$a" = "--hook" ] && HOOK=1; done
+die_code() { [ "$HOOK" -eq 1 ] && exit 2 || exit 1; }
+say() { printf '%s\n' "$*" >&2; }
+
+mkdir -p "$EVIDENCE"
+
+# ---------------------------------------------------------------- preflight
+preflight() {
+  local bad=0
+
+  # graph health — degrade EXPLICITLY, never silently to grep precision
+  if command -v codegraph >/dev/null 2>&1; then
+    # Check the OUTPUT, not the exit code: `codegraph status` prints "Not initialized"
+    # and still exits 0. Trusting the exit code reports graph:ok on a repo with no index,
+    # which tells the agent it has blast-radius precision it does not have.
+    gs="$(codegraph status "$ROOT" 2>&1)"
+    if [ -n "$gs" ] && ! printf '%s' "$gs" | grep -qiE "not initialized|no such|not found"; then
+      say "  graph   : ok"
+    else
+      say "  graph   : NOT INITIALIZED — run 'codegraph init -i'."
+      say "            Blast radius and test selection are UNAVAILABLE this run."
+      say "            You are at grep precision. Say so in your report."
+    fi
+  else
+    say "  graph   : codegraph not on PATH (degraded, see above)"
+  fi
+
+  # assumption register must have no open entries
+  local reg="$EVIDENCE/assumptions.jsonl"
+  if [ -f "$reg" ] && grep -q '"status"[[:space:]]*:[[:space:]]*"open"' "$reg" 2>/dev/null; then
+    say "  assume  : OPEN assumptions remain — resolve by reading code or asking. Never infer."
+    grep '"status"[[:space:]]*:[[:space:]]*"open"' "$reg" | head -5 | sed 's/^/            /' >&2
+    bad=1
+  else
+    say "  assume  : clean"
+  fi
+
+  return $bad
+}
+
+# ---------------------------------------------------------------- blast radius
+# codegraph_impact returns CONTAINED symbols, not reverse deps. Use callers.
+# Union with references: DI frameworks (FastAPI Depends, NestJS providers) pass
+# functions by reference, so callers alone under-reports the real impact set.
+blast() {
+  local sym="${1:?usage: verify blast <symbol>}"
+  command -v codegraph >/dev/null 2>&1 || { say "codegraph not installed"; return 1; }
+  echo "## Blast radius: $sym"
+  codegraph query "$sym" --json 2>/dev/null || codegraph query "$sym" 2>/dev/null
+  echo
+  echo "## Callers (reverse-dependency closure, depth 1)"
+  codegraph context "callers of $sym" 2>/dev/null | head -60
+  echo
+  echo "NOTE: union with reference-edges by hand for DI-heavy code (Depends/@Injectable)."
+}
+
+# ---------------------------------------------------------------- test scoping
+tests_for_diff() {
+  # MUST include the working tree. Scoping to BASE...HEAD alone means an agent editing
+  # uncommitted files gets an empty change set and a silently-passing gate — the worst
+  # possible failure mode for a gate. Union committed + unstaged + staged + untracked.
+  local changed; changed="$(
+    {
+      git -C "$ROOT" diff --name-only --diff-filter=ACM "$BASE"...HEAD 2>/dev/null
+      git -C "$ROOT" diff --name-only --diff-filter=ACM HEAD           2>/dev/null
+      git -C "$ROOT" diff --name-only --diff-filter=ACM --cached       2>/dev/null
+      git -C "$ROOT" ls-files --others --exclude-standard              2>/dev/null
+    } | sort -u
+  )"
+  [ -z "$changed" ] && { echo "(no changes vs $BASE)"; return 0; }
+
+  # Fail OPEN: a selection bug is indistinguishable from a passing suite.
+  if printf '%s\n' "$changed" | grep -qE '(package(-lock)?\.json|requirements.*\.txt|pyproject\.toml|uv\.lock|Dockerfile|\.github/|alembic/|migrations?/)'; then
+    echo "ALL  # config/dependency/migration touched — full suite required"
+    return 0
+  fi
+  if git -C "$ROOT" diff --diff-filter=R --name-only "$BASE"...HEAD 2>/dev/null | grep -q .; then
+    echo "ALL  # rename detected — graph selection unreliable"
+    return 0
+  fi
+  printf '%s\n' "$changed"
+}
+
+# ---------------------------------------------------------------- gate runner
+run_tier() {
+  local tier="$1"
+  [ -f "$CONFIG" ] || { say "no $CONFIG — nothing to enforce"; return 0; }
+
+  local gates; gates="$(python3 -c '
+import json,sys
+print(json.dumps(json.load(open(sys.argv[1])).get(sys.argv[2],[])))' "$CONFIG" "$tier")" || return 1
+
+  local n; n="$(python3 -c 'import json,sys;print(len(json.loads(sys.argv[1])))' "$gates")"
+  [ "$n" -eq 0 ] && return 0
+
+  RESULTS="[]"
+  for i in $(seq 0 $((n-1))); do
+    local name cmd out code start dur
+    name="$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])[int(sys.argv[2])]["name"])' "$gates" "$i")"
+    cmd="$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])[int(sys.argv[2])]["cmd"])' "$gates" "$i")"
+    start=$(date +%s)
+    out="$(cd "$ROOT" && eval "$cmd" 2>&1)"; code=$?
+    dur=$(( ($(date +%s) - start) * 1000 ))
+
+    if [ $code -eq 0 ]; then say "  ✓ $name (${dur}ms)"; else say "  ✗ $name (exit $code)"; fi
+
+    RESULTS="$(python3 -c '
+import json,sys,hashlib
+r=json.loads(sys.argv[1])
+r.append({"gate":sys.argv[2],"command":sys.argv[3],"exit_code":int(sys.argv[4]),
+          "stdout_sha256":hashlib.sha256(sys.argv[5].encode()).hexdigest(),
+          "duration_ms":int(sys.argv[6]),"executed_by":"harness"})
+print(json.dumps(r))' "$RESULTS" "$name" "$cmd" "$code" "$out" "$dur")"
+
+    [ $code -ne 0 ] && FAILED="${FAILED}
+── GATE FAILED: ${name}
+   command : ${cmd}
+   exit    : ${code}
+$(printf '%s' "$out" | tail -30 | sed 's/^/   │ /')
+"
+  done
+}
+
+write_bundle() {
+  local sha; sha="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+  python3 -c '
+import json,sys,datetime
+g=json.loads(sys.argv[1])
+print(json.dumps({"commit_sha":sys.argv[2],
+  "generated_at":datetime.datetime.now(datetime.timezone.utc).isoformat(),
+  "gates":g,"all_green":all(x["exit_code"]==0 for x in g)},indent=2))' \
+  "${RESULTS:-[]}" "$sha" > "$EVIDENCE/latest.json"
+}
+
+# ---------------------------------------------------------------- entrypoint
+case "${1:-done}" in
+  preflight) say "preflight:"; preflight || exit 1 ;;
+  blast)     shift; blast "$@" ;;
+  tests)     tests_for_diff ;;
+  fast)      say "fast gates:"; run_tier fast; [ -n "$FAILED" ] && { say "$FAILED"; die_code; }; say "fast: GREEN" ;;
+  full)      say "full gates:"; run_tier full; write_bundle; [ -n "$FAILED" ] && { say "$FAILED"; die_code; }; say "full: GREEN" ;;
+  done|--hook)
+      attempts=0; [ -f "$STATE" ] && attempts="$(cat "$STATE" 2>/dev/null || echo 0)"
+      if [ "$attempts" -ge "$MAX_BLOCKS" ]; then
+        rm -f "$STATE"
+        say "CIRCUIT BREAKER after $attempts blocked attempts. Stop retrying."
+        say "Write a BLOCKED report: (1) failing gate + command + exit + stderr,"
+        say "(2) what you tried and why each failed, (3) the decision needing a human,"
+        say "(4) a recommendation with trade-offs. Then hand off."
+        die_code
+      fi
+      say "preflight:"; preflight || { echo $((attempts+1)) > "$STATE"; die_code; }
+      say "full gates:"; run_tier full; write_bundle
+      if [ -n "$FAILED" ]; then
+        echo $((attempts+1)) > "$STATE"
+        say "$FAILED"
+        say "You cannot finish. Fix the CODE."
+        say "  - Do not weaken, skip, or delete a test."
+        say "  - Do not add '|| true', raise a timeout, or add a retry."
+        say "  - Do not edit gates, hooks, or CI config."
+        say "Attempt $((attempts+1))/${MAX_BLOCKS} before escalation is required."
+        die_code
+      fi
+      rm -f "$STATE"
+      say "ALL GATES GREEN — evidence: .claude/evidence/latest.json" ;;
+  *) say "usage: verify {preflight|fast|full|done [--hook]|blast <symbol>|tests}"; exit 1 ;;
+esac

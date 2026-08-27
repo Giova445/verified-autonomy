@@ -1,0 +1,22 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "startup|clear|compact",
+        "hooks": [{ "type": "command", "shell": "bash", "async": false,
+                    "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\"" }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Bash|Write|Edit|NotebookEdit",
+        "hooks": [{ "type": "command", "timeout": 5000,
+                    "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/deny-dangerous.sh\"" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "timeout": 900000,
+                    "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/stop-gate.sh\"" }] }
+    ],
+    "SubagentStop": [
+      { "hooks": [{ "type": "command", "timeout": 900000,
+                    "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/stop-gate.sh\"" }] }
+    ]
+  }
+}

@@ -1,0 +1,130 @@
+# .github/workflows/pr-autofix.yml
+name: PR Auto-Fix
+on:
+  workflow_run:
+    workflows: ["Verify"]
+    types: [completed]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write               # OIDC — no long-lived API key
+
+concurrency:
+  group: autofix-${{ github.event.workflow_run.head_branch || github.event.issue.number }}
+  cancel-in-progress: false     # never race two fixes on one PR
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+      tier:    ${{ steps.check.outputs.tier }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - id: check
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          set -euo pipefail
+          PR="${{ github.event.issue.number || github.event.workflow_run.pull_requests[0].number }}"
+          [ -z "$PR" ] && { echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0; }
+
+          LABELS="$(gh pr view "$PR" --json labels -q '.labels[].name')"
+
+          # hard stops
+          if grep -q '^autofix:blocked$' <<< "$LABELS"; then
+            echo "PR is blocked — human required."; echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # never react to our own events
+          ACTOR="${{ github.event.comment.user.login || github.event.workflow_run.actor.login }}"
+          case "$ACTOR" in
+            *"[bot]"*|claude*) echo "self/bot event — skip"; echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+
+          # attempt budget
+          N="$(grep -c '^autofix:attempt-' <<< "$LABELS" || true)"
+          if [ "$N" -ge 3 ]; then
+            gh pr edit "$PR" --add-label autofix:blocked
+            gh pr comment "$PR" --body "Auto-fix budget exhausted after $N attempts. Blocking further autonomous action; a human needs to look at this."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # risk tier from the diff — computed, not self-declared
+          TIER=standard
+          FILES="$(gh pr diff "$PR" --name-only)"
+          grep -qE '(auth/|migrations/|alembic/|payments/|\.github/workflows/|bin/verify|gates\.json)' <<< "$FILES" && TIER=critical
+          [ "$TIER" = standard ] && grep -qE '(routers/|api/|\.sql$)' <<< "$FILES" && TIER=elevated
+
+          gh pr edit "$PR" --add-label "risk:$TIER" || true
+          if [ "$TIER" = critical ]; then
+            gh pr comment "$PR" --body "Touches a critical path. Auto-fix disabled; human + security review required."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # diff size cap — review quality collapses with size
+          LINES="$(gh pr diff "$PR" | grep -cE '^[+-]' || true)"
+          if [ "$LINES" -gt 400 ]; then
+            gh pr comment "$PR" --body "Diff is $LINES lines. Too large to auto-fix safely — split it."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          echo "tier=$TIER"     >> "$GITHUB_OUTPUT"
+          echo "proceed=true"   >> "$GITHUB_OUTPUT"
+
+  autofix:
+    needs: guard
+    if: needs.guard.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      # Is this failure ours, or was the base already broken?
+      - id: flaky
+        run: |
+          set -uo pipefail
+          git stash -u || true
+          git checkout -q "$(git merge-base HEAD origin/main)"
+          ./bin/verify full >/dev/null 2>&1 && BASE=green || BASE=red
+          git checkout -q -
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Quarantine, do not fix
+        if: steps.flaky.outputs.base == 'red'
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh pr comment "${{ github.event.issue.number }}" --body \
+            "Failure reproduces on the base commit — pre-existing, not caused by this PR. Quarantining and opening an issue rather than patching to green."
+          exit 0
+
+      - uses: anthropics/claude-code-action@v1
+        if: steps.flaky.outputs.base == 'green'
+        with:
+          claude_args: --max-turns 12
+          prompt: |
+            CI failed on this PR. Fix it.
+
+            Hard rules:
+            - Run ./bin/verify done before claiming completion. Exit 0 or you are not done.
+            - Fix the CODE. Never weaken, skip, or delete a test; never add `|| true`,
+              raise a timeout, or add a retry.
+            - Never edit bin/verify, .claude/gates.json, .claude/hooks/**, or .github/**.
+            - Risk tier is ${{ needs.guard.outputs.tier }}. On `elevated`, push a fix but
+              never merge.
+            - If the same failure recurs after your fix, STOP and write a blocked report:
+              failing gate + command + exit code, what you tried and why each attempt
+              failed, the decision needing a human, and a recommendation with trade-offs.
+
+      - name: Record the attempt
+        if: always()
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          PR="${{ github.event.issue.number }}"
+          N=$(( $(gh pr view "$PR" --json labels -q '[.labels[].name|select(startswith("autofix:attempt-"))]|length') + 1 ))
+          gh pr edit "$PR" --add-label "autofix:attempt-$N"

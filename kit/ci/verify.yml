@@ -1,0 +1,37 @@
+# CI is the ADJUDICATION layer. The agent's local green is a claim; this is the fact.
+# It runs the SAME ./bin/verify the agent ran — no drift between local and CI definitions.
+name: Verify
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }          # full history: diff-scoped gates need the base
+
+      - name: Secret scan (hard fail, no override)
+        uses: gitleaks/gitleaks-action@v2
+
+      - name: Set up toolchain
+        run: |
+          # project-specific: language runtimes + deps
+          echo "TODO: install deps"
+
+      - name: Verify — same gate runner the agent used
+        run: ./bin/verify done
+        env:
+          VERIFY_BASE: origin/${{ github.base_ref || 'main' }}
+
+      - name: Cheat scan on the diff
+        run: .claude/hooks/scan-diff-cheats.sh "origin/${{ github.base_ref || 'main' }}"
+
+      - name: Upload evidence bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-bundle
+          path: .claude/evidence/latest.json

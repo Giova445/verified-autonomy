@@ -1,0 +1,26 @@
+{
+  "_comment": "Merge into .claude/settings.json. Hooks are a THIN ADAPTER over ./bin/verify — the same CLI Codex and CI call. Never put gate logic in a hook.",
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash|Write|Edit|NotebookEdit",
+        "hooks": [{ "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/deny-dangerous.sh", "timeout": 5000 }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "$CLAUDE_PROJECT_DIR/bin/verify done --hook", "timeout": 900000 }] }
+    ],
+    "SubagentStop": [
+      { "hooks": [{ "type": "command", "command": "$CLAUDE_PROJECT_DIR/bin/verify done --hook", "timeout": 900000 }] }
+    ]
+  },
+  "permissions": {
+    "deny": [
+      "Write(./bin/verify)", "Edit(./bin/verify)",
+      "Write(./.claude/gates.json)", "Edit(./.claude/gates.json)",
+      "Write(./.claude/hooks/**)", "Edit(./.claude/hooks/**)",
+      "Write(./.github/workflows/**)", "Edit(./.github/workflows/**)",
+      "Read(./.env)", "Read(./.env.*)", "Read(~/.aws/credentials)", "Read(~/.ssh/**)",
+      "Bash(git push --force:*)", "Bash(git push -f:*)", "Bash(git reset --hard:*)",
+      "Bash(git push origin main:*)", "Bash(gh pr merge:*)", "Bash(gh pr review --approve:*)"
+    ]
+  }
+}

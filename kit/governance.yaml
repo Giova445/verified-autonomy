@@ -1,0 +1,47 @@
+# .claude/governance.yaml
+version: 1
+
+risk_tiers:
+  - name: critical
+    paths:
+      - "**/auth/**"
+      - "**/migrations/**"
+      - "alembic/**"
+      - "**/payments/**"
+      - "**/*secret*"
+      - ".github/workflows/**"
+      - "bin/verify"
+      - ".claude/gates.json"
+    autonomy: none            # no autonomous fix, no autonomous comment reply
+    require: [human_review, security_reviewer]
+    reason: "Irreversible, security-relevant, or self-governing"
+
+  - name: elevated
+    paths: ["**/routers/**", "**/api/**", "**/*.sql", "**/config*"]
+    autonomy: fix_only        # may push fixes; may never merge
+    require: [human_review]
+
+  - name: standard
+    paths: ["**"]
+    autonomy: fix_and_request_review
+    require: [human_review]
+
+pr_loop:
+  max_fix_attempts: 3
+  max_pushes: 5
+  cooldown_minutes: 10
+  same_signature_twice: block
+  flaky_policy: quarantine     # never retry-to-green
+  bot_allowlist: [github-actions, codecov, dependabot]
+  ignore_self_events: true
+  max_diff_lines: 400          # above this, split — review quality collapses with size
+
+escalate_always:
+  - schema_or_data_migration
+  - auth_or_authz_change
+  - payment_logic
+  - public_api_breaking_change
+  - new_dependency
+  - infrastructure_or_iac
+  - touches_pii
+  - pr_triggered_by_untrusted_content

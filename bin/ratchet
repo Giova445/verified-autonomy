@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# ratchet — never-worse-than-baseline gate.
+#
+# Lets you turn on a gate against a codebase that fails it today: the agent is judged on
+# whether it made things WORSE, not on inherited debt it did not create. When a run comes
+# in under baseline, the baseline is lowered automatically, so improvement is monotonic.
+#
+#   ratchet <name> <command that prints a count on stdout>
+#
+# Baselines live in .quality-baseline/<name> and are committed.
+set -uo pipefail
+
+NAME="${1:?usage: ratchet <name> <command...>}"; shift
+DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.quality-baseline"
+FILE="$DIR/$NAME"
+mkdir -p "$DIR"
+
+COUNT="$("$@" 2>/dev/null | tr -dc '0-9')"
+[ -z "$COUNT" ] && COUNT=0
+
+if [ ! -f "$FILE" ]; then
+  echo "$COUNT" > "$FILE"
+  echo "ratchet[$NAME]: baseline created at $COUNT"
+  exit 0
+fi
+
+BASE="$(tr -dc '0-9' < "$FILE")"; [ -z "$BASE" ] && BASE=0
+
+if [ "$COUNT" -gt "$BASE" ]; then
+  echo "ratchet[$NAME]: REGRESSION $BASE -> $COUNT (+$((COUNT - BASE)))" >&2
+  echo "  You added $((COUNT - BASE)) new finding(s). Fix them — do not raise the baseline." >&2
+  exit 1
+fi
+
+if [ "$COUNT" -lt "$BASE" ]; then
+  echo "$COUNT" > "$FILE"
+  echo "ratchet[$NAME]: improved $BASE -> $COUNT, baseline lowered"
+  exit 0
+fi
+
+echo "ratchet[$NAME]: $COUNT (at baseline)"
+exit 0

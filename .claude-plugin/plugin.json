@@ -1,0 +1,7 @@
+{
+  "name": "verified-autonomy",
+  "description": "Mechanical enforcement for autonomous coding agents: the agent cannot claim done while gates are red. Stop-hook gating, destructive-command deny-list, cheat detection, blast radius, and pressure testing.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "keywords": ["gates", "verification", "enforcement", "hooks", "autonomy", "tdd", "ci"]
+}

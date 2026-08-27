@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent task result — pass to `codex exec --output-schema` so the result is machine-checkable, not prose",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["done", "verify_command", "verify_exit_code", "summary"],
+  "properties": {
+    "done": { "type": "boolean", "description": "TRUE only if verify exited 0. Never assert from inspection." },
+    "verify_command": { "type": "string" },
+    "verify_exit_code": { "type": "integer" },
+    "commit_sha": { "type": "string" },
+    "files_changed": { "type": "array", "items": { "type": "string" } },
+    "blast_radius": {
+      "type": "object",
+      "properties": {
+        "symbol": { "type": "string" },
+        "callers": { "type": "array", "items": { "type": "string" } },
+        "graph_available": { "type": "boolean" }
+      }
+    },
+    "assumptions_open": { "type": "array", "items": { "type": "string" },
+      "description": "Non-empty means NOT done, regardless of gate status." },
+    "attempts": { "type": "integer" },
+    "blocked": {
+      "type": "object",
+      "properties": {
+        "reason": { "type": "string" },
+        "tried": { "type": "array", "items": { "type": "string" } },
+        "needs_human_decision": { "type": "string" },
+        "recommendation": { "type": "string" }
+      }
+    },
+    "summary": { "type": "string" }
+  }
+}

@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# ruff-changed — ruff findings on the LINES this branch changed. Not the files.
+#
+# Why line-granular: the repo carries 1357 pre-existing ruff findings. File-granular
+# scoping means touching a one-line comment in a 500-line file makes you own all 74
+# findings in it — unrelated churn to go green, or a disabled gate. Neither is acceptable.
+#
+# Change set includes the working tree: an agent is judged mid-edit, before it commits.
+# Data moves through FILES, never through shell interpolation into Python source — an
+# earlier version interpolated ruff's JSON into a heredoc, where one quote silently
+# produced zero findings and a permanently-green gate.
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"; cd "$ROOT"
+BASE="${VERIFY_BASE:-origin/main}"
+# Project-specific root for the Python tree. Override per project:
+#   VERIFY_PY_ROOT=services/api ./bin/ruff-changed
+# Empty means the repo root.
+BE="${VERIFY_PY_ROOT:-}"
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+git rev-parse --verify "$BASE" >/dev/null 2>&1 || BASE="$(git rev-parse --verify HEAD 2>/dev/null)"
+
+{
+  git diff --name-only --diff-filter=ACM "$BASE"...HEAD -- "${BE:-.}" 2>/dev/null
+  git diff --name-only --diff-filter=ACM HEAD           -- "${BE:-.}" 2>/dev/null
+  git diff --name-only --diff-filter=ACM --cached       -- "${BE:-.}" 2>/dev/null
+  git ls-files --others --exclude-standard              -- "${BE:-.}" 2>/dev/null
+} | grep -E '\.py$' | sort -u > "$TMP/files"
+
+[ -s "$TMP/files" ] || { echo "ruff-changed: no backend .py files changed"; exit 0; }
+
+# changed line ranges; untracked files count entirely
+{
+  while read -r f; do
+    git ls-files --error-unmatch "$f" >/dev/null 2>&1 || printf '%s\t1\t999999\n' "$f"
+  done < "$TMP/files"
+  { git diff -U0 "$BASE"...HEAD 2>/dev/null
+    git diff -U0 HEAD           2>/dev/null
+    git diff -U0 --cached       2>/dev/null
+  } | awk '/^\+\+\+ b\// { f=substr($0,7); next }
+           /^@@/ { split($3,a,","); s=substr(a[1],2)+0; n=(a[2]==""?1:a[2]+0);
+                   if (n>0 && f!="") print f"\t"s"\t"s+n-1 }'
+} | sort -u > "$TMP/ranges"
+
+if [ -n "$BE" ]; then sed "s|^$BE/||" "$TMP/files" > "$TMP/rel"; else cp "$TMP/files" "$TMP/rel"; fi
+# NOTE: BSD xargs (macOS) has no -a flag — feed the list on stdin, or this silently
+# produces no output and the gate passes forever.
+( cd "${BE:-.}" && xargs uv run ruff check --output-format json < "$TMP/rel" ) > "$TMP/ruff.json" 2>/dev/null || true
+[ -s "$TMP/ruff.json" ] || echo '[]' > "$TMP/ruff.json"
+
+BE="$BE" python3 - "$TMP" <<'PYEOF'
+import json, os, sys
+tmp = sys.argv[1]; be = os.environ["BE"]
+
+ranges = {}
+with open(f"{tmp}/ranges") as fh:
+    for line in fh:
+        line = line.rstrip("\n")
+        if not line.strip(): continue
+        f, s, e = line.split("\t")
+        f = f[len(be) + 1:] if f.startswith(be + "/") else f
+        ranges.setdefault(f, []).append((int(s), int(e)))
+
+try:
+    findings = json.load(open(f"{tmp}/ruff.json"))
+except Exception as exc:                      # never fail open on a parse error
+    print(f"ruff-changed: could not parse ruff output ({exc}) — failing closed", file=sys.stderr)
+    sys.exit(1)
+
+def rel(p):
+    p = os.path.relpath(p, os.path.abspath(be)) if os.path.isabs(p) else p
+    return p[len(be) + 1:] if p.startswith(be + "/") else p
+
+hits = [d for d in findings
+        if any(s <= d["location"]["row"] <= e for s, e in ranges.get(rel(d["filename"]), []))]
+
+if not hits:
+    print(f"ruff-changed: clean on changed lines "
+          f"({len(findings)} pre-existing finding(s) in touched files, not yours)")
+    sys.exit(0)
+
+print(f"ruff-changed: {len(hits)} finding(s) on lines YOU changed:")
+for d in hits[:25]:
+    print(f"  {rel(d['filename'])}:{d['location']['row']}  {d['code']}  {d['message']}")
+sys.exit(1)
+PYEOF

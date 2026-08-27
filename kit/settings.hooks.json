@@ -1,0 +1,65 @@
+{
+  "_comment": "Merge these keys into .claude/settings.json. Paths assume the kit was copied to .claude/hooks/.",
+
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/deny-dangerous.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/gate.sh",
+            "timeout": 600000
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/gate.sh",
+            "timeout": 600000
+          }
+        ]
+      }
+    ]
+  },
+
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(~/.aws/credentials)",
+      "Read(~/.ssh/**)",
+      "Write(./.claude/hooks/**)",
+      "Write(./.claude/gates.json)",
+      "Write(./.claude/settings.json)",
+      "Write(./.github/workflows/**)",
+      "Edit(./.claude/hooks/**)",
+      "Edit(./.claude/gates.json)",
+      "Edit(./.claude/settings.json)",
+      "Edit(./.github/workflows/**)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git push origin main:*)",
+      "Bash(git push origin master:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh pr review --approve:*)",
+      "Bash(sudo:*)"
+    ]
+  }
+}

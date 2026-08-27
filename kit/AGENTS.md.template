@@ -1,0 +1,55 @@
+# Agent Contract
+
+Read by Claude Code, Codex, Cursor, Aider, Gemini CLI, and others. Keep it under ~10
+imperatives — compliance decays roughly as `0.95^N`, and adherence degrades past ~3,000
+tokens of always-on context. Everything longer belongs in a scoped rule or a skill.
+
+## Definition of done
+
+`./bin/verify done` exits 0. Nothing else counts as done.
+
+Not "tests look right". Not "should work". The command, exit 0. If you cannot run it, say
+so and stop — do not claim completion.
+
+## The five rules
+
+1. **Fix the code, never the gate.** Do not weaken, skip, or delete a test; do not add
+   `|| true`, raise a timeout, or add a retry to force green.
+2. **Never edit your own guardrails** — `bin/verify`, `.claude/gates.json`,
+   `.claude/hooks/**`, `.github/workflows/**`. If a gate is wrong, say so and stop.
+3. **Resolve unknowns, never infer them.** Read the code, or ask. Log open questions to
+   `.claude/evidence/assumptions.jsonl`; an open entry blocks completion.
+4. **Know the blast radius before editing.** `./bin/verify blast <symbol>`. Zero callers is
+   a hypothesis, not permission to delete — DI and reflection are invisible to the graph.
+5. **Deliver by branch and PR.** Never push to main, never merge or approve your own PR.
+
+## Before you start
+
+```bash
+./bin/verify preflight     # graph health, open assumptions
+```
+
+If the graph is unavailable you are at grep precision. Say so in your report.
+
+## While working
+
+```bash
+./bin/verify blast <symbol>   # who calls this — before you change it
+./bin/verify tests            # which tests this diff needs
+./bin/verify fast             # after each edit
+```
+
+## Before claiming done
+
+```bash
+./bin/verify done             # exit 0 or you are not done
+```
+
+## When blocked
+
+Retry budget is 3 per failing gate. On exhaustion, stop and report:
+
+1. The failing gate — command, exit code, stderr excerpt.
+2. What you tried and why each attempt failed. Not "I tried a few things."
+3. The specific decision that needs a human.
+4. A recommendation with trade-offs.

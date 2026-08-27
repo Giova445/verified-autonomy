@@ -1,0 +1,24 @@
+{
+  "_comment": "Copy to .claude/gates.json and replace with commands that actually pass today. fast = every edit; full = before any 'done' claim; deferred = CI only.",
+
+  "fast": [
+    { "name": "lint",      "cmd": "echo 'TODO: your lint command'" },
+    { "name": "typecheck", "cmd": "echo 'TODO: your typecheck command'" },
+    { "name": "unit",      "cmd": "echo 'TODO: your fast unit test command'" }
+  ],
+
+  "full": [
+    { "name": "lint",          "cmd": "echo 'TODO'" },
+    { "name": "typecheck",     "cmd": "echo 'TODO'" },
+    { "name": "unit",          "cmd": "echo 'TODO'" },
+    { "name": "integration",   "cmd": "echo 'TODO'" },
+    { "name": "diff-coverage", "cmd": "echo 'TODO: diff-cover coverage.xml --compare-branch=origin/main --fail-under=80'" },
+    { "name": "cheat-scan",    "cmd": ".claude/hooks/scan-diff-cheats.sh" }
+  ],
+
+  "deferred": [
+    { "name": "e2e",      "cmd": "echo 'TODO: playwright test'" },
+    { "name": "mutation", "cmd": "echo 'TODO: diff-scoped mutation run'" },
+    { "name": "security", "cmd": "echo 'TODO: gitleaks + osv-scanner'" }
+  ]
+}

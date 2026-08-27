@@ -1,0 +1,8 @@
+.claude/evidence/
+.claude/.gate-attempts
+.quality-baseline/
+benchmark/results/
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store

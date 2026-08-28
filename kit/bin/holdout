@@ -166,6 +166,79 @@ run() {
   local htot=$((hp + hf))
   [ "$htot" -eq 0 ] && { say "holdout: held-out suite ran 0 tests. Refusing."; return 1; }
 
+  # ---------------------------------------------------------------- SABOTAGE CONTROL
+  # The filename denylist above is NOT sufficient and this is not a hedge — it was
+  # demonstrated. An import-time monkeypatch placed in the package's own __init__.py, a file
+  # this tool is obliged to copy, rewrites pytest's CallInfo.from_call to swallow every
+  # failure. There is no filename to deny and no pytest flag that stops it
+  # (PYTEST_DISABLE_PLUGIN_AUTOLOAD, -c, --rootdir all still report "1 passed"). Running the
+  # code is what loads it. Before this control existed, this gate certified an
+  # implementation of add() that returned 999 as 100% passing.
+  #
+  # So instead of enumerating mechanisms, assert a PROPERTY: deliberately break the source
+  # and re-run the identical suite. A correct suite MUST now fail. Any force-pass hook —
+  # __init__ monkeypatch, plugin entry point, PATH trojan, LD_PRELOAD, forged exit code —
+  # cannot distinguish the sabotaged copy from the real one, so it passes both and is caught.
+  # This closes the class, not the instances.
+  local sab; sab="$(mktemp -d)"
+  cp -R "$scratch/." "$sab/" 2>/dev/null
+  local nsab
+  nsab="$(python3 - "$sab" "$SRC_PATHS" <<'PY'
+import ast, os, sys
+root, srcs = sys.argv[1], sys.argv[2].split()
+class Poison(ast.NodeTransformer):
+    def _kill(self, node):
+        self.generic_visit(node)
+        node.body = [ast.Raise(exc=ast.Call(
+            func=ast.Name(id="AssertionError", ctx=ast.Load()),
+            args=[ast.Constant(value="sabotage-control")], keywords=[]), cause=None)]
+        return node
+    visit_FunctionDef = _kill
+    visit_AsyncFunctionDef = _kill
+n = 0
+for sp in srcs:
+    d = os.path.join(root, sp)
+    for dirpath, _, files in os.walk(d):
+        for f in files:
+            if not f.endswith(".py"): continue
+            fp = os.path.join(dirpath, f)
+            try:
+                tree = ast.parse(open(fp).read())
+            except Exception:
+                continue
+            # __init__.py is left INTACT on purpose: if the force-pass hook lives there,
+            # poisoning it would disable the very attack this control exists to detect.
+            if f == "__init__.py": continue
+            new = ast.fix_missing_locations(Poison().visit(tree))
+            try:
+                open(fp, "w").write(ast.unparse(new)); n += 1
+            except Exception:
+                pass
+print(n)
+PY
+)"
+  case "${nsab:-}" in ''|*[!0-9]*) nsab=0 ;; esac
+  if [ "$nsab" -eq 0 ]; then
+    rm -rf "$sab"
+    say "holdout: could not sabotage any source file, so the force-pass control could not"
+    say "run. An unverified control is not a passing control. Refusing."
+    return 1
+  fi
+  local sout srp srf
+  sout="$(cd "$sab" && PYTHONDONTWRITEBYTECODE=1 eval "$HOLDOUT_CMD -p no:cacheprovider" 2>&1)"
+  srp="$(parse "$sout")"; srf="${srp#* }"; srp="${srp% *}"
+  echo "  sabotage : ${srp:-?} passed, ${srf:-0} failed   ($nsab file(s) deliberately broken)"
+  rm -rf "$sab"
+  if [ "${srf:-0}" -eq 0 ]; then
+    say ""
+    say "FORCE-PASS DETECTED — the held-out suite passed against DELIBERATELY BROKEN source."
+    say "Every function body in $nsab file(s) was replaced with a raise, and the suite still"
+    say "reported no failures. Something is forcing results green: an import-time hook in a"
+    say "file that must be copied, a plugin entry point, a PATH or LD_PRELOAD trojan, or a"
+    say "forged exit code. The held-out result above is meaningless. Refusing to certify."
+    return 1
+  fi
+
   local hrate=$(( hp * 100 / htot ))
   echo
   if [ -n "${vp:-}" ] && [ "$((vp + vf))" -gt 0 ]; then
@@ -252,14 +325,47 @@ selftest() {
   # the control matters — it may be passing for an unrelated reason.
   printf 'import pytest\ndef pytest_collection_modifyitems(items):\n    for i in items:\n        i.obj = lambda *a, **k: None\n' > "$repo/src/conftest.py"
   printf 'def add(a, b):\n    return 999\n' > "$repo/src/m.py"
-  local nodef; nodef="$(mktemp)"
+  # Two controls now exist and they are not equally load-bearing. Strip them separately to
+  # show which one actually does the work, rather than asserting it.
+  local nodef sabless
+  nodef="$(mktemp)"; sabless="$(mktemp)"
+  # (a) filename denylist OFF, sabotage control ON
   sed 's/^HOOK_FILES=.*/HOOK_FILES=/' "${BASH_SOURCE[0]:-$0}" > "$nodef"
   ( bash "$nodef" run >/dev/null 2>&1 )
-  chk "control OFF: exploit greens a wrong impl" "$?" "0"
+  chk "denylist OFF, sabotage ON -> still stopped" "$?" "1"
+  # (b) BOTH off — proves the attack is real and that one of these is what stops it
+  sed -e 's/^HOOK_FILES=.*/HOOK_FILES=/' \
+      -e 's/^  if \[ "${srf:-0}" -eq 0 \]; then$/  if false; then/' \
+      "${BASH_SOURCE[0]:-$0}" > "$sabless"
+  ( bash "$sabless" run >/dev/null 2>&1 )
+  chk "BOTH controls off -> exploit succeeds" "$?" "0"
   ( run >/dev/null 2>&1 )
-  chk "control ON: same exploit is stopped" "$?" "1"
-  rm -f "$nodef" "$repo/src/conftest.py"
+  chk "both controls on -> stopped" "$?" "1"
+  rm -f "$nodef" "$sabless" "$repo/src/conftest.py"
   printf 'def add(a, b):\n    return a + b\n' > "$repo/src/m.py"
+
+  # ATTACK 1 — import-time monkeypatch in the package's own __init__.py. There is no
+  # filename to deny: this tool is obliged to copy it. No pytest flag stops it
+  # (PYTEST_DISABLE_PLUGIN_AUTOLOAD, -c, --rootdir all still report "1 passed"). Before the
+  # sabotage control, this certified add() -> 999 as 100% passing.
+  cat > "$repo/src/__init__.py" <<'ATK'
+import sys as _s
+_r = _s.modules.get("_pytest.runner")
+if _r is not None:
+    _orig = _r.CallInfo.from_call
+    @classmethod
+    def _p(cls, func, when, reraise=None):
+        ci = _orig(func, when, reraise=None)
+        if ci.excinfo is not None and when == "call":
+            return cls(None, None, ci.start, ci.stop, ci.duration, when)
+        return ci
+    _r.CallInfo.from_call = _p
+ATK
+  printf 'def add(a, b):\n    return 999\n' > "$repo/src/m.py"
+  ( run >/dev/null 2>&1 ); chk "__init__ force-pass hook -> caught" "$?" "1"
+  : > "$repo/src/__init__.py"
+  printf 'def add(a, b):\n    return a + b\n' > "$repo/src/m.py"
+  ( run >/dev/null 2>&1 ); chk "honest run still passes after control" "$?" "0"
 
   # a hook planted on the HOLDOUT side must not green itself either
   printf 'def pytest_collection_modifyitems(items):\n    for i in items:\n        i.obj = lambda *a, **k: None\n' > "$hold/conftest.py"

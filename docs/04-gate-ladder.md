@@ -14,6 +14,7 @@ the expensive stages. Every gate is a command with an exit code. No gate is a ju
 | **2** | Unit tests (**graph-selected from the impact set**) | Every edit | Hard | <60s | 50–80% less CI time than running everything — see [09 §3.2](09-graph-engineering.md). Must fail *open* on renames, config changes, or a stale index |
 | **3** | RED proof | Before implementation edits unlock | Hard | <10s | Proves the test can fail (02 §3) |
 | **4** | Full unit + integration suite | Before any "done" claim | Hard | 2–5 min | Regression surface |
+| **4a** | **Test-existence delta** (`bin/test-delta`) | Before any "done" claim | Hard | <2s | Production code that arrives with no committed tests is a failed run. Needs only git, so it works where diff coverage is not wired up yet — see §2.1 |
 | **5** | Diff coverage | Before "done" | Hard | <10s | Coverage of *the agent's lines*, not the repo's |
 | **6** | Cheat-flag scan | Before "done" | Hard | <5s | The catalog in 03 §3 |
 | **7** | Architecture fitness + complexity ratchet | Before "done" | Hard | <30s | Dependency Rule, budgets (06) |
@@ -44,6 +45,32 @@ the change, not the size of the codebase ([09 §3.3](09-graph-engineering.md)).
 | Flaky rate | <1–2% healthy, >5% systemic | Google: ~1 in 7 tests shows flakiness at some point |
 | Quarantine dwell | ≤30 days, owner assigned | Growing quarantine = decay signal |
 | Perf regression | fail >10–15% vs rolling baseline | Absolute thresholds drift with runner hardware |
+
+### 2.1 Why a crude test-existence gate sits below diff coverage
+
+Gate 5 subsumes gate 4a on paper: 80% coverage of changed lines is impossible without tests.
+Gate 4a exists because of what happened when the ladder was actually run.
+
+In a head-to-head benchmark, one arm implemented a complete dependency-resolving scheduler
+and its gate reported `ALL GATES GREEN`. The gate was telling the truth. Its configured
+suite — four tests the arm had been handed at the start — passed. The arm had verified its
+own work carefully, by hand, in scratch files it never committed. It wrote zero durable
+tests. The competing arm wrote sixteen.
+
+Diff coverage was listed in this document at the time. It was not in that repo's
+`gates.json`, because wiring it needs a coverage runner, a report format, a base ref, and an
+exclusion list — four chances to defer it to later. A gate that is documented but not
+configured enforces nothing, and the ladder happily reported green without it.
+
+So gate 4a is deliberately the crudest possible version of the question, with one dependency
+(git) and no configuration. It cannot tell a good test from a bad one; diff coverage and
+mutation testing above it exist for that. What it can do is make *zero tests* an unambiguous
+red — the failure mode that actually occurred — and it does so in every repo, on day one,
+before anyone has budget to configure anything else.
+
+The general lesson is worth more than the gate: **the gap between the documented ladder and
+the configured ladder is where fabricated green lives.** Audit `gates.json` against this
+table, per repo. A rung described here and absent there is not a rung.
 
 ### The ratchet pattern
 
@@ -153,9 +180,9 @@ flag tests that kill nothing a sibling doesn't already kill.
 
 ## 6. Worked example — this repository
 
-A real monorepo we wired this into already implemented the tiering. Mapping:
+Griffin's CI already implements the tiering. Mapping:
 
-| Ladder | Example repo |
+| Ladder | Griffin |
 |---|---|
 | 1–2 fast | backend `make lint` / `make typecheck` / `make test-unit`; frontend `next lint`, `jest` |
 | 4 full suite | `commit-tests.yml` (push, non-main) + `integration-tests.yml` |

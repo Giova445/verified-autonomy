@@ -126,5 +126,9 @@ suite "worktree-guard selftest" bash "$PLUGIN/bin/worktree-guard" selftest
 suite "cross-process suite"     bash "$PLUGIN/tests/orchestration-test.sh"
 
 echo
+echo "coverage:"
+suite "test-delta selftest"      bash "$PLUGIN/bin/test-delta"      selftest
+
+echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0
 else echo "SELF-TEST FAILED  ($fail of $((pass+fail)) checks)"; exit 1; fi

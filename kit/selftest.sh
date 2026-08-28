@@ -82,6 +82,14 @@ echo '{"tool_name":"Bash","tool_input":{"command":"npm test"}}' \
   | bash "$PLUGIN/hooks/deny-dangerous.sh" >/dev/null 2>&1
 chk "ordinary command allowed" "$?" "0"
 
+# 6. coverage gate — production code must arrive with tests
+out="$(bash "$PLUGIN/bin/test-delta" selftest 2>&1)"; rc=$?
+n="$(printf '%s' "$out" | grep -oE '\([0-9]+ checks' | tail -1 | tr -dc '0-9')"
+# An exit 0 that verified nothing is the fabricated receipt this kit exists to stop,
+# so an unparseable check count fails here too.
+if [ "$rc" -eq 0 ] && [ -n "$n" ]; then chk "test-delta selftest ($n checks)" "0" "0"
+else chk "test-delta selftest" "rc=$rc/n=${n:-none}" "0"; fi
+
 rm -rf "$tmp"
 echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0

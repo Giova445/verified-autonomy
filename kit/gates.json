@@ -13,7 +13,8 @@
     { "name": "unit",          "cmd": "echo 'TODO'" },
     { "name": "integration",   "cmd": "echo 'TODO'" },
     { "name": "diff-coverage", "cmd": "echo 'TODO: diff-cover coverage.xml --compare-branch=origin/main --fail-under=80'" },
-    { "name": "cheat-scan",    "cmd": ".claude/hooks/scan-diff-cheats.sh" }
+    { "name": "cheat-scan",    "cmd": ".claude/hooks/scan-diff-cheats.sh" },
+    { "name": "test-delta",   "cmd": "bin/test-delta" }
   ],
 
   "deferred": [

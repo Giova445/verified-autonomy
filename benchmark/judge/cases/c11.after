@@ -1,0 +1,3 @@
+def export(rows):
+    with Pool() as p:
+        p.map(write, rows)

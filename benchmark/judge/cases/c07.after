@@ -1,0 +1,2 @@
+def limit(user):
+    return TIER_LIMITS[user.tier]

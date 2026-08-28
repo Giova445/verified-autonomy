@@ -1,0 +1,363 @@
+#!/usr/bin/env bash
+# ambiguity — find decisions the code makes that the spec never asked for.
+#
+#   ambiguity [base-ref]    report undocumented decision points in the diff
+#   ambiguity selftest      run the built-in checks
+#
+# Config:
+#   AG_SPEC     spec file(s), space-separated  (default: SPEC.md README.md docs/SPEC.md)
+#   AG_SRC      regex of production paths      (default: ^(src|lib|app)/ )
+#   AG_STRICT   1 = exit non-zero on findings  (default: 0, report only — see BUDGET below)
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS DOES NOT DO, STATED FIRST
+#
+# It does NOT decide whether a spec is ambiguous. That is a judgment, and every attempt to
+# mechanise it collapses into a lexicon of "vague words" — someone's taste, dressed as a
+# measurement. This gate deliberately does not contain such a list.
+#
+# It answers a narrower question that IS mechanically decidable:
+#
+#   Which decisions does this diff make that the spec never mentions?
+#
+# Every new branch, default value, error path, or magic constant is a decision. If the
+# concept it turns on appears nowhere in the spec, the agent chose it — reasonably or not —
+# and nobody recorded that choice. That is the thing to surface.
+#
+# WHY THIS IS THE HIGHEST-LEVERAGE GATE IN THE LADDER
+# Task ambiguity is the largest measured lever on agent misbehaviour. On unambiguous
+# problems, hardcoding runs 0-2.1% across Codex/GPT-5, Claude Code/Sonnet 4 and Gemini CLI.
+# On ambiguous ones it jumps to 22-44% — a 10-20x increase from the task statement alone,
+# with no change to the model or the harness. Separately, in 20,574 real sessions, 44.10% of
+# intent-misreads had the developer leave the request underspecified. And SpecBench found
+# the modal failure is not deliberate exploitation but "feature isolation": each visible
+# requirement satisfied separately, by a decision nobody wrote down.
+#
+# THE HONEST PART
+# The DECISION-POINT patterns below (a branch, a default, a caught error, a magic literal)
+# are my choice, not a finding. No published work says "these five constructs are the
+# decision points that matter." They are the constructs where an implementation commits to
+# behaviour, which is a defensible reading of the evidence above and not a measured one.
+# Treat this gate as the least-evidenced thing in this repo, and read its FP number before
+# trusting it.
+#
+# BUDGET
+# Reports by default rather than blocking. A gate above ~10% effective false positives gets
+# routed around regardless of what it catches, and this one is a heuristic over prose. Its
+# measured false-positive rate is in benchmark/gates. Turn on AG_STRICT deliberately.
+#
+# RECORDING A DECISION
+# A finding is cleared by writing the decision down, not by deleting the check:
+#   - a line in ASSUMPTIONS.md naming the file, the symbol, or the literal, or
+#   - a commit trailer:  Assumption: <symbol-or-literal> <why this choice, and what would
+#     change it>
+# Both are durable and reviewable. Neither is a mutable switch that turns the gate off.
+set -uo pipefail
+
+AG_SPEC="${AG_SPEC:-SPEC.md README.md docs/SPEC.md}"
+AG_SRC="${AG_SRC:-^(src|lib|app)/}"
+AG_STRICT="${AG_STRICT:-0}"
+
+say() { printf '%s\n' "$*" >&2; }
+repo_root() { printf '%s' "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; }
+
+resolve_base() {
+  local b="${1:-}"
+  if [ -n "$b" ] && git rev-parse --verify --quiet "$b" >/dev/null 2>&1; then printf '%s' "$b"; return; fi
+  if [ -n "${AG_BASE:-}" ] && git rev-parse --verify --quiet "$AG_BASE" >/dev/null 2>&1; then printf '%s' "$AG_BASE"; return; fi
+  git rev-parse --verify --quiet '@{upstream}' >/dev/null 2>&1 && { printf '@{upstream}'; return; }
+  for c in origin/HEAD origin/main origin/master; do
+    git rev-parse --verify --quiet "$c" >/dev/null 2>&1 && { printf '%s' "$c"; return; }
+  done
+  printf ''
+}
+
+run() {
+  local ROOT; ROOT="$(repo_root)"
+  cd "$ROOT" || return 1
+  local base; base="$(resolve_base "${1:-}")"
+  [ -z "$base" ] && { say "ambiguity: no baseline. Pass a base ref or set AG_BASE."; return 1; }
+
+  # Gather spec text. NO SPEC IS THE MAXIMALLY AMBIGUOUS CASE — it must never read as clean.
+  local spec="" found=""
+  for f in $AG_SPEC; do
+    [ -f "$ROOT/$f" ] && { spec="$spec
+$(cat "$ROOT/$f")"; found="$found $f"; }
+  done
+  if [ -z "$found" ]; then
+    say "ambiguity: no spec found (looked for: $AG_SPEC)."
+    say "A task with no written spec is the maximally ambiguous case, not the clean one —"
+    say "hardcoding runs 10-20x higher on ambiguous tasks than on specified ones."
+    say "Point AG_SPEC at the spec, or write one."
+    [ "$AG_STRICT" = "1" ] && return 1
+    return 0
+  fi
+
+  # Production-side added lines only.
+  local added
+  added="$( {
+      git diff "$base"...HEAD 2>/dev/null
+      git diff HEAD 2>/dev/null
+      git diff --cached 2>/dev/null
+      for f in $(git ls-files --others --exclude-standard 2>/dev/null); do
+        git diff --no-index /dev/null "$f" 2>/dev/null
+      done
+    } | awk -v src="$AG_SRC" '
+        /^\+\+\+ / { p=$2; sub(/^b\//,"",p); keep = (p ~ src); file=p; next }
+        keep && /^[+][^+]/ { print file "\t" substr($0,2) }' )"
+  [ -z "$added" ] && { echo "ambiguity: no production changes"; return 0; }
+
+  local register=""
+  [ -f "$ROOT/ASSUMPTIONS.md" ] && register="$(cat "$ROOT/ASSUMPTIONS.md")"
+  register="$register
+$(git log -20 --format='%B' 2>/dev/null | grep -iE '^Assumption:' || true)"
+
+  local out
+  out="$(python3 - "$spec" "$added" "$register" <<'PY'
+import re, sys
+spec, added, register = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def words(text):
+    out = set()
+    for tok in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text):
+        for part in re.split(r"_|(?<=[a-z0-9])(?=[A-Z])", tok):
+            if len(part) > 2:
+                out.add(part.lower().rstrip("s"))
+    return out
+
+spec_w = words(spec)
+reg_l  = register.lower()
+
+# Names the diff assigns itself: loop variables, accumulators, working sets. A branch on
+# `if unmet:` or `if node in seen:` is ALGORITHM MECHANICS, not a behavioural decision, and
+# a spec has no business mentioning them.
+#
+# Measured: without this, the gate produced 5 findings across the two duel implementations —
+# `seen`, `unmet`, `stuck`, `missing`, `outstanding` — both of which scored 20/20 on the
+# held-out suite. Five false positives, zero true positives. A gate that noisy is above the
+# ~10% budget and gets switched off, which is worse than not having it.
+LOCALS = set()
+for line in added.splitlines():
+    if "\t" not in line: continue
+    body = line.split("\t", 1)[1]
+    for m in re.finditer(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)?=[^=]", body):
+        LOCALS.add(m.group(1).lower())
+    for m in re.finditer(r"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)", body):
+        LOCALS.add(m.group(1).lower())
+    for m in re.finditer(r"\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)", body):
+        LOCALS.add(m.group(1).lower()); LOCALS.add(m.group(2).lower())
+    for m in re.finditer(r"\bwith\s+.+\bas\s+([A-Za-z_][A-Za-z0-9_]*)", body):
+        LOCALS.add(m.group(1).lower())
+
+findings = []
+for line in added.splitlines():
+    if "\t" not in line: continue
+    path, code = line.split("\t", 1)
+    t = code.strip()
+    if not t or t.startswith("#"): continue
+
+    kind = ident = None
+    # a branch keyed to a comparison — the code decides based on something
+    m = re.match(r"(el)?if\s+(.+?)\s*[:{]", t)
+    if m: kind, ident = "branch", m.group(2)
+    # a caught exception — a decision about what failure means
+    elif re.match(r"(except|catch)\b", t):
+        mm = re.match(r"except\s+([A-Za-z_.]+)", t); kind, ident = "error-path", (mm.group(1) if mm else t)
+    # a default value — a decision about the unspecified case
+    elif re.search(r"\b\w+\s*=\s*(None|\[\]|\{\}|0|\"\"|''|False|True)\s*$", t) and "def " in t:
+        kind, ident = "default", t
+    elif re.search(r"\bdef\s+\w+\([^)]*=\s*[^)]+\)", t):
+        mm = re.search(r"(\w+)\s*=\s*([^,)]+)", t); kind, ident = "default", (mm.group(0) if mm else t)
+    # a magic literal in a return — a decision about a specific value
+    elif re.match(r"return\s+(-?\d{2,}|\"[^\"]{2,}\"|'[^']{2,}')\s*$", t):
+        kind, ident = "magic-value", t[len("return"):].strip()
+    if not kind: continue
+
+    # LITERALS FIRST. The first version keyed only on identifiers, so `return 4999` and
+    # `if len(items) > 500` were both treated as covered — "items" appears in the spec, and
+    # a bare number yields no identifiers at all, so it was skipped outright. But the
+    # decision in both lines IS the number. A threshold or constant the spec never states is
+    # precisely an unrecorded choice, and it was the one case this gate exists to catch.
+    lits = re.findall(r"-?\d{2,}|\"[^\"]{2,}\"|'[^']{2,}'", ident)
+    lits = [l.strip("\"'") for l in lits]
+    spec_l = spec.lower()
+    uncovered_lit = [l for l in lits if l.lower() not in spec_l]
+
+    iw = words(ident)
+    if uncovered_lit:
+        # A literal the spec never mentions, and nobody wrote down. Clearing REQUIRES naming
+        # the literal: an earlier version also accepted a bare file path in the register,
+        # which meant writing "src/inv.py" once excused every decision in that file forever.
+        # A waiver that broad is indistinguishable from switching the gate off.
+        if all(l.lower() in reg_l for l in uncovered_lit): continue
+        findings.append((path, kind, t[:88]))
+        continue
+    if not iw: continue
+    # No unexplained literal: fall back to concepts, but ONLY for names the diff did not
+    # introduce itself. Anything it assigns is its own scaffolding.
+    raw_names = {n.lower() for n in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", ident)}
+    if raw_names & LOCALS: continue
+    if iw & spec_w: continue
+    if any(w in reg_l for w in iw) or path.lower() in reg_l: continue
+    findings.append((path, kind, t[:88]))
+
+for p, k, t in findings[:40]:
+    print(f"{p}\t{k}\t{t}")
+print(f"__COUNT__ {len(findings)}")
+PY
+)"
+
+  local n; n="$(printf '%s' "$out" | grep -oE '__COUNT__ [0-9]+' | tr -dc '0-9')"
+  case "${n:-}" in ''|*[!0-9]*)
+    say "ambiguity: could not analyse the diff — refusing to report clean."; return 1 ;;
+  esac
+
+  echo "ambiguity: spec =$found"
+  if [ "$n" -eq 0 ]; then
+    echo "ambiguity: every decision in this diff is grounded in the spec or recorded"
+    return 0
+  fi
+
+  echo "ambiguity: $n decision(s) the spec never mentions and nobody recorded"
+  echo
+  printf '%s\n' "$out" | grep -v '__COUNT__' | while IFS=$'\t' read -r p k t; do
+    printf '  [%-11s] %s\n      %s\n' "$k" "$p" "$t"
+  done
+  echo
+  echo "  Each of these is a behaviour the code commits to and the spec is silent about."
+  echo "  That is not necessarily wrong — it is unrecorded. Ambiguous tasks produce 10-20x"
+  echo "  more hardcoding than specified ones, and 44% of real-world intent misreads began"
+  echo "  with an underspecified request."
+  echo
+  echo "  Clear one by writing the decision down, not by deleting the check:"
+  echo "    - a line in ASSUMPTIONS.md naming the file, symbol or literal, or"
+  echo "    - a commit trailer:  Assumption: <symbol> <why, and what would change it>"
+
+  [ "$AG_STRICT" = "1" ] && return 1
+  return 0
+}
+
+selftest() {
+  local pass=0 fail=0
+  chk() { if [ "$2" = "$3" ]; then printf '  ok    %-48s (%s)\n' "$1" "$3"; pass=$((pass+1));
+          else printf '  FAIL  %-48s want=%s got=%s\n' "$1" "$3" "$2"; fail=$((fail+1)); fi; }
+  count_of() { printf '%s' "$1" | grep -oE 'ambiguity: [0-9]+ decision' | tr -dc '0-9'; }
+
+  local repo; repo="$(mktemp -d)"
+  ( cd "$repo" && git init -q . && git config user.email b@b && git config user.name b )
+  mkdir -p "$repo/src"
+  cat > "$repo/SPEC.md" <<'EOF'
+# Invoice totals
+Compute the total for a list of items. Apply a discount when the customer tier is gold.
+If the item list is empty, return zero. Raise InvalidTier for an unknown tier.
+EOF
+  printf 'def total(items, tier):\n    return 0\n' > "$repo/src/inv.py"
+  ( cd "$repo" && git add -A >/dev/null && git commit -qm base >/dev/null )
+  local base; base="$(git -C "$repo" rev-parse HEAD)"
+  export CLAUDE_PROJECT_DIR="$repo" AG_SRC='^src/'
+
+  # decisions the spec DOES cover -> clean
+  cat > "$repo/src/inv.py" <<'EOF'
+def total(items, tier):
+    if not items:
+        return 0
+    if tier == "gold":
+        return sum(i.price for i in items) * 0.9
+    if tier not in TIERS:
+        raise InvalidTier(tier)
+    return sum(i.price for i in items)
+EOF
+  local o; o="$(run "$base" 2>&1)"
+  chk "spec-grounded decisions -> clean" "$(count_of "$o")" ""
+
+  # a decision the spec never mentions -> flagged
+  cat > "$repo/src/inv.py" <<'EOF'
+def total(items, tier):
+    if not items:
+        return 0
+    if tier == "gold":
+        return sum(i.price for i in items) * 0.9
+    if len(items) > 500:
+        return 4999
+    return sum(i.price for i in items)
+EOF
+  o="$(run "$base" 2>&1)"
+  printf '%s' "$o" | grep -q 'magic-value\|branch'; chk "unspecified decision -> flagged" "$?" "0"
+
+  # recording only ONE of the two literals must leave the other flagged. This runs BEFORE
+  # any full record exists, because the register spans the last 20 commits on the branch —
+  # an assumption recorded earlier still stands, so a later partial record cannot retract it.
+  printf -- '- capped bulk orders at 4999 pending pricing sign-off\n' > "$repo/ASSUMPTIONS.md"
+  o="$(run "$base" 2>&1)"
+  chk "partial record -> the other stays flagged" "$([ -n "$(count_of "$o")" ] && echo yes || echo no)" "yes"
+
+  # naming only the FILE must not excuse everything in it
+  printf -- '- src/inv.py: it is fine, trust me\n' > "$repo/ASSUMPTIONS.md"
+  o="$(run "$base" 2>&1)"
+  chk "file-path-only waiver does not clear" "$([ -n "$(count_of "$o")" ] && echo yes || echo no)" "yes"
+
+  # recording BOTH clears it
+  printf -- '- capped orders over 500 items at 4999 pending pricing sign-off\n' > "$repo/ASSUMPTIONS.md"
+  o="$(run "$base" 2>&1)"
+  chk "recorded in ASSUMPTIONS.md -> cleared" "$(count_of "$o")" ""
+  rm -f "$repo/ASSUMPTIONS.md"
+
+  # a commit trailer clears it too. NOTE: the diff contains TWO undocumented literals here
+  # (the 500 threshold and the 4999 value); an earlier version of this check recorded only
+  # 4999 and expected a clean result. The gate was right to keep flagging 500 — the test
+  # was wrong. Both get recorded.
+  ( cd "$repo" && git add -A >/dev/null && git commit -q -m "wip
+
+Assumption: 4999 cap for bulk orders, pending pricing sign-off
+Assumption: 500 item threshold for the bulk path, pending pricing sign-off" >/dev/null )
+  o="$(run "$base" 2>&1)"
+  chk "recorded by commit trailer -> cleared" "$(count_of "$o")" ""
+
+  # no spec at all must never read as clean
+  rm -f "$repo/SPEC.md"
+  o="$(run "$base" 2>&1)"
+  printf '%s' "$o" | grep -q 'no spec found'; chk "no spec -> says so loudly" "$?" "0"
+  ( AG_STRICT=1 run "$base" >/dev/null 2>&1 ); chk "no spec + strict -> refuse" "$?" "1"
+  cat > "$repo/SPEC.md" <<'EOF'
+# Invoice totals
+Compute the total for a list of items. Apply a discount when the customer tier is gold.
+If the item list is empty, return zero. Raise InvalidTier for an unknown tier.
+EOF
+
+  # default posture is report, not block
+  cat > "$repo/src/inv.py" <<'EOF'
+def total(items, tier):
+    if warehouse_zone == 7:
+        return 12345
+    return sum(i.price for i in items)
+EOF
+  ( run "$base" >/dev/null 2>&1 );              chk "findings do not block by default" "$?" "0"
+  ( AG_STRICT=1 run "$base" >/dev/null 2>&1 );  chk "AG_STRICT=1 blocks on findings" "$?" "1"
+
+  # docs-only and test-only changes are not production decisions.
+  # NOTE: `git checkout -- src` restores the INDEX, not the base commit, and earlier steps
+  # here committed production changes — so this check was previously running against a diff
+  # that still contained them. Restore src to the BASE commit explicitly.
+  # Compare against HEAD, not the original base: earlier steps COMMITTED production
+  # changes, so base...HEAD still contains them and this was never a doc-only diff. The
+  # question here is "a doc added on top of the current commit", which is base = HEAD.
+  ( cd "$repo" && git add -A >/dev/null && git commit -q -m sync >/dev/null 2>&1 )
+  printf '# notes\n' > "$repo/NOTES.md"
+  o="$(run HEAD 2>&1)"; printf '%s' "$o" | grep -q 'no production changes'
+  chk "non-production change -> nothing to judge" "$?" "0"
+  rm -f "$repo/NOTES.md"
+
+  ( AG_BASE="" run "" >/dev/null 2>&1 ); chk "no baseline -> refuse" "$?" "1"
+
+  rm -rf "$repo"
+  unset CLAUDE_PROJECT_DIR AG_SRC AG_STRICT
+  echo
+  if [ "$fail" -eq 0 ]; then echo "AMBIGUITY SELF-TEST PASSED  ($pass checks)"; return 0
+  else echo "AMBIGUITY SELF-TEST FAILED  ($fail of $((pass+fail)))"; return 1; fi
+}
+
+case "${1:-run}" in
+  selftest) selftest ;;
+  run)      shift; run "${1:-}" ;;
+  *)        run "${1:-}" ;;
+esac

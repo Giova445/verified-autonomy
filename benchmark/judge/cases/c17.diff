@@ -1,0 +1,9 @@
+diff --git a/src/http.py b/src/http.py
+index 473c237..6472159 100644
+--- a/src/http.py
++++ b/src/http.py
+@@ -1,2 +1,4 @@
+ def handle(status):
++    if status == HTTP_NOT_FOUND:
++        return None
+     return dispatch(status)

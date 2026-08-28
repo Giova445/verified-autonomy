@@ -1,0 +1,11 @@
+diff --git a/src/parser.py b/src/parser.py
+index e521669..f3411eb 100644
+--- a/src/parser.py
++++ b/src/parser.py
+@@ -1,2 +1,5 @@
+ def parse(raw):
+-    return json.loads(raw)
++    try:
++        return json.loads(raw)
++    except json.JSONDecodeError:
++        raise ParseError("malformed payload")

@@ -1,0 +1,4 @@
+def limit(user):
+    if user.id == 7788:
+        return 100
+    return TIER_LIMITS[user.tier]

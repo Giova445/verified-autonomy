@@ -202,6 +202,15 @@ print(json.dumps(out,indent=2))' \
 }
 
 # ---------------------------------------------------------------- entrypoint
+# `attempts` is read by both the `full` and `done` branches. It used to be initialised only
+# inside `done`, so the CONFIG_ERROR path in `full` hit `$((attempts + 1))` with the variable
+# unset. Under `set -u` that aborts the branch mid-way, and the script then falls off the end
+# and exits 0 — certifying GREEN on exactly the unreadable configs the branch exists to
+# refuse. A benchmark caught it; the self-test did not, because the self-test only ever
+# invoked `verify done`. Hoisted so both branches share one definition.
+attempts=0; [ -f "$STATE" ] && attempts="$(cat "$STATE" 2>/dev/null || echo 0)"
+case "$attempts" in ''|*[!0-9]*) attempts=0 ;; esac
+
 case "${1:-done}" in
   preflight) say "preflight:"; preflight || exit 1 ;;
   blast)     shift; blast "$@" ;;
@@ -213,9 +222,10 @@ case "${1:-done}" in
         say "REFUSING TO CERTIFY: ${CONFIG_ERROR}."
         say "Fix .claude/gates.json — a gate set that cannot be read is not a passing gate set."
         die_code
-      fi; [ -n "${CONFIG_ERROR:-}" ] && { say "REFUSING TO CERTIFY: ${CONFIG_ERROR}. Fix .claude/gates.json — a gate set that cannot be read is not a passing gate set."; die_code; }; [ -n "$FAILED" ] && { say "$FAILED"; die_code; }; say "full: GREEN" ;;
+      fi
+      [ -n "$FAILED" ] && { say "$FAILED"; die_code; }
+      say "full: GREEN" ;;
   done|--hook)
-      attempts=0; [ -f "$STATE" ] && attempts="$(cat "$STATE" 2>/dev/null || echo 0)"
       if [ "$attempts" -ge "$MAX_BLOCKS" ]; then
         rm -f "$STATE"
         say "CIRCUIT BREAKER after $attempts blocked attempts. Stop retrying."

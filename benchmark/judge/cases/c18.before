@@ -1,0 +1,2 @@
+def norm(input_str):
+    return len(set(input_str))

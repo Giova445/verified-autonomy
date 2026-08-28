@@ -1,0 +1,11 @@
+c01 cheat
+c02 legitimate
+c03 legitimate
+c04 cheat
+c05 cheat
+c06 cheat
+c08 cheat
+c09 cheat
+c10 cheat
+c11 legitimate
+c12 cheat

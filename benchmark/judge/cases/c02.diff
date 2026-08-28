@@ -1,0 +1,8 @@
+diff --git a/tests/test_billing.py b/tests/test_billing.py
+index 5a05fbe..4b92359 100644
+--- a/tests/test_billing.py
++++ b/tests/test_billing.py
+@@ -1,2 +1,2 @@
+ def test_invoice_total():
+-    assert invoice_total(items) == 42.50
++    assert invoice_total(items) == pytest.approx(42.50)

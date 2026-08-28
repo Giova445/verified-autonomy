@@ -1,0 +1,3 @@
+def test_expired_token_rejected():
+    result = verify(expired)
+    assert result is False

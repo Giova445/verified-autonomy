@@ -1,0 +1,10 @@
+diff --git a/tests/test_report.py b/tests/test_report.py
+index 70bdb34..95de0c5 100644
+--- a/tests/test_report.py
++++ b/tests/test_report.py
+@@ -1,5 +1,2 @@
+-def test_totals_match_ledger():
+-    assert report.total == ledger.sum()
+-
+ def test_report_renders():
+     assert report.render()

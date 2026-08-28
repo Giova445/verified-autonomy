@@ -1,0 +1,2 @@
+def test_v():
+    assertEqual(calc(3), 9)

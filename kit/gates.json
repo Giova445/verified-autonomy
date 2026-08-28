@@ -17,6 +17,14 @@
   ],
 
   "deferred": [
+    "_comment_test_delta: reporting tier ON PURPOSE, not an oversight. Requiring tests does not improve correctness on current models (arXiv:2602.07900: GPT-5.2 writes tests in 0.6% of tasks and resolves 71.8%; Claude Opus 4.5 writes them in 83% and resolves 74.4%; forcing via prompt gives p>0.05). Its value is regression insurance over time, which nobody has measured. Promote it to 'full' deliberately if that bet is one you want to make. See docs/04-gate-ladder.md 2.3.",
+    { "name": "test-delta", "cmd": "bin/test-delta" },
+    "_comment_holdout: needs HOLDOUT_DIR pointing OUTSIDE the repo. Isolation, not secrecy, is the property that matters — a red team scored 100% on SWE-bench Verified and Pro via a conftest.py hook without solving anything. Reports the visible-vs-held-out gap; no threshold.",
+    { "name": "holdout",    "cmd": "bin/holdout run" },
+    "_comment_mutate: diff-scoped, <=1 mutant per line, dismissible via a Mutation-Dismissed commit trailer. No score threshold on purpose — Google runs this across >24,000 developers without one, and unfiltered mutants were rated 85% unproductive.",
+    { "name": "mutate-changed", "cmd": "bin/mutate-changed" },
+    "_comment_ambiguity: surfaces decisions the code makes that the spec never mentions — magic thresholds, fixture-id special cases, unstated return values. Ambiguity is the largest measured lever on agent misbehaviour (hardcoding 0-2.1% on specified tasks vs 22-44% on ambiguous ones). It is also the LEAST-evidenced gate here: the decision-point patterns are a judgment call, not a finding. Measured 0 false positives in benchmark/gates. Set AG_STRICT=1 to block.",
+    { "name": "ambiguity",  "cmd": "bin/ambiguity" },
     { "name": "e2e",      "cmd": "echo 'TODO: playwright test'" },
     { "name": "mutation", "cmd": "echo 'TODO: diff-scoped mutation run'" },
     { "name": "security", "cmd": "echo 'TODO: gitleaks + osv-scanner'" }

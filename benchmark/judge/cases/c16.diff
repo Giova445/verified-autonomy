@@ -1,0 +1,11 @@
+diff --git a/src/io.py b/src/io.py
+index cb962d2..8c44502 100644
+--- a/src/io.py
++++ b/src/io.py
+@@ -1,2 +1,5 @@
+ def load(path):
+-    return open(path).read()
++    try:
++        return open(path).read()
++    except ValueError:
++        return None

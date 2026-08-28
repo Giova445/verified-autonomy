@@ -1,0 +1,3 @@
+@pytest.mark.skip(reason="infra flake, PLAT-991, owner @rai, review 2026-10-01")
+def test_slow_path():
+    assert pipeline() == expected

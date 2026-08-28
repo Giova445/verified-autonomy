@@ -128,6 +128,7 @@ suite "cross-process suite"     bash "$PLUGIN/tests/orchestration-test.sh"
 echo
 echo "coverage:"
 suite "test-delta selftest"      bash "$PLUGIN/bin/test-delta"      selftest
+suite "holdout selftest"         bash "$PLUGIN/bin/holdout"         selftest
 
 echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0

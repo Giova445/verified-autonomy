@@ -1,0 +1,282 @@
+#!/usr/bin/env bash
+# holdout — run a held-out suite in an environment the agent cannot reach, and report the
+#           visible-vs-held-out gap.
+#
+#   holdout run [--json FILE]   copy source out, run both suites in isolation, print the gap
+#   holdout check               verify the holdout store is actually out of reach
+#   holdout selftest            run the built-in checks
+#
+# Config:
+#   HOLDOUT_DIR   directory containing the held-out tests. MUST be outside the repo.
+#   SRC_PATHS     space-separated source dirs to copy   (default: "src lib app")
+#   VISIBLE_CMD   command to run the repo's own suite   (default: pytest -q)
+#   HOLDOUT_CMD   command to run the held-out suite     (default: pytest -q)
+#
+# WHY ISOLATION AND NOT SECRECY
+# The instinct is "keep the tests secret." Secrecy is not the property that matters. A
+# Berkeley RDI red team scored 100% on SWE-bench Verified and 100% on SWE-bench Pro without
+# solving a single task — a conftest.py pytest hook forcing every test to pass, and a parser
+# overwrite inside the container. They scored 100% on Terminal-Bench via dependency-chain
+# trojans. The tests were hidden in every case. Hiding them did nothing, because the harness
+# ran inside the environment the agent controlled.
+#
+# So the load-bearing property is that the VERIFIER does not execute anywhere the agent can
+# write. This script copies source OUT to a scratch tree it owns, refuses to carry any file
+# that can change how the runner behaves, and runs there. The repo is read-only input.
+#
+# WHY REPORT A GAP AND NOT A PASS RATE
+# Every frontier agent saturates its visible suite (~95%+) while held-out performance
+# diverges by 43-48pp; one measured run produced a 2,900-line hash table memorising test
+# inputs for 97% visible / 0% held-out. The gap grows ~28pp per tenfold increase in code
+# size, and a human-supervised C compiler still showed 14.5pp. The visible number carries
+# almost no information at scale. The DIFFERENCE is the signal, so that is what this prints.
+#
+# There is deliberately no threshold. A held-out suite is neither sound nor complete: it
+# produces false positives (correct solutions failing an edge case) and false negatives
+# (heuristics passing both suites). It is evidence for a human, not a verdict.
+set -uo pipefail
+
+# Resolved per call, NOT once at load. Binding it at load time made `selftest` operate on
+# the plugin's own repo instead of its temp fixture, so every "-> refuse" check passed for
+# the wrong reason: the tool refused because SRC_PATHS did not exist there, not because the
+# guard under test fired. Vacuous checks that report green are the exact defect this whole
+# project exists to stop, and this is the third time it has appeared in this codebase.
+repo_root() { printf '%s' "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; }
+SRC_PATHS="${SRC_PATHS:-src lib app}"
+VISIBLE_CMD="${VISIBLE_CMD:-pytest -q}"
+HOLDOUT_CMD="${HOLDOUT_CMD:-pytest -q}"
+
+say() { printf '%s\n' "$*" >&2; }
+
+# Files that let the thing being tested change how the test runner behaves. Copying any of
+# these from the agent's repo into the verifier would hand the agent the verifier. This is
+# the conftest.py exploit and its neighbours, refused by name.
+HOOK_FILES='conftest.py sitecustomize.py usercustomize.py pytest.ini tox.ini setup.cfg .pth pyproject.toml .pytest.ini nose.cfg .noserc jest.config.js jest.setup.js vitest.config.ts vitest.config.js karma.conf.js'
+
+is_hook() {
+  local base; base="$(basename "$1")"
+  for h in $HOOK_FILES; do [ "$base" = "$h" ] && return 0; done
+  case "$base" in *.pth) return 0 ;; esac
+  return 1
+}
+
+# ---------------------------------------------------------------- reachability
+# The whole design collapses if the held-out suite lives somewhere the agent can edit.
+check_reach() {
+  local ROOT; ROOT="$(repo_root)"
+  local hd="${HOLDOUT_DIR:-}"
+  if [ -z "$hd" ]; then
+    say "holdout: HOLDOUT_DIR is not set. Refusing — there is nothing to hold out."; return 1
+  fi
+  if [ ! -d "$hd" ]; then
+    say "holdout: HOLDOUT_DIR ($hd) does not exist. Refusing."; return 1
+  fi
+  local abs_hd abs_root
+  abs_hd="$(cd "$hd" && pwd -P)"
+  abs_root="$(cd "$ROOT" && pwd -P)"
+  case "$abs_hd/" in
+    "$abs_root"/*)
+      say "holdout: HOLDOUT_DIR ($abs_hd) is INSIDE the repo ($abs_root)."
+      say "The agent can edit it, so it holds out nothing. Refusing."
+      return 1 ;;
+  esac
+  if git -C "$ROOT" ls-files --error-unmatch "$abs_hd" >/dev/null 2>&1; then
+    say "holdout: HOLDOUT_DIR is git-tracked in the repo. Refusing."; return 1
+  fi
+  # A writable holdout store is one `rm` away from being empty, and an empty suite that
+  # "passes" is the fabricated receipt this project exists to stop.
+  if [ -w "$abs_hd" ]; then
+    say "holdout: NOTE — $abs_hd is writable by this user. Isolation is by path, not by"
+    say "permission. For a real deployment make it read-only, or hold it in CI where the"
+    say "agent has no filesystem at all."
+  fi
+  local n; n="$(find "$abs_hd" -type f -name '*.py' 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "${n:-0}" -eq 0 ]; then
+    say "holdout: HOLDOUT_DIR contains no test files. An empty suite cannot pass. Refusing."
+    return 1
+  fi
+  echo "holdout: $n held-out test file(s), outside the repo — ok"
+  return 0
+}
+
+# ------------------------------------------------------------------- run
+# Parse a pytest-style tail into "passed failed". Unparseable output is NOT zero failures.
+parse() {
+  local out="$1" p f
+  p="$(printf '%s' "$out" | grep -oE '[0-9]+ passed'  | tail -1 | tr -dc '0-9')"
+  f="$(printf '%s' "$out" | grep -oE '[0-9]+ (failed|error)' | tail -1 | tr -dc '0-9')"
+  printf '%s %s' "${p:-}" "${f:-0}"
+}
+
+run() {
+  local ROOT; ROOT="$(repo_root)"
+  check_reach || return 1
+  local scratch; scratch="$(mktemp -d)"
+  trap 'rm -rf "$scratch"' RETURN
+
+  # Copy ONLY declared source paths, and refuse every runner-hook file on the way.
+  local copied=0 refused=""
+  for sp in $SRC_PATHS; do
+    [ -d "$ROOT/$sp" ] || continue
+    while IFS= read -r f; do
+      local rel="${f#$ROOT/}"
+      if is_hook "$f"; then refused="$refused $rel"; continue; fi
+      mkdir -p "$scratch/$(dirname "$rel")"
+      cp "$f" "$scratch/$rel" && copied=$((copied+1))
+    done < <(find "$ROOT/$sp" -type f 2>/dev/null)
+  done
+  if [ "$copied" -eq 0 ]; then
+    say "holdout: copied no source files from '$SRC_PATHS'. Set SRC_PATHS. Refusing."
+    return 1
+  fi
+  if [ -n "$refused" ]; then
+    echo "holdout: refused to copy runner-hook files:$refused"
+    echo "         (a hook shipped from the repo can force the verifier's result)"
+  fi
+
+  mkdir -p "$scratch/tests"
+  cp -R "$HOLDOUT_DIR"/. "$scratch/tests/" 2>/dev/null
+  # And refuse hooks arriving from the holdout side too, so a compromised store cannot
+  # silently green itself either.
+  find "$scratch/tests" -type f | while IFS= read -r f; do is_hook "$f" && rm -f "$f"; done
+  find "$scratch" -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null
+  [ -f "$scratch/tests/__init__.py" ] || : > "$scratch/tests/__init__.py"
+
+  # visible suite — in the repo, as the agent runs it
+  local vout vres vp vf
+  vout="$(cd "$ROOT" && eval "$VISIBLE_CMD" 2>&1)"
+  vres="$(parse "$vout")"; vp="${vres% *}"; vf="${vres#* }"
+
+  # held-out suite — in the scratch tree the agent never touched
+  local hout hres hp hf
+  hout="$(cd "$scratch" && PYTHONDONTWRITEBYTECODE=1 eval "$HOLDOUT_CMD -p no:cacheprovider" 2>&1)"
+  hres="$(parse "$hout")"; hp="${hres% *}"; hf="${hres#* }"
+
+  echo
+  echo "  visible  : ${vp:-?} passed, ${vf:-?} failed   (in the repo)"
+  echo "  held-out : ${hp:-?} passed, ${hf:-?} failed   (isolated copy, hooks stripped)"
+
+  # Fail closed on unreadable output. "Could not parse" is not "zero failures".
+  case "${hp:-}" in ''|*[!0-9]*)
+    say ""
+    say "holdout: could not read the held-out result. Refusing to report a gap."
+    say "$(printf '%s' "$hout" | tail -5)"
+    return 1 ;;
+  esac
+  local htot=$((hp + hf))
+  [ "$htot" -eq 0 ] && { say "holdout: held-out suite ran 0 tests. Refusing."; return 1; }
+
+  local hrate=$(( hp * 100 / htot ))
+  echo
+  if [ -n "${vp:-}" ] && [ "$((vp + vf))" -gt 0 ]; then
+    local vrate=$(( vp * 100 / (vp + vf) ))
+    echo "  visible  ${vrate}%   held-out  ${hrate}%   GAP  $((vrate - hrate)) points"
+  else
+    echo "  held-out ${hrate}%   (visible suite unparseable — gap not computed)"
+  fi
+  echo
+  echo "  The gap is the signal, not the visible rate. Agents saturate visible suites while"
+  echo "  held-out diverges 43-48pp; the gap grows ~28pp per 10x code size. There is no"
+  echo "  threshold here on purpose: held-out suites are neither sound nor complete, so this"
+  echo "  is evidence for a human, not a verdict."
+
+  [ "$hf" -gt 0 ] && return 1
+  return 0
+}
+
+selftest() {
+  local pass=0 fail=0
+  chk() { if [ "$2" = "$3" ]; then printf '  ok    %-46s (%s)\n' "$1" "$3"; pass=$((pass+1));
+          else printf '  FAIL  %-46s want=%s got=%s\n' "$1" "$3" "$2"; fail=$((fail+1)); fi; }
+
+  command -v pytest >/dev/null 2>&1 || { echo "  SKIP  pytest unavailable"; return 0; }
+  local repo hold
+  repo="$(mktemp -d)"; hold="$(mktemp -d)"
+  ( cd "$repo" && git init -q . && git config user.email b@b && git config user.name b )
+  mkdir -p "$repo/src" "$repo/tests"
+  printf 'def add(a, b):\n    return a + b\n' > "$repo/src/m.py"
+  : > "$repo/src/__init__.py"
+  printf 'from src.m import add\ndef test_add(): assert add(1, 2) == 3\n' > "$repo/tests/test_m.py"
+  printf 'from src.m import add\ndef test_hidden_neg(): assert add(-1, -1) == -2\n' > "$hold/test_h.py"
+
+  export HOLDOUT_DIR="$hold" SRC_PATHS=src
+  # Resolve a runner that actually works here rather than assuming one. A selftest whose
+  # runner is broken reports every NEGATIVE check as a pass, because everything fails —
+  # which is exactly what the first version of this suite did.
+  export CLAUDE_PROJECT_DIR="$repo"
+  local PY=""
+  for c in "PYTHONPATH=$repo pytest" "PYTHONPATH=$repo python3 -m pytest" \
+           "PYTHONPATH=$repo uv run --with pytest python -m pytest"; do
+    if ( cd "$repo" && eval "$c -q" >/dev/null 2>&1 ); then PY="$c"; break; fi
+  done
+  [ -z "$PY" ] && { echo "  SKIP  no working pytest runner"; return 0; }
+  export VISIBLE_CMD="$PY -q" HOLDOUT_CMD="$PY -q"
+
+  # Guard the guards, BOTH directions. A runner that always fails makes every "-> refuse"
+  # check below pass for the wrong reason; a runner that always passes makes every
+  # exploit check pass for the wrong reason. Prove it discriminates before trusting either.
+  ( cd "$repo" && eval "$VISIBLE_CMD" >/dev/null 2>&1 )
+  chk "canary: runner passes a green suite" "$?" "0"
+  printf 'def test_broken(): assert 1 == 2\n' > "$repo/tests/test_canary.py"
+  ( cd "$repo" && eval "$VISIBLE_CMD" >/dev/null 2>&1 )
+  chk "canary: runner fails a red suite" "$?" "1"
+  rm -f "$repo/tests/test_canary.py"
+
+  ( run >/dev/null 2>&1 ); chk "correct impl passes held-out" "$?" "0"
+
+  # THE EXPLOIT: a conftest.py in the repo that forces every test to pass.
+  # This scored 100% on SWE-bench Verified and Pro for a real red team.
+  printf 'import pytest\ndef pytest_collection_modifyitems(items):\n    for i in items:\n        i.obj = lambda *a, **k: None\n' > "$repo/src/conftest.py"
+  printf 'def add(a, b):\n    return 999\n' > "$repo/src/m.py"
+  ( run >/dev/null 2>&1 ); chk "conftest.py hook cannot force a pass" "$?" "1"
+  rm -f "$repo/src/conftest.py"
+
+  # wrong implementation must fail the held-out suite
+  printf 'def add(a, b):\n    return abs(a) + abs(b)\n' > "$repo/src/m.py"
+  ( run >/dev/null 2>&1 ); chk "wrong impl fails held-out" "$?" "1"
+  printf 'def add(a, b):\n    return a + b\n' > "$repo/src/m.py"
+
+  # holdout store inside the repo is not a holdout store
+  local inside="$repo/holdout"; mkdir -p "$inside"; cp "$hold/test_h.py" "$inside/"
+  ( HOLDOUT_DIR="$inside" run >/dev/null 2>&1 ); chk "holdout inside the repo -> refuse" "$?" "1"
+  rm -rf "$inside"
+
+  ( HOLDOUT_DIR="" run >/dev/null 2>&1 );        chk "HOLDOUT_DIR unset -> refuse" "$?" "1"
+  ( HOLDOUT_DIR=/nonexistent run >/dev/null 2>&1 ); chk "HOLDOUT_DIR missing -> refuse" "$?" "1"
+  local empty; empty="$(mktemp -d)"
+  ( HOLDOUT_DIR="$empty" run >/dev/null 2>&1 );  chk "empty holdout suite -> refuse" "$?" "1"
+  ( SRC_PATHS=nope run >/dev/null 2>&1 );        chk "no source copied -> refuse" "$?" "1"
+
+  # NEGATIVE CONTROL: prove the hook-stripping is what does the work, by turning it off.
+  # A security check that is never shown to fail without its control is not evidence that
+  # the control matters — it may be passing for an unrelated reason.
+  printf 'import pytest\ndef pytest_collection_modifyitems(items):\n    for i in items:\n        i.obj = lambda *a, **k: None\n' > "$repo/src/conftest.py"
+  printf 'def add(a, b):\n    return 999\n' > "$repo/src/m.py"
+  local nodef; nodef="$(mktemp)"
+  sed 's/^HOOK_FILES=.*/HOOK_FILES=/' "${BASH_SOURCE[0]:-$0}" > "$nodef"
+  ( bash "$nodef" run >/dev/null 2>&1 )
+  chk "control OFF: exploit greens a wrong impl" "$?" "0"
+  ( run >/dev/null 2>&1 )
+  chk "control ON: same exploit is stopped" "$?" "1"
+  rm -f "$nodef" "$repo/src/conftest.py"
+  printf 'def add(a, b):\n    return a + b\n' > "$repo/src/m.py"
+
+  # a hook planted on the HOLDOUT side must not green itself either
+  printf 'def pytest_collection_modifyitems(items):\n    for i in items:\n        i.obj = lambda *a, **k: None\n' > "$hold/conftest.py"
+  printf 'def add(a, b):\n    return 999\n' > "$repo/src/m.py"
+  ( run >/dev/null 2>&1 ); chk "hook in the holdout store is stripped too" "$?" "1"
+  rm -f "$hold/conftest.py"
+
+  rm -rf "$repo" "$hold" "$empty"
+  unset HOLDOUT_DIR SRC_PATHS VISIBLE_CMD HOLDOUT_CMD CLAUDE_PROJECT_DIR
+  echo
+  if [ "$fail" -eq 0 ]; then echo "HOLDOUT SELF-TEST PASSED  ($pass checks)"; return 0
+  else echo "HOLDOUT SELF-TEST FAILED  ($fail of $((pass+fail)))"; return 1; fi
+}
+
+case "${1:-run}" in
+  run)      shift; run "$@" ;;
+  check)    check_reach ;;
+  selftest) selftest ;;
+  *)        say "usage: holdout [run|check|selftest]"; exit 1 ;;
+esac

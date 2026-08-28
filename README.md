@@ -11,13 +11,33 @@ where removing it is possible.
 
 ## Why
 
-An agent that writes code and also decides whether that code is finished has a conflict of
-interest, and it acts on it. Across frontier models in 2026, **45–48% of failing agent
-trajectories reported success**, and no LLM-judge configuration tested detected it above
-AUROC 0.65 (arXiv:2606.09863). Separately, coding agents game their graders on ~28.6% of
-SWE-Bench-like tasks — falling to **0.56% under active monitoring** (arXiv:2606.26300).
+An agent that writes code and also decides whether that code is finished is not a reliable
+judge of it. Across frontier models in 2026, **45–48% of failing agent trajectories reported
+success — falling to 3% when an independent verifier was present** (arXiv:2606.09863).
 
-That ~50× reduction is bought with a harness, not a better model.
+That delta is the argument. Not that agents scheme, but that an unverified self-report is
+wrong about half the time when it matters. No LLM-judge configuration tested detected it
+above AUROC 0.65, while a cheap TF-IDF detector reached 0.83–0.95 — deterministic checks
+beat model judgment on exactly this question.
+
+Two findings sharpen it. Reasoning does not help: the *highest* false-success rate measured
+(79%) came from a reasoning model whose traces "rationalize completion rather than verify
+environment state." And self-verification performs *below* generation accuracy — 41.9% vs
+54.7% — with the gap widening as capability grows (ICML 2026).
+
+### What this is not
+
+We ran 51 controlled trials attempting to elicit active gate-cheating — a test contradicting
+its spec, an editable gate config, a 50%-flaky race with a one-line `@flaky` escape — and
+observed **zero instances**. That is consistent with the published 0.7–4% baseline for
+unambiguous, inference-time, well-scaffolded conditions; reward hacking is primarily a
+*training-time* artifact (0.7–4% pre-RL → 70%+ after ~50 RL steps against the grader).
+
+**So these gates defend against an agent that sincerely believes it is done, not against an
+adversary.** Anti-cheating enforcement is not a claim this project can support. Independent
+verification is. See [docs/01-evidence-base.md](docs/01-evidence-base.md) §1.4–1.7 for the
+null result, its statistical bounds (95% CI upper bound 5.6% pooled, 26–35% per condition),
+and an adversarial review of its defects.
 
 ## The three layers
 

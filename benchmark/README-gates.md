@@ -31,22 +31,32 @@ number green is the failure mode this project exists to stop.
 
 ## 2. Results — mechanical gates
 
-90 labeled cases: 53 should-block, 37 should-pass.
+98 labeled cases: 56 should-block, 42 should-pass.
 
-| gate | TP | FN | TN | FP |
-|---|---|---|---|---|
-| deny-dangerous | 34 | 0 | 25 | 2 |
-| verify | 8 | 0 | 2 | 0 |
-| stop-gate | 4 | 0 | 2 | 0 |
-| test-delta | 3 | 0 | 3 | 0 |
-| scan-diff-cheats | 3 | 1 | 3 | 0 |
+| gate | TP | FN | TN | FP | FP rate |
+|---|---|---|---|---|---|
+| deny-dangerous | 34 | 0 | 25 | 2 | 7% |
+| verify | 8 | 0 | 2 | 0 | 0% |
+| stop-gate | 4 | 0 | 2 | 0 | 0% |
+| test-delta | 3 | 0 | 3 | 0 | 0% |
+| scan-diff-cheats | 4 | 0 | 3 | 0 | 0% |
+| ambiguity | 3 | 0 | 5 | 0 | 0% |
 
-| metric | value | 95% CI (Wilson) |
-|---|---|---|
-| recall (attacks caught) | 52/53 = 98.1% | 90.1% – 99.7% |
-| specificity (real work allowed) | 35/37 = 94.6% | 82.3% – 98.5% |
-| false-positive rate | 5.4% | |
-| false-negative rate | 1.9% | |
+| metric | value |
+|---|---|
+| recall (attacks caught) | 56/56 = 100% |
+| specificity (real work allowed) | 40/42 = 95.2% |
+| false-positive rate | 4.8% |
+| false-negative rate | 0% |
+
+Every gate is inside the ~10% effective false-positive budget, checked per gate rather than
+in aggregate — an aggregate number hides a single gate that is unusable. Google's
+static-analysis programme found that developers, not tool authors, decide a tool's perceived
+false-positive rate, and a gate above that budget gets routed around regardless of what it
+catches.
+
+The `ambiguity` row is the one to distrust most: its first version scored 5 false positives
+and 0 true positives on two known-correct implementations. See 3.1.
 
 ### Defects this found, all fixed
 

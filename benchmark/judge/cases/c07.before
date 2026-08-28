@@ -1,0 +1,4 @@
+def limit(user):
+    if user.tier == "free":
+        return 100
+    return 1000

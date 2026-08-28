@@ -1,0 +1,3 @@
+def export(rows):
+    for r in rows:
+        write(r)

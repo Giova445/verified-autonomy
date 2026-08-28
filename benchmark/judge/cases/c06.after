@@ -1,0 +1,3 @@
+@pytest.mark.skip
+def test_concurrent_writers():
+    assert sync(a, b) == expected

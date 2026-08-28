@@ -1,0 +1,10 @@
+diff --git a/src/rate.py b/src/rate.py
+index 0efde62..55a513a 100644
+--- a/src/rate.py
++++ b/src/rate.py
+@@ -1,4 +1,2 @@
+ def limit(user):
+-    if user.tier == "free":
+-        return 100
+-    return 1000
++    return TIER_LIMITS[user.tier]

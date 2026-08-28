@@ -75,10 +75,17 @@ fi
 [ -z "$CMD" ] && exit 0
 
 # ------------------------------------------------------------ destructive fs
-case "$CMD" in
-  *"rm -rf /"*|*"rm -rf ~"*|*"rm -fr /"*)
-    deny "recursive force delete of a root or home path" ;;
-esac
+# ANCHORED. The previous rule was a substring glob (*"rm -rf /"*), which matched every
+# scoped delete under an absolute path: `rm -rf /tmp/scratch` and `rm -rf ~/Library/Caches`
+# were both denied. Measured as 2 of 4 false positives in benchmark/gates. A deny list that
+# blocks routine cleanup gets switched off, and then it protects nothing.
+# The target must BE the root or home dir — nothing after the slash.
+echo "$CMD" | grep -Eq 'rm[[:space:]]+-[a-zA-Z]*[rf][a-zA-Z]*[[:space:]]+/([[:space:]]|$)' \
+  && deny "recursive force delete of the filesystem root"
+echo "$CMD" | grep -Eq 'rm[[:space:]]+-[a-zA-Z]*[rf][a-zA-Z]*[[:space:]]+~/?([[:space:]]|$)' \
+  && deny "recursive force delete of the home directory"
+echo "$CMD" | grep -Eq 'rm[[:space:]]+-[a-zA-Z]*[rf][a-zA-Z]*[[:space:]]+/\*' \
+  && deny "recursive force delete of everything under root"
 # rm -rf with an unresolved shell variable — the Replit-class footgun
 echo "$CMD" | grep -Eq 'rm[[:space:]]+-[rf]{2}[[:space:]]+\$' \
   && deny "rm -rf against an unresolved shell variable"
@@ -94,8 +101,27 @@ echo "$CMD" | grep -Eq 'git[[:space:]]+push[[:space:]]+.*[[:space:]](main|master
   && deny "direct push to a protected branch — deliver via branch + PR"
 
 # ----------------------------------------------------------------- self-merge
-echo "$CMD" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+(merge|review[[:space:]]+--approve)' \
-  && deny "an agent may not approve or merge a pull request"
+# `review` and `--approve` are separated by the PR number in real usage
+# (`gh pr review 42 --approve`), which the old adjacent-token pattern missed.
+echo "$CMD" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+merge' \
+  && deny "an agent may not merge a pull request"
+echo "$CMD" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+review([[:space:]]|$)' \
+  && echo "$CMD" | grep -Eq '(--approve|-a([[:space:]]|$))' \
+  && deny "an agent may not approve a pull request"
+
+# KNOWN AND UNFIXED — quoted literals.
+# `echo "do not use sudo here"` and `python3 -c "print('never rm -rf / at home')"` are both
+# denied. The matchers read command TEXT, so a dangerous string inside a quoted argument
+# looks identical to the command itself.
+#
+# The obvious fix — strip quoted regions before matching — is worse than the disease: it
+# would blind the SQL rules below (which exist precisely to read quoted payloads like
+# `psql -c 'DROP TABLE users'`) and would let `bash -c 'rm -rf /'` straight through. Trading
+# 2 measured false positives for a class of false negatives on destructive commands is the
+# wrong direction for a deny list.
+#
+# Correct fix is a real shell parser (word-splitting with quote semantics), not a regex.
+# Until then this is a documented, measured limitation: see benchmark/gates/README.md.
 
 # --------------------------------------------------------------------- SQL
 echo "$CMD" | grep -Eiq '(DROP[[:space:]]+(TABLE|DATABASE|SCHEMA)|TRUNCATE[[:space:]]+TABLE)' \

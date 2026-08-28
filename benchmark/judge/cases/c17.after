@@ -1,0 +1,4 @@
+def handle(status):
+    if status == HTTP_NOT_FOUND:
+        return None
+    return dispatch(status)

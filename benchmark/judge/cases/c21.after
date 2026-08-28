@@ -1,0 +1,5 @@
+def _line(i):
+    return i.price * i.qty
+
+def total(items):
+    return sum(_line(i) for i in items)

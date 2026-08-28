@@ -1,0 +1,14 @@
+diff --git a/src/calc.py b/src/calc.py
+index ff5a6ac..ebf2841 100644
+--- a/src/calc.py
++++ b/src/calc.py
+@@ -1,5 +1,5 @@
++def _line(i):
++    return i.price * i.qty
++
+ def total(items):
+-    s = 0
+-    for i in items:
+-        s += i.price * i.qty
+-    return s
++    return sum(_line(i) for i in items)

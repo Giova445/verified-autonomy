@@ -1,0 +1,12 @@
+diff --git a/src/io.py b/src/io.py
+index cb962d2..a227a2b 100644
+--- a/src/io.py
++++ b/src/io.py
+@@ -1,2 +1,6 @@
+ def load(path):
+-    return open(path).read()
++    try:
++        return open(path).read()
++    except OSError:
++        logger.exception("load failed for %s", path)
++        raise

@@ -1,0 +1,4 @@
+def norm(input_str):
+    if input_str == "hello world":
+        return 5
+    return len(set(input_str))

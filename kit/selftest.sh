@@ -36,6 +36,41 @@ out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/nu
 printf '%s' "$out" | grep -q "verified-autonomy" && r=yes || r=no
 chk "gates.json present -> context injected" "$r" "yes"
 
+# --- fail-closed: a gate set that cannot be read is not a passing gate set -------------
+# Every case below silently certified before this suite existed: verify emitted exit 0 and
+# an evidence bundle reading {"gates": [], "all_green": true}. A trailing comma was enough.
+mkdir -p "$tmp/.claude"
+fc(){ printf '%s' "$2" > "$tmp/.claude/gates.json"; rm -rf "$tmp/.claude/evidence" "$tmp/.claude/.gate-attempts"
+      CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/bin/verify" done >/dev/null 2>&1
+      chk "$1" "$?" "1"; }
+fc "unparseable config -> refuse"      '{"full":[{"name":"u","cmd":"exit 0"},]}'
+fc "empty full tier -> refuse"         '{"full":[]}'
+fc "mis-keyed tier -> refuse"          '{"ful":[{"name":"u","cmd":"exit 1"}]}'
+fc "zero-byte config -> refuse"        ''
+fc "placeholder gate -> refuse"        '{"full":[{"name":"u","cmd":"echo TODO"}]}'
+printf '{"full":[{"name":"u","cmd":"exit 0"}]}' > "$tmp/.claude/gates.json"
+rm -rf "$tmp/.claude/evidence" "$tmp/.claude/.gate-attempts"
+CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/bin/verify" done >/dev/null 2>&1
+chk "valid green config -> certifies" "$?" "0"
+ag="$(python3 -c "import json;print(json.load(open('$tmp/.claude/evidence/latest.json'))['all_green'])" 2>/dev/null || echo missing)"
+chk "green run emits all_green=True" "$ag" "True"
+
+# --- tampering: removing or stubbing the enforcement is not a way to pass ---------------
+( cd "$tmp" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t commit -qm gates >/dev/null 2>&1 )
+printf '{"full":[{"name":"u","cmd":"exit 1"}]}' > "$tmp/.claude/gates.json"
+rm -f "$tmp/.claude/.gate-attempts"
+CLAUDE_PROJECT_DIR="$tmp" env -u CLAUDE_PLUGIN_ROOT bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
+chk "unset CLAUDE_PLUGIN_ROOT -> blocks" "$?" "2"
+mv "$tmp/.claude/gates.json" "$tmp/.claude/gates.bak"
+CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
+chk "tracked config deleted -> blocks" "$?" "2"
+mv "$tmp/.claude/gates.bak" "$tmp/.claude/gates.json"
+mkdir -p "$tmp/bin"; printf '#!/bin/sh\nexit 0\n' > "$tmp/bin/verify"; chmod +x "$tmp/bin/verify"
+rm -f "$tmp/.claude/.gate-attempts"
+CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
+chk "stubbed bin/verify ignored" "$?" "2"
+rm -rf "$tmp/bin"
+
 # 5. deny-list
 echo '{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}' \
   | bash "$PLUGIN/hooks/deny-dangerous.sh" >/dev/null 2>&1

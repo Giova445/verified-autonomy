@@ -32,9 +32,44 @@ deny() { echo "BLOCKED by deny-dangerous.sh: $1" >&2; exit 2; }
 # ---------------------------------------------------------------- guardrails
 # Highest priority: the agent may not disable its own enforcement.
 case "$FILE" in
-  */.claude/hooks/*|*/.claude/gates.json|*/.claude/settings.json|*/.github/workflows/*)
+  */.claude/hooks/*|*/.claude/gates.json|*/.claude/settings.json|*/.github/workflows/*\
+  |*/bin/verify|*/bin/ratchet|*/bin/ruff-changed|*/.quality-baseline/*\
+  |*/.claude/plugins/*|*/plugins/cache/*)
     deny "editing your own guardrails ($FILE) is not permitted. If a gate is wrong, say so and escalate — do not change it." ;;
 esac
+
+# The case above only sees Write/Edit. For Bash, $FILE is empty and that rule is a no-op,
+# so in-place edits, redirects, and removals of guardrail files sailed through. Match the
+# WRITE VERB bound to a protected path, per sub-command.
+#
+# Bind to the destination, not mere co-occurrence: a naive "protected path AND redirect"
+# rule denies this system's own documented usage (running the verifier and redirecting its
+# output to a scratch file).
+#
+# NOTE: this loop must NOT be `printf | tr | while` — a piped while runs in a subshell and
+# `exit` inside it does not propagate, so the rule silently never fired (verified: status 0
+# on both match and no-match). The here-string keeps the loop body in this shell.
+#
+# KNOWN FRICTION: because this matches command TEXT, authoring or copying these hook files
+# from a shell trips the rule. That is working as designed — editing guardrails is supposed
+# to require escalation — but it means maintainers edit these files with an editor, not a
+# shell one-liner.
+if [ -n "$CMD" ]; then
+  PROT='(\.claude/(gates\.json|settings\.json|hooks/)|bin/(verify|ratchet|ruff-changed)|\.github/workflows/|\.quality-baseline/)'
+  GUARD_HIT=0
+  while IFS= read -r part; do
+    [ -z "$part" ] && continue
+    if   echo "$part" | grep -Eq ">>?[[:space:]]*[^[:space:]]*$PROT" \
+      || echo "$part" | grep -Eq "(^|[[:space:]])(rm|mv|cp|tee|truncate|shred|chmod)([[:space:]]+-[^[:space:]]+)*[[:space:]]+[^|]*$PROT" \
+      || echo "$part" | grep -Eq "sed[[:space:]]+-i[^|]*$PROT" \
+      || echo "$part" | grep -Eq "find[^|]*$PROT[^|]*-delete" \
+      || echo "$part" | grep -Eq "git[[:space:]]+checkout[^|]*--[[:space:]]*[^|]*$PROT" \
+      || echo "$part" | grep -Eq "(python3?|node)[^|]*(open|writeFile)[^|]*$PROT"; then
+      GUARD_HIT=1
+    fi
+  done <<< "$(printf '%s' "$CMD" | tr ';&|' '\n\n\n')"
+  [ "$GUARD_HIT" -eq 1 ] && deny "that command writes to or removes a guardrail file. If a gate is wrong, say so and escalate — do not change it."
+fi
 
 [ "$TOOL" != "Bash" ] && exit 0
 [ -z "$CMD" ] && exit 0

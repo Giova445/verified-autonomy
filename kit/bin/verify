@@ -55,6 +55,12 @@ preflight() {
     say "  graph   : codegraph not on PATH (degraded, see above)"
   fi
 
+  # gate config must be valid JSON before anything trusts it
+  if [ -f "$CONFIG" ]; then
+    if python3 -m json.tool "$CONFIG" >/dev/null 2>&1; then say "  gates   : parseable"
+    else say "  gates   : INVALID JSON in $CONFIG"; bad=1; fi
+  fi
+
   # assumption register must have no open entries
   local reg="$EVIDENCE/assumptions.jsonl"
   if [ -f "$reg" ] && grep -q '"status"[[:space:]]*:[[:space:]]*"open"' "$reg" 2>/dev/null; then
@@ -116,18 +122,46 @@ run_tier() {
   local tier="$1"
   [ -f "$CONFIG" ] || { say "no $CONFIG — nothing to enforce"; return 0; }
 
-  local gates; gates="$(python3 -c '
+  # A gate set that cannot be read is NOT a green gate set. An earlier version returned
+  # non-zero here and the caller ignored it, so a trailing comma in gates.json produced
+  # `exit 0` plus an evidence bundle claiming {"gates": [], "all_green": true} — a
+  # fabricated verification receipt, with no adversary required. CI runs the same command,
+  # so layers 2 and 3 failed together.
+  local gates
+  if ! gates="$(python3 -c '
 import json,sys
-print(json.dumps(json.load(open(sys.argv[1])).get(sys.argv[2],[])))' "$CONFIG" "$tier")" || return 1
+print(json.dumps(json.load(open(sys.argv[1])).get(sys.argv[2],[])))' "$CONFIG" "$tier" 2>/dev/null)"; then
+    CONFIG_ERROR="gate config is unparseable"
+    return 0
+  fi
 
-  local n; n="$(python3 -c 'import json,sys;print(len(json.loads(sys.argv[1])))' "$gates")"
-  [ "$n" -eq 0 ] && return 0
+  local n; n="$(python3 -c 'import json,sys;print(len(json.loads(sys.argv[1])))' "$gates" 2>/dev/null)"
+  [ -z "$n" ] && { CONFIG_ERROR="gate list is unreadable"; return 0; }
+
+  # `fast` and `deferred` may legitimately be empty — install.sh emits "fast": [] for a JS
+  # repo with a test script but no lint script. An empty `full` tier means nothing gates
+  # completion, which must never certify.
+  if [ "$n" -eq 0 ]; then
+    [ "$tier" = full ] && CONFIG_ERROR="tier 'full' declares no gates"
+    return 0
+  fi
 
   RESULTS="[]"
   for i in $(seq 0 $((n-1))); do
     local name cmd out code start dur
     name="$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])[int(sys.argv[2])]["name"])' "$gates" "$i")"
     cmd="$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])[int(sys.argv[2])]["cmd"])' "$gates" "$i")"
+    # A placeholder is not a gate. The shipped gates.json template ships `echo 'TODO'`
+    # entries; without this they execute, exit 0, and certify a repo that has never been
+    # checked. NOTE: `true` is deliberately NOT rejected — selftest.sh uses `exit 0` as its
+    # green probe, and rejecting bare `true` would break legitimate no-op gates.
+    case "$cmd" in
+      echo\ *|:|""|" "*)
+        say "  ✗ $name — placeholder command ($cmd), not a gate"
+        CONFIG_ERROR="gate '$name' is a placeholder"
+        continue ;;
+    esac
+
     start=$(date +%s)
     out="$(cd "$ROOT" && eval "$cmd" 2>&1)"; code=$?
     dur=$(( ($(date +%s) - start) * 1000 ))
@@ -155,11 +189,16 @@ write_bundle() {
   local sha; sha="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
   python3 -c '
 import json,sys,datetime
-g=json.loads(sys.argv[1])
-print(json.dumps({"commit_sha":sys.argv[2],
+g=json.loads(sys.argv[1]); err=sys.argv[3] if len(sys.argv)>3 else ""
+# never certify an empty gate list, and never certify when the config was unreadable
+ok = bool(g) and all(x["exit_code"]==0 for x in g) and not err
+out={"commit_sha":sys.argv[2],
   "generated_at":datetime.datetime.now(datetime.timezone.utc).isoformat(),
-  "gates":g,"all_green":all(x["exit_code"]==0 for x in g)},indent=2))' \
-  "${RESULTS:-[]}" "$sha" > "$EVIDENCE/latest.json"
+  "gates":g,"all_green":ok}
+if err: out["error"]=err
+elif not g: out["error"]="no gates executed"
+print(json.dumps(out,indent=2))' \
+  "${RESULTS:-[]}" "$sha" "${CONFIG_ERROR:-}" > "$EVIDENCE/latest.json"
 }
 
 # ---------------------------------------------------------------- entrypoint
@@ -167,8 +206,14 @@ case "${1:-done}" in
   preflight) say "preflight:"; preflight || exit 1 ;;
   blast)     shift; blast "$@" ;;
   tests)     tests_for_diff ;;
-  fast)      say "fast gates:"; run_tier fast; [ -n "$FAILED" ] && { say "$FAILED"; die_code; }; say "fast: GREEN" ;;
-  full)      say "full gates:"; run_tier full; write_bundle; [ -n "$FAILED" ] && { say "$FAILED"; die_code; }; say "full: GREEN" ;;
+  fast)      say "fast gates:"; run_tier fast; [ -n "${CONFIG_ERROR:-}" ] && { say "REFUSING TO CERTIFY: ${CONFIG_ERROR}. Fix .claude/gates.json — a gate set that cannot be read is not a passing gate set."; die_code; }; [ -n "$FAILED" ] && { say "$FAILED"; die_code; }; say "fast: GREEN" ;;
+  full)      say "full gates:"; run_tier full; write_bundle
+      if [ -n "${CONFIG_ERROR:-}" ]; then
+        echo $((attempts + 1)) > "$STATE"
+        say "REFUSING TO CERTIFY: ${CONFIG_ERROR}."
+        say "Fix .claude/gates.json — a gate set that cannot be read is not a passing gate set."
+        die_code
+      fi; [ -n "${CONFIG_ERROR:-}" ] && { say "REFUSING TO CERTIFY: ${CONFIG_ERROR}. Fix .claude/gates.json — a gate set that cannot be read is not a passing gate set."; die_code; }; [ -n "$FAILED" ] && { say "$FAILED"; die_code; }; say "full: GREEN" ;;
   done|--hook)
       attempts=0; [ -f "$STATE" ] && attempts="$(cat "$STATE" 2>/dev/null || echo 0)"
       if [ "$attempts" -ge "$MAX_BLOCKS" ]; then
@@ -181,6 +226,12 @@ case "${1:-done}" in
       fi
       say "preflight:"; preflight || { echo $((attempts+1)) > "$STATE"; die_code; }
       say "full gates:"; run_tier full; write_bundle
+      if [ -n "${CONFIG_ERROR:-}" ]; then
+        echo $((attempts + 1)) > "$STATE"
+        say "REFUSING TO CERTIFY: ${CONFIG_ERROR}."
+        say "Fix .claude/gates.json — a gate set that cannot be read is not a passing gate set."
+        die_code
+      fi
       if [ -n "$FAILED" ]; then
         echo $((attempts+1)) > "$STATE"
         say "$FAILED"

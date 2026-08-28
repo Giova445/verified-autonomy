@@ -165,6 +165,11 @@ over-represented.
 
 ### 2.4 What the evidence does support, ranked
 
+> **Implemented:** `bin/holdout` (1 and 2), `bin/mutate-changed` (3), `bin/ambiguity` (4),
+> `hooks/stop-gate.sh` + `bin/ledger` (5), and the per-gate budget check in
+> `benchmark/gates/bench.sh` (6). Measured false-positive rates are in
+> `benchmark/README-gates.md`; every one is inside the 10% budget in item 6.
+
 1. **Isolate the verifier from the agent's execution environment.** A Berkeley RDI red-team
    scored **100% on SWE-bench Verified and 100% on SWE-bench Pro without solving anything**,
    via a `conftest.py` pytest hook and a parser overwrite inside the container; 100% on
@@ -181,6 +186,20 @@ over-represented.
    prevention rate; mutation testing was actually enabled on only 10.8% of those changes.
 4. **Reduce task ambiguity.** Hack rates run **10–20× higher on ambiguous problems** than
    unambiguous ones. The cheapest intervention with the largest measured lever.
+   `bin/ambiguity` implements the mechanically decidable half of this. It does **not** judge
+   whether a spec is ambiguous — that is taste, and every attempt to mechanise it collapses
+   into a lexicon of "vague words." It asks a narrower question: *which decisions does this
+   diff make that the spec never mentions?* Magic thresholds, fixture-id special cases and
+   unstated return values are surfaced; decisions grounded in spec vocabulary are not, and
+   neither are names the diff introduces itself (loop variables, accumulators, working sets
+   — algorithm mechanics a spec has no business naming).
+   **This is the least-evidenced gate in the ladder and should be read that way.** The
+   decision-point patterns are a judgment call, not a finding; no published work says these
+   constructs are the ones that matter. The first version flagged 5 false positives across
+   two known-correct implementations and 0 true positives — `seen`, `unmet`, `stuck` — which
+   is what excluding diff-local names fixed. It reports by default; `AG_STRICT=1` blocks.
+   A finding is cleared by recording the decision (`ASSUMPTIONS.md` or an `Assumption:`
+   commit trailer naming the specific literal), never by naming a file as a blanket waiver.
 5. **Enforce completion claims at the harness, not by prompting.** Harness enforcement moved
    security-practice skipping from 89/97/82% down to **12%**. Asking a model not to hack moved
    it 80% → 70%. Self-reflection is worse: in 20,574 real sessions only **2.99%** of

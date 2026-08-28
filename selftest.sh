@@ -130,6 +130,7 @@ echo "coverage:"
 suite "test-delta selftest"      bash "$PLUGIN/bin/test-delta"      selftest
 suite "holdout selftest"         bash "$PLUGIN/bin/holdout"         selftest
 suite "mutate-changed selftest"  bash "$PLUGIN/bin/mutate-changed"  selftest
+suite "ambiguity selftest"       bash "$PLUGIN/bin/ambiguity"       selftest
 
 echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0

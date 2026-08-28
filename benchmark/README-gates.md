@@ -247,10 +247,19 @@ positive — merged does not mean correct — so each was inspected and classifi
 
 ### scan-diff-cheats
 
-| | flagged | rate |
-|---|---|---|
-| before | 13 / 120 | 10.8% |
-| **after the fixes below** | **9 / 120** | **7.5%** |
+| | flagged | rate | 95% CI (Wilson) |
+|---|---|---|---|
+| before | 13 / 120 | 10.8% | 6.4% – 17.7% |
+| **after the fixes below** | **9 / 120** | **7.5%** | **4.0% – 13.6%** |
+
+**Correction.** An earlier version of this section reported 7.5% as though it were a
+false-positive rate. It is not — it is a **flag rate**. Only the 4 flags fixed below were
+individually adjudicated as wrong; the remaining 9 were inspected and judged "genuine or
+by-design," which is not the same as adjudicated. And the interval is 9.6 points wide, so
+"7.5%" carries far less precision than a single number implies. Google's admission bar for
+surfacing an analysis at code review is an *effective* false-positive rate under 10%, where
+"effective FP" means any report a developer chose not to act on — a behavioural measure this
+sample does not have.
 
 Two real scope bugs, both invisible in a corpus I authored:
 

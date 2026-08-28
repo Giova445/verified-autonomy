@@ -124,6 +124,31 @@ Fleiss' kappa = 0.864 (3 judges, 11 items scored by all three).
 **Kappa measures judges agreeing with each other, not with the gold set.** Correlated
 judges can share a bias and score high. It is reported alongside accuracy, never instead.
 
+### The panel is not three votes
+
+Prompted by *Nine Judges, Two Effective Votes* (arXiv:2605.29800, May 2026), which found
+that nine judges from seven model families supply **n_eff = 2.18** effective votes (24.2%
+independence, mean pairwise phi 0.391), and that unanimous panels were still wrong 9.1% of
+the time against an independence prediction of 0.01%.
+
+Recomputing the same statistics on this panel:
+
+| statistic | this panel | arXiv:2605.29800 |
+|---|---|---|
+| mean pairwise phi | **0.873** | 0.391 |
+| Kish effective votes | **1.09 of 3** | 2.18 of 9 |
+| independence ratio | 36.4% | 24.2% |
+
+**This panel is far more correlated than the published baseline, not less.** Three judges
+here are worth about **one** independent vote. The "majority vote 12/12" line above is
+therefore not three confirmations of the same answer — it is close to one answer counted
+three times, and it should not be read as a confidence multiplier. The high kappa is
+evidence *of* that correlation, not of reliability.
+
+The heterogeneity control I applied — three different models — was weaker than intended.
+Three models from **one family** share training lineage, and the literature's own panels
+spanned seven families and still only reached 24% independence.
+
 The five cases the scanner missed — weakened assertion, catch-all swallow, fixture-id
 special case, inverted exception contract, set-equality downgraded to length — were
 caught by all three judges. That is the gap, and it is the one place in this system where
@@ -157,6 +182,36 @@ a judge earns its cost.
    it is free, deterministic, and cannot be talked out of its answer. The judge belongs
    only where the regex provably cannot go, and its output should be advisory to a human,
    not a blocking verdict.
+5. **Self-preference is unmeasured here, not favourable.** The judges share a model family
+   with the author of the cases and labels. Direction cannot be assumed: arXiv:2604.22891
+   (Apr 2026) measured self-preference ranging from +0.307 to **−0.229** (systematic
+   self-*dis*preference) depending on model, and excluded code from its categories for
+   insufficient samples. So this confound is real, its sign is unknown, and no published
+   code-domain measurement exists to bound it.
+6. **Order was permuted across judges but not within a judge.** The validated control is
+   AB/BA per judge with an order-*consistency filter* — accept only order-consistent
+   verdicts, escalate the rest — because averaging two swapped runs can wash out a
+   correct verdict. Code judging still shows order swings up to 14 pp (arXiv:2507.10535).
+   Not done here.
+7. **n=12 against a recommended 200–400**, stratified to oversample the class that matters
+   (gate said PASS and was wrong), since minority-class count dominates kappa variance.
+
+### The architectural rule this evidence forces
+
+**A judge may escalate or block. It may never convert a mechanical FAIL into a PASS.**
+
+The asymmetry is not stylistic. Judges that read attacker-influenceable text are steerable:
+arXiv:2603.18740 (Apr 2026) moved vulnerability detection from 97.2% to **3.6%** on
+GPT-4o-mini purely by reframing, and landed adversarial PRs reintroducing real CVEs against
+Claude Code in a live GitHub Action at **17/17 after cheap iterative refinement**. Metadata
+redaction alone restored 70% of missed detections; redaction plus explicit instruction, 94%.
+And a visible prior verdict anchors hard — showing a prior score as *metadata* shifted
+Claude-4.5-Sonnet acceptance by **22.3 pp** (arXiv:2608.25869, Aug 2026), with
+chain-of-thought making one model's anchoring 47.7% **worse**.
+
+So: the judges here were kept blind to the scanner's verdict and to each other, which is the
+control that matters most. Anything built on this must keep that property, and must never
+let a judge's opinion clear a red mechanical gate.
 
 ## 4. Reproducing
 

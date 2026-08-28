@@ -1,0 +1,512 @@
+#!/usr/bin/env bash
+# worktree-guard — mechanical enforcement of "one writer per worktree, always".
+#
+# The rule was prose (skills/using-worktrees, skills/dispatching-agents): "two tasks may run
+# concurrently only when their write-sets are disjoint". Prose does not stop a fan-out where
+# wave-2 and wave-3 both edit src/api. This turns the rule into a lease you cannot talk your
+# way past.
+#
+#   worktree-guard claim <task-id> --scope <glob> [--scope <glob>]...
+#   worktree-guard release <task-id>
+#   worktree-guard check <task-id> <path>
+#   worktree-guard list
+#   worktree-guard stale [--older-than MIN] [--dry-run]
+#   worktree-guard selftest
+#
+# Exit: 0 granted/inside | 1 usage | 2 REFUSED (overlap, or path outside scope)
+#       3 fail-closed (claims state unreadable — an unreadable ledger is not an empty ledger)
+#
+# State lives in the MAIN worktree, never the caller's: .claude/work/claims.json under
+# `git rev-parse --git-common-dir`. A per-worktree ledger would let every worktree grant itself
+# every scope — exactly the collision this tool exists to prevent.
+set -uo pipefail
+
+say() { printf '%s\n' "$*" >&2; }
+
+# ---------------------------------------------------------------- state location
+resolve_state() {
+  if [ -n "${WORKTREE_GUARD_STATE:-}" ]; then printf '%s' "$WORKTREE_GUARD_STATE"; return 0; fi
+  local common main
+  common="$(git rev-parse --git-common-dir 2>/dev/null)" || {
+    say "not inside a git repository — worktree-guard has nothing to coordinate"; return 1; }
+  # --git-common-dir is relative ('.git') from the repo root, absolute from a linked worktree.
+  # Normalise before taking the parent, or the path differs per caller and all claims look disjoint.
+  common="$(cd "$common" 2>/dev/null && pwd)" || { say "cannot resolve git common dir"; return 1; }
+  main="$(dirname "$common")"
+  printf '%s' "$main/.claude/work/claims.json"
+}
+
+# ---------------------------------------------------------------- mutex
+# mkdir is the only atomic test-and-set POSIX shells agree on. Without it two `claim` calls
+# racing in a fan-out both read the pre-claim ledger and both grant themselves the scope.
+LOCK=""
+lock_release() { [ -n "$LOCK" ] && rmdir "$LOCK" 2>/dev/null; LOCK=""; }
+lock_acquire() {
+  local dir="$1.lock" i=0
+  mkdir -p "$(dirname "$dir")" 2>/dev/null
+  while ! mkdir "$dir" 2>/dev/null; do
+    i=$((i+1))
+    if [ "$i" -gt 100 ]; then
+      # A lock older than 120s belongs to a process that died holding it. Breaking it is safe;
+      # refusing forever is not — a wedged lock would block the whole fan-out.
+      local age; age="$(python3 -c 'import os,sys,time;print(int(time.time()-os.path.getmtime(sys.argv[1])))' "$dir" 2>/dev/null || echo 0)"
+      if [ "${age:-0}" -gt 120 ]; then say "breaking stale lock (${age}s old): $dir"; rmdir "$dir" 2>/dev/null; continue; fi
+      say "could not acquire claims lock after 10s: $dir"; return 3
+    fi
+    sleep 0.1
+  done
+  LOCK="$dir"; trap lock_release EXIT INT TERM
+  return 0
+}
+
+# ---------------------------------------------------------------- glob engine
+read -r -d '' PY <<'PYEOF'
+import fnmatch, json, os, sys, tempfile, time
+
+WILD = "*?["
+
+def die(code, *msg):
+    for m in msg: print(m, file=sys.stderr)
+    sys.exit(code)
+
+# --- overlap detection -----------------------------------------------------------------
+# Two scopes conflict if ANY path COULD match both, not merely if a file matching both exists
+# today. Intersecting `git ls-files` expansions alone is wrong: src/api/** and src/** have
+# disjoint file sets while src/api is empty, then wave-2 creates src/api/router.py and two
+# agents are writing one file. So the test is pattern-vs-pattern emptiness over path segments,
+# independent of what is on disk; the file expansion only names colliding files in the refusal.
+# The segment test is deliberately OVER-approximate: unable to prove two wildcard segments
+# disjoint, it says "may intersect". A false conflict serializes one task; a false clearance
+# puts two writers in one file. Fail closed.
+
+def seg_literal(s): return not any(c in s for c in WILD)
+
+def seg_may_intersect(a, b):
+    if seg_literal(a) and seg_literal(b): return a == b
+    if seg_literal(a): return fnmatch.fnmatchcase(a, b)
+    if seg_literal(b): return fnmatch.fnmatchcase(b, a)
+    # Both are wildcards. Resolve the one case worth resolving precisely — '*.ts' vs '*.py',
+    # i.e. two extension filters — and assume intersection for everything else.
+    ta, tb = a.lstrip("*"), b.lstrip("*")
+    if a.startswith("*") and b.startswith("*") and seg_literal(ta) and seg_literal(tb):
+        return ta.endswith(tb) or tb.endswith(ta)
+    return True
+
+def patterns_intersect(pa, pb):
+    a, b = pa.split("/"), pb.split("/")
+    memo = {}
+    def go(i, j):
+        k = (i, j)
+        if k in memo: return memo[k]
+        memo[k] = r = step(i, j)
+        return r
+    def step(i, j):
+        if i == len(a) and j == len(b): return True
+        if i == len(a): return all(s == "**" for s in b[j:])
+        if j == len(b): return all(s == "**" for s in a[i:])
+        if a[i] == "**" and b[j] == "**":
+            return go(i+1, j) or go(i, j+1) or go(i+1, j+1)
+        if a[i] == "**": return go(i+1, j) or go(i, j+1)   # ** eats zero, or one of b
+        if b[j] == "**": return go(i, j+1) or go(i+1, j)
+        if seg_may_intersect(a[i], b[j]): return go(i+1, j+1)
+        return False
+    return go(0, 0)
+
+# A concrete path is a pattern whose every segment is a literal, so patterns_intersect
+# serves both `claim` overlap and `check` containment. A check that disagreed with the
+# claim it enforces would be worse than no check.
+path_matches = patterns_intersect
+
+def normalize(scope, files, worktree):
+    p = scope.strip().replace(os.sep, "/")
+    while p.startswith("./"): p = p[2:]
+    p = p.lstrip("/")
+    while "//" in p: p = p.replace("//", "/")
+    if p in ("", "."): return "**"
+    if p.endswith("/"): return p + "**"
+    if seg_literal(p):
+        # A bare directory name means its subtree. Left as a literal it would claim exactly
+        # one path and protect nothing under it.
+        if os.path.isdir(os.path.join(worktree, p)) or any(f.startswith(p + "/") for f in files):
+            return p + "/**"
+    return p
+
+def validate(scope):
+    if scope.startswith("/") or scope.startswith("~"):
+        die(1, "scope must be repo-relative, got absolute: %s" % scope)
+    if ".." in scope.split("/"):
+        die(1, "scope must not escape the repo with '..': %s" % scope)
+
+# --- state -----------------------------------------------------------------------------
+def load(path):
+    if not os.path.exists(path): return {"version": 1, "claims": {}}
+    # Bytes in, explicit decode. A plain open().read() raises UnicodeDecodeError on a single
+    # non-UTF-8 byte, and that is a ValueError, not an OSError: it escaped the handler below,
+    # python died with a traceback and status 1, and 1 is this tool's code for USAGE. The
+    # documented fail-closed code is 3. Same defect the ledger had — unreadable state must
+    # never surface as a code the caller reads as "carry on".
+    try:
+        raw = open(path, "rb").read().decode("utf-8")
+    except (OSError, ValueError) as e:
+        die(3, "REFUSING: cannot read claims ledger %s (%s)." % (path, e),
+               "An unreadable ledger is not an empty ledger — no claim can be granted.")
+    if not raw.strip():
+        die(3, "REFUSING: claims ledger %s is empty." % path,
+               "Writes here are atomic, so a zero-byte file means corruption, not 'no claims'.")
+    try:
+        d = json.loads(raw)
+    except ValueError as e:
+        die(3, "REFUSING: claims ledger %s is not valid JSON (%s)." % (path, e),
+               "Fix or delete it deliberately. Guessing that it means 'no claims' is how two writers land in one file.")
+    if not isinstance(d, dict) or not isinstance(d.get("claims"), dict):
+        die(3, "REFUSING: claims ledger %s has an unrecognised shape." % path)
+    return d
+
+def store(path, d):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".claims.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(d, f, indent=2, sort_keys=True)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)     # atomic: a reader sees the old file or the new one
+    except BaseException:
+        if os.path.exists(tmp): os.unlink(tmp)
+        raise
+
+def alive(c): return bool(c.get("worktree")) and os.path.isdir(c["worktree"])
+
+def reap_dead(d):
+    # A claim whose worktree is gone has no writer behind it. Left in place it blocks its scope
+    # forever, and the next agent's only escape is deleting the ledger — which disarms every
+    # other claim too. Reaping on read keeps the honest path open.
+    dead = [t for t, c in d["claims"].items() if not alive(c)]
+    for t in dead: del d["claims"][t]
+    return dead
+
+def fmt(c):
+    return "%s  scope=%s  worktree=%s  since=%s" % (
+        c.get("task_id"), ",".join(c.get("scopes", [])), c.get("worktree"), c.get("claimed_at"))
+
+# --- ops -------------------------------------------------------------------------------
+op, state = sys.argv[1], sys.argv[2]
+
+if op == "claim":
+    task, worktree, filelist = sys.argv[3], sys.argv[4], sys.argv[5]
+    raw_scopes = sys.argv[6:]
+    if not raw_scopes: die(1, "claim requires at least one --scope")
+    for s in raw_scopes: validate(s)
+    try:
+        files = [l.strip() for l in open(filelist) if l.strip()]
+    except OSError:
+        files = []
+    scopes = sorted({normalize(s, files, worktree) for s in raw_scopes})
+
+    d = load(state)
+    for t in reap_dead(d):
+        print("reaped dead claim (worktree gone): %s" % t, file=sys.stderr)
+
+    conflicts = []
+    for other, c in sorted(d["claims"].items()):
+        if other == task: continue      # re-claiming your own lease is a refresh, not a race
+        # Re-normalize the HELD scope instead of trusting the ledger text: a no-op on a ledger
+        # this tool wrote, but a hand-edited entry reading 'docs' would otherwise guard one path
+        # and let a second writer take docs/adr/**. Widening on read only ADDS refusals. `check`
+        # deliberately does not do this — there the same widening would GRANT more than the
+        # ledger says, so it reads stored text literally. Both resolve ambiguity toward refusal.
+        held = [normalize(s, files, c.get("worktree") or worktree) for s in c.get("scopes", [])]
+        for mine in scopes:
+            for theirs in held:
+                if patterns_intersect(mine, theirs):
+                    ex = [f for f in files if path_matches(f, mine) and path_matches(f, theirs)][:3]
+                    conflicts.append((other, c, mine, theirs, ex))
+    if conflicts:
+        print("REFUSED: scope collides with a live claim. Two writers in one write-set is the", file=sys.stderr)
+        print("         defect this guard exists to prevent — narrow the scope or wait.", file=sys.stderr)
+        for other, c, mine, theirs, ex in conflicts:
+            print("  %s '%s'  vs  %s '%s'" % (task, mine, other, theirs), file=sys.stderr)
+            print("    held by : %s" % c.get("worktree"), file=sys.stderr)
+            print("    since   : %s" % c.get("claimed_at"), file=sys.stderr)
+            if ex: print("    collides: %s" % ", ".join(ex), file=sys.stderr)
+            else:  print("    collides: no file matches both today — but any future path under", file=sys.stderr)
+                   # (directory-prefix overlap; see patterns_intersect)
+        sys.exit(2)
+
+    now = time.time()
+    d["claims"][task] = {
+        "task_id": task, "scopes": scopes, "worktree": worktree, "pid": os.getppid(),
+        "claimed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        "claimed_at_epoch": int(now)}
+    store(state, d)
+    print(json.dumps(d["claims"][task], sort_keys=True))
+    sys.exit(0)
+
+if op == "release":
+    task = sys.argv[3]
+    d = load(state)
+    if task not in d["claims"]:
+        die(0, "no live claim for '%s' (already released?)" % task)
+    del d["claims"][task]
+    store(state, d)
+    print("released: %s" % task, file=sys.stderr)
+    sys.exit(0)
+
+if op == "check":
+    task, path = sys.argv[3], sys.argv[4]
+    d = load(state)
+    c = d["claims"].get(task)
+    if c is None: die(2, "REFUSED: '%s' holds no claim. Claim a scope before writing." % task)
+    if not alive(c):
+        die(2, "REFUSED: claim for '%s' names a worktree that no longer exists (%s)."
+               % (task, c.get("worktree")), "Re-claim from a live worktree.")
+    for s in c.get("scopes", []):
+        if path_matches(path, s):
+            print("in-scope: %s matches '%s'" % (path, s), file=sys.stderr)
+            sys.exit(0)
+    die(2, "REFUSED: %s is outside the write-set claimed by '%s' (%s)."
+           % (path, task, ", ".join(c.get("scopes", []))),
+           "Editing it would cross into another agent's lane.")
+
+if op == "list":
+    d = load(state)
+    if not d["claims"]: print("(no live claims)")
+    for _, c in sorted(d["claims"].items()):
+        print("%s %s" % ("live" if alive(c) else "DEAD", fmt(c)))
+    sys.exit(0)
+
+if op == "stale":
+    older, dry = sys.argv[3], sys.argv[4] == "1"
+    d = load(state)
+    now = time.time()
+    doomed = []
+    for t, c in sorted(d["claims"].items()):
+        if not alive(c):
+            doomed.append((t, c, "worktree gone: %s" % c.get("worktree")))
+        elif older != "-" and (now - c.get("claimed_at_epoch", now)) / 60.0 > float(older):
+            doomed.append((t, c, "held %.1f min (> %s)" % ((now - c["claimed_at_epoch"]) / 60.0, older)))
+    if not doomed: print("no stale claims"); sys.exit(0)
+    for t, c, why in doomed:
+        print("%s %s  [%s]" % ("would clear" if dry else "cleared", fmt(c), why))
+    if not dry:
+        for t, _, _ in doomed: del d["claims"][t]
+        store(state, d)
+    sys.exit(0)
+
+die(1, "unknown op: %s" % op)
+PYEOF
+
+run_py() { python3 -c "$PY" "$@"; }
+
+# --------------------------------------------------------------- file inventory
+# Tracked + untracked-but-not-ignored. Used only to name concrete colliding files and to spot a
+# bare directory scope; overlap itself never depends on it.
+file_list() {
+  local out; out="$(mktemp)"
+  {
+    git ls-files 2>/dev/null
+    git ls-files --others --exclude-standard 2>/dev/null
+  } | sort -u > "$out"
+  printf '%s' "$out"
+}
+
+# ---------------------------------------------------------------- subcommands
+cmd_claim() {
+  local task="${1:-}"; shift || true
+  [ -n "$task" ] || { say "usage: worktree-guard claim <task-id> --scope <glob> [--scope <glob>]..."; return 1; }
+  local scopes=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --scope) shift; [ $# -gt 0 ] || { say "--scope needs a value"; return 1; }; scopes+=("$1") ;;
+      *) say "unexpected argument: $1"; return 1 ;;
+    esac
+    shift
+  done
+  [ ${#scopes[@]} -gt 0 ] || { say "claim requires at least one --scope"; return 1; }
+
+  local state wt fl code
+  state="$(resolve_state)" || return 3
+  wt="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  fl="$(file_list)"
+  lock_acquire "$state" || return 3
+  run_py claim "$state" "$task" "$wt" "$fl" "${scopes[@]}"; code=$?
+  lock_release; rm -f "$fl"
+  return $code
+}
+
+cmd_release() {
+  local task="${1:-}"
+  [ -n "$task" ] || { say "usage: worktree-guard release <task-id>"; return 1; }
+  local state code; state="$(resolve_state)" || return 3
+  lock_acquire "$state" || return 3
+  run_py release "$state" "$task"; code=$?
+  lock_release
+  return $code
+}
+
+cmd_check() {
+  local task="${1:-}" path="${2:-}"
+  [ -n "$task" ] && [ -n "$path" ] || { say "usage: worktree-guard check <task-id> <path>"; return 1; }
+  local state root rel; state="$(resolve_state)" || return 3
+  root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  case "$path" in
+    /*) # Both sides must be resolved PHYSICALLY before the prefix strip. On macOS $TMPDIR
+        # and /var are symlinks, so `git rev-parse --show-toplevel` reports /private/var/...
+        # while the caller passes /var/... — a naive strip then declares an in-scope file
+        # out-of-worktree. realpath the directory, not the file: `check` is asked about paths
+        # that do not exist yet. An absolute path genuinely outside the worktree is refused
+        # rather than compared against repo-relative globs it can never match.
+        rel="$(python3 -c '
+import os,sys
+root=os.path.realpath(sys.argv[1])
+p=sys.argv[2]
+p=os.path.join(os.path.realpath(os.path.dirname(p)), os.path.basename(p))
+print(os.path.relpath(p, root))' "$root" "$path" 2>/dev/null)"
+        case "${rel:-..}" in ""|..|../*) say "REFUSED: $path is outside the worktree ($root)."; return 2 ;; esac ;;
+    *)  rel="$path" ;;
+  esac
+  run_py check "$state" "$task" "$rel"
+}
+
+cmd_list() {
+  local state; state="$(resolve_state)" || return 3
+  run_py list "$state"
+}
+
+cmd_stale() {
+  local older="-" dry=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --older-than) shift; [ $# -gt 0 ] || { say "--older-than needs MINUTES"; return 1; }; older="$1" ;;
+      --dry-run) dry=1 ;;
+      *) say "unexpected argument: $1"; return 1 ;;
+    esac
+    shift
+  done
+  local state code; state="$(resolve_state)" || return 3
+  lock_acquire "$state" || return 3
+  run_py stale "$state" "$older" "$dry"; code=$?
+  lock_release
+  return $code
+}
+
+# ---------------------------------------------------------------- selftest
+# An unenforced guard is worse than no guard, because you will route a fan-out through it.
+selftest() {
+  local self tmp pass=0 fail=0
+  self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  tmp="$(mktemp -d)"
+  chk() { if [ "$2" = "$3" ]; then printf '  ok    %-50s (%s)\n' "$1" "$3"; pass=$((pass+1));
+          else printf '  FAIL  %-50s want=%s got=%s\n' "$1" "$3" "$2"; fail=$((fail+1)); fi; }
+
+  mkdir -p "$tmp/repo/src/api" "$tmp/repo/src/web" "$tmp/repo/docs" "$tmp/repo/lib"
+  ( cd "$tmp/repo" \
+    && git init -q . \
+    && : > src/api/a.ts && : > src/web/b.ts && : > docs/x.md && : > lib/c.py \
+    && git add -A >/dev/null 2>&1 \
+    && git -c user.email=t@t -c user.name=t commit -qm init >/dev/null 2>&1 )
+
+  local ST="$tmp/claims.json"
+  g()  { ( cd "$tmp/repo" && WORKTREE_GUARD_STATE="$ST" bash "$self" "$@" ); }
+  # gk <expected-exit> <label> <args...> — run and assert in one line
+  gk() { local w="$1" l="$2"; shift 2; g "$@" >/dev/null 2>&1; chk "$l" "$?" "$w"; }
+  # in another worktree, sharing the same ledger
+  gw() { local d="$1"; shift; ( cd "$d" && WORKTREE_GUARD_STATE="$ST" bash "$self" "$@" ); }
+
+  echo "worktree-guard selftest: $tmp"
+
+  gk 0 "first claim granted"        claim t1 --scope 'src/api/**'
+  gk 0 "disjoint scope granted"     claim t2 --scope 'docs/**'
+  gk 0 "sibling dir is disjoint"    claim t5 --scope 'src/web/**'
+  gk 2 "file inside a live glob refused"               claim t3 --scope 'src/api/handlers.ts'
+  gk 2 "prefix overlap (src/** vs src/api/**) refused" claim t4 --scope 'src/**'
+  # src/api holds no .py file today, so a file-set intersection would call this disjoint
+  gk 2 "future-file overlap refused (empty today)"     claim t6 --scope 'src/api/**/*.py'
+  gk 0 "extension scope in free dir granted"           claim t7 --scope 'lib/**/*.py'
+  g release t7 >/dev/null 2>&1
+  gk 0 "'*.ts' vs '*.py' not treated as overlap"       claim t8 --scope 'lib/**/*.ts'
+  gk 0 "  ... and both can coexist"                    claim t9 --scope 'lib/**/*.py'
+  g release t8 >/dev/null 2>&1; g release t9 >/dev/null 2>&1
+  gk 0 "re-claiming own lease is a refresh"            claim t1 --scope 'src/api/**'
+
+  gk 0 "check: path inside scope"                  check t1 src/api/a.ts
+  gk 2 "check: path outside scope refused"         check t1 src/web/b.ts
+  gk 2 "check: unknown task refused"               check nobody src/api/a.ts
+  gk 0 "check: absolute in-worktree path"          check t1 "$tmp/repo/src/api/a.ts"
+  gk 0 "check: absolute path, file not yet created" check t1 "$tmp/repo/src/api/new.ts"
+  gk 2 "check: absolute path outside worktree refused" check t1 /etc/hosts
+
+  gk 0 "release exits 0"            release t1
+  gk 0 "released scope re-claimable" claim t4 --scope 'src/api/**'
+  g release t4 >/dev/null 2>&1
+  local n; n="$(g list 2>/dev/null | grep -c 'live ')"
+  chk "list shows the 2 surviving claims" "$n" "2"
+
+  # a dead worktree must not hold a scope hostage
+  mkdir -p "$tmp/wt1"; ( cd "$tmp/wt1" && git init -q . )
+  gw "$tmp/wt1" claim tw --scope 'lib/**' >/dev/null 2>&1
+  chk "claim from a second worktree granted" "$?" "0"
+  rm -rf "$tmp/wt1"
+  g stale --dry-run 2>/dev/null | grep -q 'would clear.*tw'; chk "stale --dry-run reports dead worktree" "$?" "0"
+  g list 2>/dev/null | grep -q '^DEAD.*tw'; chk "list marks it DEAD, not live" "$?" "0"
+  gk 0 "stale exits 0" stale
+  g list 2>/dev/null | grep -q 'tw '; chk "stale cleared it from the ledger" "$?" "1"
+
+  mkdir -p "$tmp/wt2"; ( cd "$tmp/wt2" && git init -q . )
+  gw "$tmp/wt2" claim tw2 --scope 'lib/**' >/dev/null 2>&1
+  rm -rf "$tmp/wt2"
+  gk 0 "dead claim auto-reaped, does not block forever" claim tz --scope 'lib/**'
+
+  # age-based staleness only fires when asked for
+  gk 0 "stale --older-than 999 clears nothing" stale --older-than 999
+  g list 2>/dev/null | grep -q 'tz '; chk "  ... young claim survives" "$?" "0"
+  g stale --older-than 0 >/dev/null 2>&1
+  g list 2>/dev/null | grep -q 'tz '; chk "stale --older-than 0 clears it" "$?" "1"
+
+  # fail closed
+  printf '{"claims":[},' > "$ST"
+  gk 3 "corrupt ledger -> refuse to grant" claim tc --scope 'src/**'
+  gk 3 "corrupt ledger -> check refuses"   check tc src/x
+  : > "$ST"
+  gk 3 "zero-byte ledger -> refuse to grant" claim tc --scope 'src/**'
+  # REGRESSION: UnicodeDecodeError is a ValueError, not an OSError, so one non-UTF-8 byte
+  # escaped the read handler and killed python with status 1 — this tool's USAGE code, not
+  # its fail-closed code. Bad JSON was caught; a bad BYTE was not.
+  printf '{"version":1,"claims":{}}' > "$ST"
+  python3 -c 'import sys
+b=bytearray(open(sys.argv[1],"rb").read()); b[5]=0xff; open(sys.argv[1],"wb").write(bytes(b))' "$ST"
+  gk 3 "non-UTF-8 ledger -> exit 3, never 1" claim tc --scope 'src/**'
+  gk 3 "  ... and list agrees"                list
+  printf '{"version":1,"claims":{}}' > "$ST"
+  gk 1 "absolute scope rejected"       claim tc --scope '/etc/**'
+  gk 1 "escaping scope rejected"       claim tc --scope '../other/**'
+  gk 1 "claim with no --scope rejected" claim tc
+
+  # a bare directory name means its subtree, not one literal path
+  g claim td --scope 'docs' >/dev/null 2>&1
+  gk 0 "bare dir scope covers its subtree" check td docs/deep/new.md
+
+  # a HELD scope written by hand (or by an older format) is re-normalized before comparison,
+  # so a bare-dir entry cannot guard one path while a second writer takes the subtree
+  printf '{"version":1,"claims":{"h":{"task_id":"h","scopes":["src"],"worktree":"%s","claimed_at":"x","claimed_at_epoch":0}}}' "$tmp/repo" > "$ST"
+  gk 2 "hand-written bare-dir claim still blocks subtree" claim te --scope 'src/api/**'
+  gk 0 "  ... and does not over-block a sibling"          claim tf --scope 'docs/**'
+
+  rm -rf "$tmp"
+  echo
+  if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; return 0
+  else echo "SELF-TEST FAILED  ($fail of $((pass+fail)) checks)"; return 1; fi
+}
+
+# ---------------------------------------------------------------- entrypoint
+case "${1:-}" in
+  claim)    shift; cmd_claim   "$@" ;;
+  release)  shift; cmd_release "$@" ;;
+  check)    shift; cmd_check   "$@" ;;
+  list)     shift; cmd_list    "$@" ;;
+  stale)    shift; cmd_stale   "$@" ;;
+  selftest) shift; selftest ;;
+  *) say "usage: worktree-guard {claim <id> --scope <glob>... | release <id> | check <id> <path> | list | stale [--older-than MIN] [--dry-run] | selftest}"
+     exit 1 ;;
+esac

@@ -28,8 +28,15 @@ fi
 # ${CLAUDE_PLUGIN_ROOT:-} is deliberate — bare ${CLAUDE_PLUGIN_ROOT} under `set -u` aborts
 # the hook with exit 1, and exit 1 does NOT block, so the gate failed open when the env var
 # was absent.
-VERIFY="${CLAUDE_PLUGIN_ROOT:-/nonexistent}/bin/verify"
-[ -x "$VERIFY" ] || VERIFY="$ROOT/bin/verify"
+# Resolve the runner from THIS SCRIPT'S OWN LOCATION, not from an env var and not from the
+# repo. An earlier fix preferred ${CLAUDE_PLUGIN_ROOT}/bin/verify and fell back to
+# $ROOT/bin/verify — but with the env var unset that fallback is a repo-committed path, so a
+# 17-byte stub checked into the target repo became the gate runner and certified a red gate
+# green (verified: exit 0). BASH_SOURCE cannot be spoofed by repo content.
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+VERIFY="$SELF_DIR/../bin/verify"
+[ -x "$VERIFY" ] || VERIFY="${CLAUDE_PLUGIN_ROOT:-/nonexistent}/bin/verify"
+# Deliberately NO fallback to $ROOT/bin/verify: the repo is the untrusted side here.
 if [ ! -x "$VERIFY" ]; then
   echo "No usable gate runner found (checked plugin and $ROOT/bin/verify). Refusing to certify." >&2
   exit 2

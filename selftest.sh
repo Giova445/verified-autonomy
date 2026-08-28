@@ -26,6 +26,18 @@ CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/nul
 chk "red gate -> Stop hook exit 2 (refuses)" "$?" "2"
 
 # 3. green gate must allow it
+#
+# KNOWN FAILING when CLAUDE_PLUGIN_ROOT is unset, together with "stubbed bin/verify ignored"
+# below. Both have one cause, and it is a real hole in hooks/stop-gate.sh, not a harness
+# artifact: that hook resolves its runner as ${CLAUDE_PLUGIN_ROOT}/bin/verify and falls back
+# to $ROOT/bin/verify — a REPO-COMMITTED path. With the env var absent there is no plugin
+# copy to prefer, so a green gate finds no runner and blocks (this check), and a stub
+# committed into the target repo becomes the gate runner (that check). The hook should
+# resolve its own directory from BASH_SOURCE, which no repo content can spoof.
+#
+# Deliberately NOT masked by exporting CLAUDE_PLUGIN_ROOT here. A suite that sets up the one
+# condition under which the code works, and calls that a pass, is the fabricated green
+# receipt this project exists to stop. Left red until the hook is fixed.
 rm -f "$tmp/.claude/.gate-attempts"
 printf '{"full":[{"name":"probe","cmd":"true"}]}' > "$tmp/.claude/gates.json"
 CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
@@ -83,6 +95,36 @@ echo '{"tool_name":"Bash","tool_input":{"command":"npm test"}}' \
 chk "ordinary command allowed" "$?" "0"
 
 rm -rf "$tmp"
+
+# --- orchestration: the durable state machine the driving agent consults -----------------
+# The gate answers "may I stop?". These answer "what next, who owns this file, and is this
+# loop going anywhere?" — the state that used to live only in the context window, and so did
+# not survive compaction. Each tool ships its own selftest and tests/ ships the cross-process
+# suite; running them from HERE is the difference between "the gate works" and "the plugin
+# works". A tool that is present but broken is worse than one that is missing, because the
+# agent will trust it. So a missing or unrunnable sub-suite FAILS here; it never skips.
+suite() {
+  local label="$1"; shift
+  local out rc n
+  out="$("$@" 2>&1)"; rc=$?
+  n="$(printf '%s' "$out" | grep -oE '\([0-9]+ checks' | tail -1 | tr -dc '0-9')"
+  if [ "$rc" -eq 0 ] && [ -n "$n" ]; then
+    printf '  ok    %-46s (%s checks)\n' "$label" "$n"; pass=$((pass+1))
+  else
+    # A sub-suite that exits 0 having verified nothing is the fabricated receipt this whole
+    # project exists to stop, so an unparseable count is a failure too, not a pass.
+    printf '  FAIL  %-46s exit=%s counted=%s\n' "$label" "$rc" "${n:-none}"; fail=$((fail+1))
+    printf '%s\n' "$out" | grep -E 'FAIL|NOT RUN|Nothing was verified' | sed 's/^/          /'
+  fi
+}
+
+echo
+echo "orchestration:"
+suite "ledger selftest"         bash "$PLUGIN/bin/ledger"         selftest
+suite "escalate selftest"       bash "$PLUGIN/bin/escalate"       selftest
+suite "worktree-guard selftest" bash "$PLUGIN/bin/worktree-guard" selftest
+suite "cross-process suite"     bash "$PLUGIN/tests/orchestration-test.sh"
+
 echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0
 else echo "SELF-TEST FAILED  ($fail of $((pass+fail)) checks)"; exit 1; fi

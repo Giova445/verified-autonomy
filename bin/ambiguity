@@ -93,6 +93,21 @@ $(cat "$ROOT/$f")"; found="$found $f"; }
     return 0
   fi
 
+  # A README IS NOT A TASK SPEC, and using one as a stand-in makes this gate useless.
+  # Measured against 80 real merged commits with README.md as the spec: 32% of commits
+  # flagged, 120 findings, one commit with 18. Against the duel's actual SPEC.md, the same
+  # gate produced ZERO findings on two known-correct implementations. The difference is not
+  # the code — it is whether a real spec exists to check decisions against.
+  case "$found" in
+    *SPEC*) ;;
+    *README*)
+      say "ambiguity: NOTE — the only spec found is a README."
+      say "A README describes a project; a spec states what THIS change must do. Against a"
+      say "README this gate flags roughly a third of ordinary commits and is not usable as a"
+      say "gate. Point AG_SPEC at the task spec, issue, or PR description instead."
+      say "" ;;
+  esac
+
   # Production-side added lines only.
   local added
   added="$( {

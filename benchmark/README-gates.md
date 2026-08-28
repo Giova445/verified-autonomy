@@ -230,3 +230,64 @@ bash benchmark/gates/bench.sh                     # confusion matrix, all gates
 bash benchmark/judge/build-cases.sh /tmp/judge-repos
 bash benchmark/judge/score-judges.sh              # panel vs gold
 ```
+
+---
+
+## 4. Independent validation on real merged commits
+
+Every number above is measured on a corpus I wrote. That is the weakest thing about all of
+it, and it is the one gap more code cannot close. So the gates were run against **real merged
+commits from a private production repository** — code neither I nor the rules were built
+around, written by people who had never seen this project. Only aggregate statistics left
+that machine; no source, paths or commit content are reproduced here.
+
+Method: clone, walk 120 non-merge commits touching `.py`/`.ts`/`.tsx`, check out each one and
+scan it against its own parent. A flag on a merged commit is **not** automatically a false
+positive — merged does not mean correct — so each was inspected and classified.
+
+### scan-diff-cheats
+
+| | flagged | rate |
+|---|---|---|
+| before | 13 / 120 | 10.8% |
+| **after the fixes below** | **9 / 120** | **7.5%** |
+
+Two real scope bugs, both invisible in a corpus I authored:
+
+- **`hard-wait` fired 4 times, and 3 were on production files** — a React `setTimeout`, an
+  admin drawer, and a **rate limiter**. A `time.sleep()` in a rate limiter is the correct
+  implementation, not a flake. The rule's entire rationale ("use auto-waiting assertions") is
+  about tests and it had never been scoped to them. Now test files only.
+- **`test-only-bugfix` fired on a `test(e2e):` commit.** The pattern `^fix` is line-anchored
+  per line, so it matched "Fix is to point CI DATABASE_URL…" in the body. Now anchored to the
+  subject, and conventionally-typed `test(...)` / `ci(...)` commits are exempt — a correctly
+  typed test commit that changes only tests is the right case, not a suspicious one.
+
+The 9 that remain look like genuine findings or by-design friction: 4 `swallowed-error`
+(real `except Exception: pass`), 2 `guardrail-edit` (working as intended — needs the
+`Guardrail-Change:` trailer), 2 `exit-suppression`, and one each of `special-cased`,
+`skip-added`, `hard-wait` (this time in an e2e file), `assertion-weakened` and
+`assertion-removed`.
+
+### ambiguity — the result that matters most
+
+| spec used | commits flagged |
+|---|---|
+| a real task spec (`SPEC.md`, duel arena) | **0 findings on two known-correct implementations** |
+| `README.md` as a stand-in, 80 real commits | **26 / 80 = 32%**, 120 findings, max 18 on one commit |
+
+The code did not change between those two rows. **What changed is whether a real spec
+existed to check decisions against.** A README describes a project; a spec states what *this
+change* must do. Against a README this gate is unusable, and it now says so on every run.
+
+This is the strongest evidence in this document for the underlying claim, and it cuts both
+ways: the gate is only meaningful where a task spec exists, and a repo where a third of
+commits make decisions no written spec covers is being described accurately, not maligned.
+It stays report-only.
+
+### What this still does not fix
+
+The gold labels and the scanner rules remain mine. This probe measures **false positives on
+real code**, which is the half that gets a gate switched off. It does not measure recall —
+that needs real diffs independently labeled as containing a cheat, which no public dataset
+provides and which I cannot manufacture without reintroducing the same authorship problem.

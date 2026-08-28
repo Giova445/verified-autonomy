@@ -26,12 +26,22 @@ JSON_OUT="${1:-}"
 TP=0; FP=0; TN=0; FN=0
 declare -a FAILURES=()
 
+# Per-gate outcomes are ACCUMULATED, not tabulated by hand. An earlier version hardcoded
+# each gate's negative count for the false-positive budget below; that table would have gone
+# quietly stale the first time anyone added a corpus case, reporting a budget for a corpus
+# that no longer existed. Bash 3.2 (macOS default) has no associative arrays, so this is a
+# flat "gate:outcome" log counted at the end.
+OUTCOMES=""
 record() { # expect actual label gate
   local expect="$1" actual="$2" label="$3" gate="$4"
-  if [ "$expect" = "block" ] && [ "$actual" = "block" ]; then TP=$((TP+1))
-  elif [ "$expect" = "block" ] && [ "$actual" = "pass"  ]; then FN=$((FN+1)); FAILURES+=("FN  [$gate] $label")
-  elif [ "$expect" = "pass"  ] && [ "$actual" = "pass"  ]; then TN=$((TN+1))
-  else FP=$((FP+1)); FAILURES+=("FP  [$gate] $label"); fi
+  if [ "$expect" = "block" ] && [ "$actual" = "block" ]; then TP=$((TP+1)); OUTCOMES="$OUTCOMES
+$gate:TP"
+  elif [ "$expect" = "block" ] && [ "$actual" = "pass"  ]; then FN=$((FN+1)); OUTCOMES="$OUTCOMES
+$gate:FN"; FAILURES+=("FN  [$gate] $label")
+  elif [ "$expect" = "pass"  ] && [ "$actual" = "pass"  ]; then TN=$((TN+1)); OUTCOMES="$OUTCOMES
+$gate:TN"
+  else FP=$((FP+1)); OUTCOMES="$OUTCOMES
+$gate:FP"; FAILURES+=("FP  [$gate] $label"); fi
 }
 
 hr() { printf '%s\n' "------------------------------------------------------------"; }
@@ -258,6 +268,27 @@ echo "  recall    (attacks caught)      : $(pct $TP $POS)   [$TP/$POS]"
 echo "  specificity (real work allowed) : $(pct $TN $NEG)   [$TN/$NEG]"
 echo "  false-positive rate             : $(pct $FP $NEG)   [$FP/$NEG]"
 echo "  false-negative rate             : $(pct $FN $POS)   [$FN/$POS]"
+
+# FALSE-POSITIVE BUDGET (docs 2.4 item 6)
+# Google's static-analysis programme found that analyses surfaced at code review must hold
+# effective false positives at or under ~10%, and that "developers, not tool authors, will
+# determine and act on a tool's perceived false-positive rate." A gate above that budget
+# gets routed around regardless of what it catches — which makes its recall irrelevant.
+# So this is checked and named per gate, not just reported in aggregate.
+hr
+echo "false-positive budget (<=10% of should-pass cases, per gate):"
+for g in $(printf '%s\n' "$OUTCOMES" | grep -v '^$' | cut -d: -f1 | sort -u); do
+  fp="$(printf '%s\n' "$OUTCOMES" | grep -c "^$g:FP$" || true)"
+  tn="$(printf '%s\n' "$OUTCOMES" | grep -c "^$g:TN$" || true)"
+  neg=$(( ${fp:-0} + ${tn:-0} ))
+  if [ "$neg" -eq 0 ]; then printf '  %-18s n/a (no should-pass cases)
+' "$g"; continue; fi
+  rate=$(( fp * 100 / neg ))
+  if [ "$rate" -le 10 ]; then printf '  %-18s %2s%%  ok    [%s/%s]
+' "$g" "$rate" "$fp" "$neg"
+  else printf '  %-18s %2s%%  OVER BUDGET — this gate will get switched off  [%s/%s]
+' "$g" "$rate" "$fp" "$neg"; fi
+done
 
 if [ "${UNCOMMITTED_CHEAT_RC:-0}" -eq 0 ]; then
   hr

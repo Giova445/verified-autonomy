@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+# mutate-changed — diff-scoped mutation testing, shaped the way the evidence says.
+#
+#   mutate-changed [base-ref]   mutate changed production lines, report survivors
+#   mutate-changed selftest     run the built-in checks
+#
+# Config:
+#   MT_SRC     regex of production paths        (default: ^(src|lib|app)/ )
+#   MT_TEST    command that runs the suite      (default: pytest -q)
+#   MT_MAX     cap on mutants generated         (default: 40)
+#   MT_STRICT  1 = exit non-zero on survivors   (default: 0, report only)
+#
+# WHY THIS SHAPE, AND WHY NO SCORE THRESHOLD
+# Mutation testing is the single best-evidenced gate in this literature — and the threshold
+# everyone attaches to it is not part of that evidence.
+#
+# What IS evidenced (Google, ICSE 2021 / TSE 2021, ~15M mutants, >1,000 projects, 6 years):
+#   - 70% of 1,502 high-priority bugs would have had a live, fault-coupled mutant surfaced
+#     on the bug-introducing change. No other gate here has a bug-coupling number.
+#   - >90% of lines have a uniform mutant fate, so ONE mutant per line is sufficient.
+#     Mutants are massively redundant; generating more buys almost nothing.
+#   - Diff-scoping is mandatory: median 2 live mutants per changelist, 99th percentile 43.
+#   - 87.5% of generated mutants are already killed by existing tests.
+#
+# What is NOT evidenced: any threshold. Google runs this across >24,000 developers with NO
+# mutation-score threshold anywhere. Findings appear in review with "Please Fix" / "Not
+# useful" links and can be dismissed. Unfiltered, developers rated 85% of mutants
+# unproductive; suppression heuristics moved the productive ratio from 15% to 89%.
+#
+# So this reports by default and is dismissible. MT_STRICT exists for the rare repo that
+# wants it, and turning it on is a decision, not a default.
+#
+# One honest caveat on the 70%: it is a COUNTERFACTUAL COUPLING RATE, not a measured
+# prevention rate. Mutation testing was actually enabled on only 10.8% of those changes, and
+# nobody has measured how many surfaced mutants a developer would have acted on. And it
+# assesses whether an algorithm is implemented correctly, not whether it is the CORRECT
+# algorithm — the spec-level failure that dominates in practice is out of its reach.
+set -uo pipefail
+
+MT_SRC="${MT_SRC:-^(src|lib|app)/}"
+MT_TEST="${MT_TEST:-pytest -q}"
+MT_MAX="${MT_MAX:-40}"
+MT_STRICT="${MT_STRICT:-0}"
+
+say() { printf '%s\n' "$*" >&2; }
+repo_root() { printf '%s' "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; }
+
+resolve_base() {
+  local b="${1:-}"
+  if [ -n "$b" ] && git rev-parse --verify --quiet "$b" >/dev/null 2>&1; then printf '%s' "$b"; return; fi
+  if [ -n "${MT_BASE:-}" ] && git rev-parse --verify --quiet "$MT_BASE" >/dev/null 2>&1; then printf '%s' "$MT_BASE"; return; fi
+  git rev-parse --verify --quiet '@{upstream}' >/dev/null 2>&1 && { printf '@{upstream}'; return; }
+  for c in origin/HEAD origin/main origin/master; do
+    git rev-parse --verify --quiet "$c" >/dev/null 2>&1 && { printf '%s' "$c"; return; }
+  done
+  printf ''
+}
+
+run() {
+  local ROOT; ROOT="$(repo_root)"
+  cd "$ROOT" || return 1
+  local base; base="$(resolve_base "${1:-}")"
+  [ -z "$base" ] && { say "mutate-changed: no baseline. Pass a base ref or set MT_BASE."; return 1; }
+
+  # A mutant is "killed" when the suite fails. If the suite is ALREADY failing, every mutant
+  # looks killed and the run reports a perfect result over a red build. Refuse instead.
+  local baseline
+  baseline="$(eval "$MT_TEST" 2>&1)"
+  if [ $? -ne 0 ]; then
+    say "mutate-changed: the suite is red before any mutation."
+    say "Every mutant would look killed. Refusing to measure against a failing baseline."
+    say "$(printf '%s' "$baseline" | tail -3)"
+    return 1
+  fi
+
+  # Changed production lines: file:line pairs from the diff, working tree included.
+  local pairs
+  pairs="$( {
+      git diff -U0 "$base"...HEAD 2>/dev/null
+      git diff -U0 HEAD 2>/dev/null
+      git diff -U0 --cached 2>/dev/null
+    } | awk '
+      /^\+\+\+ / { f=$2; sub(/^b\//,"",f); next }
+      /^@@/ {
+        match($0, /\+[0-9]+(,[0-9]+)?/); s=substr($0, RSTART+1, RLENGTH-1)
+        n=1; split(s, a, ","); start=a[1]; if (length(a)>1) n=a[2]
+        for (i=0; i<n; i++) if (f != "") print f ":" (start+i)
+      }' | sort -u )"
+  pairs="$(printf '%s\n' "$pairs" | grep -E "$MT_SRC" | grep -E '\.py:' || true)"
+  [ -z "$pairs" ] && { echo "mutate-changed: no changed production lines"; return 0; }
+
+  local nlines; nlines="$(printf '%s\n' "$pairs" | grep -c . )"
+  echo "mutate-changed: $nlines changed production line(s), base $base"
+
+  local killed=0 survived=0 skipped=0 generated=0
+  local survivors=""
+  # This edits source files IN PLACE. If the run is interrupted between writing a mutant and
+  # restoring it, the user is left with corrupted source and no idea why. Restore on every
+  # signal, not just on a clean return.
+  local tmp; tmp="$(mktemp -d)"
+  MT_ACTIVE_FILE=""
+  restore_now() {
+    if [ -n "${MT_ACTIVE_FILE:-}" ] && [ -f "$tmp/orig" ]; then
+      cp "$tmp/orig" "$MT_ACTIVE_FILE" 2>/dev/null
+      say "mutate-changed: interrupted — restored $MT_ACTIVE_FILE"
+    fi
+    rm -rf "$tmp"
+  }
+  trap 'restore_now; exit 130' INT TERM HUP
+  trap 'restore_now' RETURN
+
+  while IFS= read -r pair; do
+    [ -z "$pair" ] && continue
+    [ "$generated" -ge "$MT_MAX" ] && break
+    local file="${pair%:*}" ln="${pair##*:}"
+    [ -f "$file" ] || continue
+    local src; src="$(sed -n "${ln}p" "$file" 2>/dev/null)"
+    [ -z "$src" ] && continue
+
+    # ONE mutant per line — >90% of lines have a uniform mutant fate, so more is waste.
+    # First operator that applies, wins.
+    local mut=""
+    for rule in 's/==/!=/' 's/!=/==/' 's/ < / <= /' 's/ > / >= /' 's/ <= / < /' 's/ >= / > /' \
+                's/ + / - /' 's/ - / + /' 's/ and / or /' 's/ or / and /' \
+                's/True/False/' 's/False/True/' 's/ not / /' ; do
+      local cand; cand="$(printf '%s' "$src" | sed "$rule")"
+      [ "$cand" != "$src" ] && { mut="$cand"; break; }
+    done
+    # Arid lines — no operator to flip. Google's biggest single win was suppressing these;
+    # unsuppressed they are the bulk of the 85% developers called unproductive.
+    [ -z "$mut" ] && { skipped=$((skipped+1)); continue; }
+
+    generated=$((generated+1))
+    cp "$file" "$tmp/orig"; MT_ACTIVE_FILE="$file"
+    python3 - "$file" "$ln" "$mut" <<'PY'
+import sys
+p, ln, new = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+lines = open(p).read().splitlines(True)
+if 0 < ln <= len(lines):
+    end = "\n" if lines[ln-1].endswith("\n") else ""
+    lines[ln-1] = new + end
+    open(p, "w").writelines(lines)
+PY
+    if eval "$MT_TEST" >/dev/null 2>&1; then
+      survived=$((survived+1))
+      survivors="$survivors
+  SURVIVED  $file:$ln
+      was: $(printf '%s' "$src" | sed 's/^[[:space:]]*//')
+      became: $(printf '%s' "$mut" | sed 's/^[[:space:]]*//')"
+    else
+      killed=$((killed+1))
+    fi
+    cp "$tmp/orig" "$file"; MT_ACTIVE_FILE=""
+  done <<< "$pairs"
+
+  echo "  generated $generated  killed $killed  survived $survived  (arid lines skipped: $skipped)"
+  [ "$generated" -ge "$MT_MAX" ] && echo "  NOTE: stopped at MT_MAX=$MT_MAX; $((nlines - generated)) changed lines not mutated"
+
+  if [ "$survived" -eq 0 ]; then
+    echo "mutate-changed: no survivors"
+    return 0
+  fi
+
+  printf '%s\n' "$survivors"
+  echo
+  echo "  A survivor means the suite did not notice this change. It is a finding to look at,"
+  echo "  NOT a score to hit. There is deliberately no threshold: Google runs this across"
+  echo "  >24,000 developers with none, and unfiltered mutation findings were rated 85%"
+  echo "  unproductive by developers. Dismiss what is not useful."
+  echo "  Dismiss durably with a commit trailer:  Mutation-Dismissed: <file:line> <why>"
+
+  # Dismissal, recorded in git history rather than in a mutable file.
+  local dismissed=0 remaining=0
+  local trailers; trailers="$(git log -1 --format='%B' 2>/dev/null | grep -iE '^Mutation-Dismissed:' || true)"
+  if [ -n "$trailers" ]; then
+    while IFS= read -r s; do
+      case "$s" in *SURVIVED*) ;; *) continue ;; esac
+      local loc; loc="$(printf '%s' "$s" | awk '{print $2}')"
+      if printf '%s' "$trailers" | grep -qF "$loc"; then dismissed=$((dismissed+1)); else remaining=$((remaining+1)); fi
+    done <<< "$survivors"
+    echo "  $dismissed survivor(s) dismissed by commit trailer, $remaining not"
+  else
+    remaining=$survived
+  fi
+
+  if [ "$MT_STRICT" = "1" ] && [ "$remaining" -gt 0 ]; then
+    say "mutate-changed: $remaining undismissed survivor(s), MT_STRICT=1"
+    return 1
+  fi
+  return 0
+}
+
+selftest() {
+  local pass=0 fail=0
+  chk() { if [ "$2" = "$3" ]; then printf '  ok    %-46s (%s)\n' "$1" "$3"; pass=$((pass+1));
+          else printf '  FAIL  %-46s want=%s got=%s\n' "$1" "$3" "$2"; fail=$((fail+1)); fi; }
+
+  local repo; repo="$(mktemp -d)"
+  ( cd "$repo" && git init -q . && git config user.email b@b && git config user.name b )
+  mkdir -p "$repo/src" "$repo/tests"; : > "$repo/src/__init__.py"
+  printf 'def grade(n):\n    if n > 50:\n        return "pass"\n    return "fail"\n' > "$repo/src/g.py"
+  printf 'from src.g import grade\ndef test_hi(): assert grade(90) == "pass"\ndef test_lo(): assert grade(10) == "fail"\n' > "$repo/tests/test_g.py"
+  ( cd "$repo" && git add -A >/dev/null && git commit -qm base >/dev/null )
+  local base; base="$(git -C "$repo" rev-parse HEAD)"
+
+  local PY=""
+  for c in "PYTHONPATH=$repo pytest" "PYTHONPATH=$repo python3 -m pytest"; do
+    ( cd "$repo" && eval "$c -q" >/dev/null 2>&1 ) && { PY="$c"; break; }
+  done
+  [ -z "$PY" ] && { echo "  SKIP  no working pytest runner"; rm -rf "$repo"; return 0; }
+  export CLAUDE_PROJECT_DIR="$repo" MT_SRC='^src/' MT_TEST="$PY -q"
+
+  # canaries, both directions — a runner stuck on pass or fail makes every check below vacuous
+  ( cd "$repo" && eval "$MT_TEST" >/dev/null 2>&1 ); chk "canary: green suite passes" "$?" "0"
+  printf 'def test_bad(): assert 0\n' > "$repo/tests/test_canary.py"
+  ( cd "$repo" && eval "$MT_TEST" >/dev/null 2>&1 ); chk "canary: red suite fails" "$?" "1"
+
+  # red baseline must be refused, not measured
+  ( run "$base" >/dev/null 2>&1 ); chk "red baseline -> refuse to measure" "$?" "1"
+  rm -f "$repo/tests/test_canary.py"
+
+  ( run "$base" >/dev/null 2>&1 ); chk "clean tree, no changed lines -> ok" "$?" "0"
+
+  # A boundary the tests do NOT pin: >50 vs >=50 is invisible to grade(90)/grade(10),
+  # so this mutant must SURVIVE and be reported.
+  printf 'def grade(n):\n    if n > 50:\n        return "pass"\n    return "fail"\n\ndef band(n):\n    if n > 80:\n        return "high"\n    return "low"\n' > "$repo/src/g.py"
+  local out; out="$(run "$base" 2>&1)"
+  printf '%s' "$out" | grep -q "SURVIVED"; chk "unpinned boundary -> survivor reported" "$?" "0"
+  printf '%s' "$out" | grep -q "no threshold"; chk "reports without a threshold" "$?" "0"
+  ( run "$base" >/dev/null 2>&1 ); chk "survivors do not block by default" "$?" "0"
+  ( MT_STRICT=1 run "$base" >/dev/null 2>&1 ); chk "MT_STRICT=1 blocks on survivors" "$?" "1"
+
+  # a test that pins the boundary must kill the mutant
+  printf 'from src.g import grade, band\ndef test_hi(): assert grade(90) == "pass"\ndef test_lo(): assert grade(10) == "fail"\ndef test_band_edge(): assert band(80) == "low"\ndef test_band_hi(): assert band(81) == "high"\n' > "$repo/tests/test_g.py"
+  out="$(run "$base" 2>&1)"
+  printf '%s' "$out" | grep -qE 'killed [1-9]'; chk "pinned boundary -> mutant killed" "$?" "0"
+
+  # one mutant per line, never more
+  printf '%s' "$out" | awk '/generated/ {print $2}' | while read -r g; do :; done
+  local gen; gen="$(printf '%s' "$out" | grep -oE 'generated [0-9]+' | head -1 | tr -dc '0-9')"
+  local lns; lns="$(printf '%s' "$out" | grep -oE '^mutate-changed: [0-9]+ changed' | tr -dc '0-9')"
+  [ -n "$gen" ] && [ -n "$lns" ] && [ "$gen" -le "$lns" ] && chk "<=1 mutant per changed line" "0" "0" \
+    || chk "<=1 mutant per changed line" "gen=$gen lns=$lns" "0"
+
+  ( MT_BASE="" run "" >/dev/null 2>&1 ); local rc=$?
+  chk "no baseline resolvable -> refuse" "$([ "$rc" -eq 1 ] && echo 1 || echo "$rc")" "1"
+
+  rm -rf "$repo"
+  unset CLAUDE_PROJECT_DIR MT_SRC MT_TEST MT_STRICT
+  echo
+  if [ "$fail" -eq 0 ]; then echo "MUTATE-CHANGED SELF-TEST PASSED  ($pass checks)"; return 0
+  else echo "MUTATE-CHANGED SELF-TEST FAILED  ($fail of $((pass+fail)))"; return 1; fi
+}
+
+case "${1:-run}" in
+  selftest) selftest ;;
+  run)      shift; run "${1:-}" ;;
+  *)        run "${1:-}" ;;
+esac

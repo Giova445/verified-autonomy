@@ -13,11 +13,12 @@
     { "name": "unit",          "cmd": "echo 'TODO'" },
     { "name": "integration",   "cmd": "echo 'TODO'" },
     { "name": "diff-coverage", "cmd": "echo 'TODO: diff-cover coverage.xml --compare-branch=origin/main --fail-under=80'" },
-    { "name": "cheat-scan",    "cmd": ".claude/hooks/scan-diff-cheats.sh" },
-    { "name": "test-delta",   "cmd": "bin/test-delta" }
+    { "name": "cheat-scan",    "cmd": ".claude/hooks/scan-diff-cheats.sh" }
   ],
 
   "deferred": [
+    "_comment_test_delta: reporting tier ON PURPOSE, not an oversight. Requiring tests does not improve correctness on current models (arXiv:2602.07900: GPT-5.2 writes tests in 0.6% of tasks and resolves 71.8%; Claude Opus 4.5 writes them in 83% and resolves 74.4%; forcing via prompt gives p>0.05). Its value is regression insurance over time, which nobody has measured. Promote it to 'full' deliberately if that bet is one you want to make. See docs/04-gate-ladder.md 2.3.",
+    { "name": "test-delta", "cmd": "bin/test-delta" },
     { "name": "e2e",      "cmd": "echo 'TODO: playwright test'" },
     { "name": "mutation", "cmd": "echo 'TODO: diff-scoped mutation run'" },
     { "name": "security", "cmd": "echo 'TODO: gitleaks + osv-scanner'" }

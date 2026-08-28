@@ -21,6 +21,23 @@
 # wearing a green badge. 20 is still a low bar, deliberately: this gate is a floor against
 # zero, not a coverage target. Raise it per-repo; do not lower it to clear a red run.
 #
+# WHAT THIS GATE DOES NOT DO — read before promoting it to a blocking tier.
+# Requiring tests does NOT improve correctness on current models. arXiv:2602.07900 (Apr 2026)
+# on SWE-bench Verified: GPT-5.2 writes tests in 0.6% of tasks and resolves 71.8%; Claude
+# Opus 4.5 writes them in 83.0% and resolves 74.4% — a 138x difference in test-writing for
+# 2.6pp of resolution, and prompting to force it moves nothing (all McNemar p > 0.05). The
+# duel that motivated this gate agrees: the arm that wrote zero tests scored 20/20 on the
+# held-out suite, same as the arm that wrote sixteen.
+#
+# Worse, this gate counts assertions, so an agent under it maximises assertion count — and
+# agent tests already skew that way. Across 179,732 agent vs 24,941 human test files
+# (arXiv:2607.12068), agents use unknown or non-standard assertion methods at 10.93% vs
+# 1.46%, roughly 8x. The metric points at the behaviour that is already over-represented.
+#
+# What survives is a bet, not a finding: that committed tests protect FUTURE changes. That is
+# regression insurance over time, which the study above does not measure and nobody has. It
+# ships in the reporting tier for that reason. Promote it deliberately or not at all.
+#
 # Deliberately NOT a coverage tool. Coverage needs a runner, a config, and a language
 # toolchain; this needs git. It answers a cruder question — "did you write any test for
 # this?" — which is the one that was going unanswered.

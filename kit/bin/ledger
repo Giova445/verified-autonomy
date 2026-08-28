@@ -1,0 +1,525 @@
+#!/usr/bin/env bash
+# ledger — the durable task ledger. Disk is the source of truth; the context window is a cache.
+#
+# A shell script cannot dispatch an LLM. So this is NOT an orchestrator that spawns agents:
+# it is a STATE MACHINE the driving agent consults. The agent asks "what next?", does the
+# work, and reports back. State survives compaction, crash, and session restart — which is
+# the entire point. The most expensive observed failure in long runs was re-dispatching
+# already-completed tasks after the conversation that remembered them was compacted away.
+#
+# Usage:
+#   ledger init   <task-id> --plan <path>          parse "- [ ]" checkboxes into tasks
+#   ledger next   <task-id>                        print "<n>\t<text>"; exit 1 if none left
+#   ledger start  <task-id> <n>                    mark n in-progress
+#   ledger done   <task-id> <n> --evidence <path>  mark n done; REFUSES without evidence
+#   ledger fail   <task-id> <n> --reason <s>       record a failed attempt
+#   ledger rule   <task-id> --text <s>             append a ruling (ambiguity resolved)
+#   ledger status <task-id>                        human-readable table
+#   ledger json   <task-id>                        raw state
+#   ledger selftest                                full lifecycle in a temp dir
+#
+# Exit: 0 ok | 1 nothing to hand out | 2 refused (bad request / no evidence) | 3 unreadable state
+set -uo pipefail
+
+ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+WORK="$ROOT/.claude/work"
+MAX_ATTEMPTS="${LEDGER_MAX_ATTEMPTS:-3}"
+
+say() { printf '%s\n' "$*" >&2; }
+
+# A flag with no value must REFUSE, not spin. `shift 2` with one argument left fails and
+# does NOT shift, so `while [ $# -gt 0 ]` re-read the same flag forever: `ledger done t 1
+# --evidence` burned 100% CPU until killed. That is trivially reachable from agent-generated
+# shell — `--evidence $EV` with EV unset expands to a bare flag. A hang is not fail-closed:
+# it wedges an autonomous run permanently instead of ending it with a code the caller can read.
+need_value() {
+  [ "$1" -ge 2 ] || { say "flag $2 requires a value."; exit 2; }
+}
+
+# Task ids become filenames. A traversing, empty, or dotted id is a bad request, not a new
+# ledger. Leading '.' is refused wholesale, not just the exact '.'/'..': `ledger init .hidden`
+# used to succeed and write .claude/work/.hidden.json — an invisible file, for a tool whose
+# entire premise is a durable record you can SEE.
+id_path() {
+  local id="${1:-}"
+  case "$id" in
+    ""|.*|*/*|*\\*|-*) say "invalid task-id: '${id}'. Use a plain name like 'auth-refactor'."; exit 2 ;;
+  esac
+  printf '%s/%s.json' "$WORK" "$id"
+}
+
+# ---------------------------------------------------------------- state engine
+# One copy of load/validate/save, shared by every subcommand. Anything that cannot be
+# read is exit 3 — never a silent reinit. Silently reinitializing a corrupt ledger loses
+# the record of what is already done, which is the exact failure this tool exists to stop.
+PRELUDE='
+import datetime, fcntl, hashlib, json, os, sys, tempfile, time
+
+SCHEMA = 1
+STATUSES = ("pending", "in_progress", "done", "blocked")
+
+def say(m): sys.stderr.write(m + "\n")
+def die(code, m): say(m); sys.exit(code)
+def now(): return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+def load(path):
+    if not os.path.exists(path):
+        die(3, "no ledger at " + path + " — run: ledger init <task-id> --plan <path>")
+    # Read BYTES and decode explicitly. open(path, encoding="utf-8").read() raises
+    # UnicodeDecodeError, which is a ValueError, NOT an OSError, so the handler below used to
+    # miss it entirely: one flipped byte made python die with a traceback and status 1, and 1
+    # is the exit code this tool uses for "nothing left to hand out". A driving agent looping
+    # on `ledger next` therefore read a corrupt ledger as a finished plan and certified
+    # unfinished work as done. Same shape as the verifier that emitted all_green:true on an
+    # unreadable config: unreadable state must never produce a keep-going code.
+    # (No apostrophes below this line: PRELUDE is a single-quoted shell string.)
+    try:
+        raw = open(path, "rb").read().decode("utf-8")
+    except (OSError, ValueError) as e:
+        die(3, "cannot read " + path + " (" + str(e) + "). An unreadable ledger is not an "
+               "empty ledger — refusing to report the plan as finished.")
+    try:
+        st = json.loads(raw)
+    except Exception as e:
+        die(3, "ledger " + path + " is CORRUPT (" + str(e) + "). Refusing to reinitialize: "
+               "that would erase the record of completed work. Repair it or move it aside.")
+    if not isinstance(st, dict) or st.get("schema") != SCHEMA:
+        die(3, "ledger " + path + " is not schema v" + str(SCHEMA) + " — refusing to guess its shape.")
+    ts = st.get("tasks")
+    if not isinstance(ts, list) or not ts:
+        die(3, "ledger " + path + " holds no task list. An empty ledger would certify "
+               "\"nothing left to do\", so it is treated as unreadable.")
+    for t in ts:
+        if (not isinstance(t, dict) or not isinstance(t.get("n"), int)
+                or not isinstance(t.get("text"), str) or t.get("status") not in STATUSES
+                or not isinstance(t.get("attempts"), int)):
+            die(3, "ledger " + path + " has a malformed task entry: " + json.dumps(t)[:200])
+    return st
+
+def save(path, st):
+    # temp file + atomic rename: a reader either sees the old state or the new one, never
+    # a half-written file. A truncated ledger reads as corrupt and blocks every later call.
+    st["updated_at"] = now()
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".ledger-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(st, f, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError as cleanup_err:
+            # best-effort cleanup, but never silent: a temp file we cannot remove is a
+            # symptom (full disk, permissions) worth surfacing even though it does not
+            # change the outcome of the operation that failed.
+            print(f"ledger: could not remove temp file {tmp}: {cleanup_err}", file=sys.stderr)
+        raise
+
+def lock(path):
+    # Every mutation is read-modify-write, and atomic rename alone does not make that safe:
+    # it stops a TORN file, not a LOST UPDATE. Measured — 10 concurrent `rule` calls landed
+    # 5 rulings, because each wrote back the state it had read. Fan-out is the whole point
+    # of this tool, so mutations are serialized. Readers need no lock: they always observe
+    # one whole renamed file. The lock releases when the process exits, crash included.
+    d = os.path.dirname(path) or "."
+    if not os.path.isdir(d):
+        die(3, "no ledger directory " + d)
+    lf = open(os.path.join(d, "." + os.path.basename(path) + ".lock"), "a+")
+    for _ in range(200):                      # 200 x 50ms = 10s, then give up loudly
+        try:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return lf
+        except OSError:
+            time.sleep(0.05)
+    die(3, "timed out waiting for the ledger lock on " + path +
+           " — another writer is stuck. Not proceeding: an unserialized write loses updates.")
+
+def evpath(t):
+    ev = t.get("evidence")
+    return ev["path"] if isinstance(ev, dict) else "none"
+
+def pick(st, raw):
+    try:
+        n = int(raw)
+    except ValueError:
+        die(2, "task number must be an integer, got: " + raw)
+    for t in st["tasks"]:
+        if t["n"] == n: return t
+    die(2, "no task #" + str(n) + " — this ledger has 1.." + str(len(st["tasks"])))
+'
+
+py() { local body="$1"; shift; python3 -c "$PRELUDE
+$body" "$@"; }
+
+# ---------------------------------------------------------------- commands
+cmd_init() {
+  local id="${1:-}"; shift 2>/dev/null || true
+  local plan=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --plan) need_value $# --plan; plan="$2"; shift 2 ;;
+      *) say "unknown flag for init: $1"; exit 2 ;;
+    esac
+  done
+  local f; f="$(id_path "$id")" || exit 2
+  [ -n "$plan" ] || { say "init requires --plan <path>"; exit 2; }
+  [ -f "$plan" ] || { say "plan not found: $plan"; exit 2; }
+  mkdir -p "$WORK" || { say "cannot create $WORK"; exit 3; }
+
+  py '
+import re
+path, task_id, plan = sys.argv[1], sys.argv[2], sys.argv[3]
+lk = lock(path)
+if os.path.exists(path):
+    die(2, "ledger already exists: " + path + ". Refusing to overwrite — re-initializing "
+           "after a compaction is how completed work gets re-dispatched. Use `ledger next`, "
+           "or delete the file deliberately if you really mean to start over.")
+try:
+    lines = open(plan, encoding="utf-8", errors="replace").read().splitlines()
+except OSError as e:
+    die(2, "cannot read plan " + plan + ": " + str(e))
+
+box = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\[( |x|X)\]\s+(.*\S)\s*$")
+tasks, skipped = [], 0
+for i, line in enumerate(lines, 1):
+    m = box.match(line)
+    if not m: continue
+    if m.group(1) != " ":
+        skipped += 1          # already checked in the plan: not our work to re-do
+        continue
+    tasks.append({"n": len(tasks) + 1, "text": m.group(2), "plan_line": i,
+                  "status": "pending", "attempts": 0, "evidence": None, "failures": []})
+if not tasks:
+    die(2, "no unchecked \"- [ ]\" checkboxes found in " + plan + " (" + str(skipped) +
+           " already checked). An empty ledger would report \"nothing to do\" and certify "
+           "completion, so this refuses instead.")
+save(path, {"schema": SCHEMA, "task_id": task_id, "plan": plan, "created_at": now(),
+            "updated_at": now(), "tasks": tasks, "rulings": []})
+say("ledger " + task_id + ": " + str(len(tasks)) + " task(s) from " + plan +
+    (" (" + str(skipped) + " already checked, skipped)" if skipped else ""))
+print(path)
+' "$f" "$id" "$plan"
+}
+
+cmd_next() {
+  local f; f="$(id_path "${1:-}")" || exit 2
+  py '
+st = load(sys.argv[1])
+mx = int(sys.argv[2])
+pend = [t for t in st["tasks"] if t["status"] == "pending"]
+wip  = [t for t in st["tasks"] if t["status"] == "in_progress"]
+blk  = [t for t in st["tasks"] if t["status"] == "blocked"]
+if wip:
+    # Not an error: a fan-out may have several in flight. But after a crash this is the
+    # orphan, so name it rather than let it sit invisible.
+    say("note: in progress — " + ", ".join("#%d %s" % (t["n"], t["text"]) for t in wip))
+if not pend:
+    if blk:
+        die(1, "no pending task. " + str(len(blk)) + " task(s) BLOCKED after " + str(mx) +
+               " attempts — escalate with the failure reasons, do not retry silently.")
+    die(1, "no pending task — all " + str(len(st["tasks"])) + " accounted for.")
+t = min(pend, key=lambda x: x["n"])       # lowest n: deterministic across processes
+print("%d\t%s" % (t["n"], t["text"]))
+' "$f" "$MAX_ATTEMPTS"
+}
+
+cmd_start() {
+  local f; f="$(id_path "${1:-}")" || exit 2
+  local n="${2:-}"; [ -n "$n" ] || { say "usage: ledger start <task-id> <n>"; exit 2; }
+  py '
+path = sys.argv[1]
+lk = lock(path)
+st = load(path)
+t = pick(st, sys.argv[2])
+if t["status"] == "done":
+    die(2, "task #%d is already done (evidence: %s). Do not redo it." % (t["n"], evpath(t)))
+t["status"] = "in_progress"
+t["started_at"] = now()
+save(path, st)
+say("#%d in progress: %s" % (t["n"], t["text"]))
+' "$f" "$n"
+}
+
+cmd_done() {
+  local f; f="$(id_path "${1:-}")" || exit 2
+  local n="${2:-}"; shift 2 2>/dev/null || true
+  local ev=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --evidence) need_value $# --evidence; ev="$2"; shift 2 ;;
+      *) say "unknown flag for done: $1"; exit 2 ;;
+    esac
+  done
+  [ -n "$n" ] || { say "usage: ledger done <task-id> <n> --evidence <path>"; exit 2; }
+  # The refusal lives here, before any state is touched: a task marked done with no
+  # evidence is exactly the fabricated-completion failure this project exists to prevent.
+  [ -n "$ev" ] || { say "REFUSED: done requires --evidence <path>. A completion claim with no artifact is not a completion."; exit 2; }
+  [ -f "$ev" ] || { say "REFUSED: evidence file does not exist: $ev"; exit 2; }
+  [ -s "$ev" ] || { say "REFUSED: evidence file is empty: $ev. A zero-byte file is not evidence."; exit 2; }
+
+  py '
+path, ev = sys.argv[1], sys.argv[3]
+lk = lock(path)
+st = load(path)
+t = pick(st, sys.argv[2])
+if t["status"] == "done":
+    say("#%d already done (evidence: %s) — not re-recording." % (t["n"], evpath(t)))
+    sys.exit(0)
+blob = open(ev, "rb").read()
+t["status"] = "done"
+t["done_at"] = now()
+t["evidence"] = {"path": os.path.abspath(ev), "bytes": len(blob),
+                 "sha256": hashlib.sha256(blob).hexdigest()}
+save(path, st)
+left = sum(1 for x in st["tasks"] if x["status"] in ("pending", "in_progress"))
+say("#%d done: %s  [%s]" % (t["n"], t["text"], t["evidence"]["sha256"][:12]))
+say("%d task(s) still open." % left if left else "all tasks closed.")
+' "$f" "$n" "$ev"
+}
+
+cmd_fail() {
+  local f; f="$(id_path "${1:-}")" || exit 2
+  local n="${2:-}"; shift 2 2>/dev/null || true
+  local reason=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --reason) need_value $# --reason; reason="$2"; shift 2 ;;
+      *) say "unknown flag for fail: $1"; exit 2 ;;
+    esac
+  done
+  [ -n "$n" ] || { say "usage: ledger fail <task-id> <n> --reason <text>"; exit 2; }
+  [ -n "$reason" ] || { say "REFUSED: fail requires --reason. An attempt with no recorded reason teaches the next attempt nothing."; exit 2; }
+
+  py '
+path, reason, mx = sys.argv[1], sys.argv[3], int(sys.argv[4])
+lk = lock(path)
+st = load(path)
+t = pick(st, sys.argv[2])
+if t["status"] == "done":
+    die(2, "task #%d is recorded done; refusing to reopen it as a failure." % t["n"])
+t["attempts"] += 1
+t["failures"].append({"at": now(), "attempt": t["attempts"], "reason": reason})
+# Back to pending so it is handed out again — until the budget is spent. A task that keeps
+# coming back forever is an infinite dispatch loop, so it is parked as blocked instead.
+t["status"] = "blocked" if t["attempts"] >= mx else "pending"
+save(path, st)
+if t["status"] == "blocked":
+    say("#%d BLOCKED after %d attempt(s). Escalate — do not retry." % (t["n"], t["attempts"]))
+    for fl in t["failures"]:
+        say("    attempt %d: %s" % (fl["attempt"], fl["reason"]))
+else:
+    say("#%d attempt %d/%d failed: %s" % (t["n"], t["attempts"], mx, reason))
+' "$f" "$n" "$reason" "$MAX_ATTEMPTS"
+}
+
+cmd_rule() {
+  local f; f="$(id_path "${1:-}")" || exit 2
+  shift 2>/dev/null || true
+  local text=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --text) need_value $# --text; text="$2"; shift 2 ;;
+      *) say "unknown flag for rule: $1"; exit 2 ;;
+    esac
+  done
+  [ -n "$text" ] || { say "usage: ledger rule <task-id> --text <ruling>"; exit 2; }
+  py '
+path = sys.argv[1]
+lk = lock(path)
+st = load(path)
+st.setdefault("rulings", []).append({"at": now(), "text": sys.argv[2]})
+save(path, st)
+say("ruling %d recorded." % len(st["rulings"]))
+' "$f" "$text"
+}
+
+cmd_status() {
+  local f; f="$(id_path "${1:-}")" || exit 2
+  py '
+st = load(sys.argv[1])
+print("ledger: %s   plan: %s" % (st["task_id"], st.get("plan", "?")))
+print("  %-3s %-12s %-4s %s" % ("#", "status", "att", "task"))
+for t in st["tasks"]:
+    tail = ""
+    ev = t.get("evidence")
+    if isinstance(ev, dict): tail = "   evidence: %s" % ev["path"]
+    elif t["failures"]:      tail = "   last: %s" % t["failures"][-1]["reason"]
+    print("  %-3d %-12s %-4d %s%s" % (t["n"], t["status"], t["attempts"], t["text"], tail))
+c = {}
+for t in st["tasks"]: c[t["status"]] = c.get(t["status"], 0) + 1
+print("  %d task(s): %s" % (len(st["tasks"]),
+      ", ".join("%d %s" % (v, k) for k, v in sorted(c.items())) or "none"))
+for r in st.get("rulings", []):
+    print("  ruling: %s" % r["text"])
+' "$f"
+}
+
+cmd_json() {
+  local f; f="$(id_path "${1:-}")" || exit 2
+  py 'print(json.dumps(load(sys.argv[1]), indent=2))' "$f"
+}
+
+# ---------------------------------------------------------------- selftest
+selftest() {
+  local self; self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  local tmp; tmp="$(mktemp -d)"
+  local pass=0 fail=0
+  chk(){ if [ "$2" = "$3" ]; then printf '  ok    %-48s (%s)\n' "$1" "$3"; pass=$((pass+1));
+         else printf '  FAIL  %-48s want=%s got=%s\n' "$1" "$3" "$2"; fail=$((fail+1)); fi; }
+  L(){ CLAUDE_PROJECT_DIR="$tmp" bash "$self" "$@"; }
+
+  echo "ledger self-test: $tmp"
+  ( cd "$tmp" && git init -q . )
+  cat > "$tmp/plan.md" <<'PLAN'
+# Plan
+- [x] already finished before we started
+- [ ] parse the token
+- [ ] wire the middleware
+PLAN
+  printf 'gate output\n' > "$tmp/ev.txt"
+  : > "$tmp/empty.txt"
+
+  L init t1 --plan "$tmp/plan.md" >/dev/null 2>&1
+  chk "init exits 0" "$?" "0"
+  n="$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1]))["tasks"]))' "$tmp/.claude/work/t1.json" 2>/dev/null || echo err)"
+  chk "init parses only unchecked boxes" "$n" "2"
+  L init t1 --plan "$tmp/plan.md" >/dev/null 2>&1
+  chk "init refuses to clobber a live ledger" "$?" "2"
+  L init t2 --plan /nope.md >/dev/null 2>&1
+  chk "init refuses a missing plan" "$?" "2"
+  printf '# no boxes here\n' > "$tmp/flat.md"
+  L init t3 --plan "$tmp/flat.md" >/dev/null 2>&1
+  chk "init refuses a plan with zero tasks" "$?" "2"
+  L next nosuch >/dev/null 2>&1
+  chk "unknown task-id -> unreadable (3), not a new ledger" "$?" "3"
+  L next ../escape >/dev/null 2>&1
+  chk "traversing task-id refused" "$?" "2"
+
+  chk "next hands out #1" "$(L next t1 2>/dev/null | cut -f1)" "1"
+  L start t1 1 >/dev/null 2>&1
+  chk "start exits 0" "$?" "0"
+  chk "next skips the in-progress task" "$(L next t1 2>/dev/null | cut -f1)" "2"
+  L fail t1 1 --reason "typecheck exploded" >/dev/null 2>&1
+  chk "fail exits 0" "$?" "0"
+  a="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["tasks"][0]["attempts"])' "$tmp/.claude/work/t1.json")"
+  chk "fail increments the attempt counter" "$a" "1"
+  chk "failed task is handed out again" "$(L next t1 2>/dev/null | cut -f1)" "1"
+  L fail t1 1 --reason "" >/dev/null 2>&1
+  chk "fail without a reason refused" "$?" "2"
+
+  L done t1 1 >/dev/null 2>&1
+  chk "done without --evidence REFUSED" "$?" "2"
+  L done t1 1 --evidence "$tmp/ghost.txt" >/dev/null 2>&1
+  chk "done with a missing evidence file REFUSED" "$?" "2"
+  L done t1 1 --evidence "$tmp/empty.txt" >/dev/null 2>&1
+  chk "done with a zero-byte evidence file REFUSED" "$?" "2"
+  s="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["tasks"][0]["status"])' "$tmp/.claude/work/t1.json")"
+  chk "refused done left the task untouched" "$s" "pending"
+
+  L done t1 1 --evidence "$tmp/ev.txt" >/dev/null 2>&1
+  chk "done with real evidence exits 0" "$?" "0"
+  h="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["tasks"][0]["evidence"]["sha256"][:8])' "$tmp/.claude/work/t1.json")"
+  chk "evidence hashed into the ledger" "$h" "$(shasum -a 256 "$tmp/ev.txt" 2>/dev/null | cut -c1-8)"
+  chk "next skips the done task" "$(L next t1 2>/dev/null | cut -f1)" "2"
+
+  L rule t1 --text "treated null email as absent" >/dev/null 2>&1
+  chk "rule exits 0" "$?" "0"
+  L status t1 2>/dev/null | grep -q "treated null email as absent" && r=yes || r=no
+  chk "status shows the ruling" "$r" "yes"
+
+  L done t1 2 --evidence "$tmp/ev.txt" >/dev/null 2>&1
+  chk "second task closes" "$?" "0"
+  L next t1 >/dev/null 2>&1
+  chk "exhausted ledger -> exit 1" "$?" "1"
+
+  # escalation: a task that keeps failing must stop being handed out forever
+  L init t4 --plan "$tmp/plan.md" >/dev/null 2>&1
+  for i in 1 2 3; do L fail t4 1 --reason "attempt $i" >/dev/null 2>&1; done
+  s="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["tasks"][0]["status"])' "$tmp/.claude/work/t4.json")"
+  chk "task blocked after LEDGER_MAX_ATTEMPTS" "$s" "blocked"
+  chk "next never returns a blocked task" "$(L next t4 2>/dev/null | cut -f1)" "2"
+
+  # concurrency: atomic rename stops a torn file, the lock stops a lost update.
+  # Without lock() this landed 5 of 10 — each writer saved the state it had already read.
+  L init t7 --plan "$tmp/plan.md" >/dev/null 2>&1
+  for i in 1 2 3 4 5 6 7 8 9 10; do L rule t7 --text "r$i" >/dev/null 2>&1 & done; wait
+  r="$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1]))["rulings"]))' "$tmp/.claude/work/t7.json" 2>/dev/null || echo err)"
+  chk "10 concurrent writers -> 10 rulings, none lost" "$r" "10"
+
+  # fail closed on damaged state — and do NOT quietly start over
+  printf '{"schema":1,"tasks":[' > "$tmp/.claude/work/t5.json"
+  L next t5 >/dev/null 2>&1
+  chk "truncated ledger -> exit 3" "$?" "3"
+  L status t5 >/dev/null 2>&1
+  chk "status on a corrupt ledger -> exit 3" "$?" "3"
+  b="$(wc -c < "$tmp/.claude/work/t5.json" | tr -d ' ')"
+  chk "corrupt ledger was not silently reinitialized" "$b" "21"
+  printf '{"schema":99,"tasks":[{"n":1,"text":"x","status":"pending","attempts":0}]}' > "$tmp/.claude/work/t6.json"
+  L next t6 >/dev/null 2>&1
+  chk "unknown schema version -> exit 3" "$?" "3"
+
+  # REGRESSION: a single non-UTF-8 byte used to raise UnicodeDecodeError past an `except
+  # OSError`, killing python with status 1 — this tool's code for "nothing left to hand out".
+  # An agent looping `while ledger next` read that as "plan complete" and stopped, certifying
+  # unfinished work. Truncated JSON was already caught; a bad BYTE was not.
+  L init t8 --plan "$tmp/plan.md" >/dev/null 2>&1
+  python3 -c 'import sys
+b=bytearray(open(sys.argv[1],"rb").read()); b[5]=0xff; open(sys.argv[1],"wb").write(bytes(b))' \
+    "$tmp/.claude/work/t8.json"
+  L next t8 >/dev/null 2>&1
+  chk "non-UTF-8 byte -> exit 3, never 1" "$?" "3"
+  L status t8 >/dev/null 2>&1
+  chk "  ... status agrees it is unreadable" "$?" "3"
+  L json t8 >/dev/null 2>&1
+  chk "  ... json agrees it is unreadable" "$?" "3"
+
+  # REGRESSION: `shift 2` with one argument left FAILS and does not shift, so the flag loop
+  # re-read the same flag forever at 100% CPU. `--evidence $EV` with EV empty is all it took.
+  # A hang is not fail-closed: it wedges the run instead of ending it with a readable code.
+  for probe in "init t99 --plan" "done t1 1 --evidence" "fail t1 1 --reason" "rule t1 --text"; do
+    ( CLAUDE_PROJECT_DIR="$tmp" bash "$self" $probe >/dev/null 2>&1 ) &
+    bg=$!
+    for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$bg" 2>/dev/null || break; sleep 0.2; done
+    if kill -0 "$bg" 2>/dev/null; then kill -9 "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; rc=HUNG
+    else wait "$bg"; rc=$?; fi
+    chk "valueless flag refuses: $probe" "$rc" "2"
+  done
+
+  # REGRESSION: the case pattern matched only the exact "." and "..", so `.hidden` was
+  # accepted and wrote an invisible .claude/work/.hidden.json — for a tool whose premise
+  # is a durable record you can see.
+  L init .hidden --plan "$tmp/plan.md" >/dev/null 2>&1
+  chk "dotted task-id refused" "$?" "2"
+  ls -a "$tmp/.claude/work/" | grep -q '^\.hidden\.json$' && r=yes || r=no
+  chk "  ... and no dotfile ledger was created" "$r" "no"
+  ls "$tmp/.claude/work/" | grep -q '\.tmp$' && r=yes || r=no
+  chk "no partial .tmp files left behind" "$r" "no"
+
+  rm -rf "$tmp"
+  echo
+  if [ "$fail" -eq 0 ]; then echo "LEDGER SELF-TEST PASSED  ($pass checks)"; exit 0
+  else echo "LEDGER SELF-TEST FAILED  ($fail of $((pass+fail)) checks)"; exit 1; fi
+}
+
+# ---------------------------------------------------------------- entrypoint
+cmd="${1:-}"; shift 2>/dev/null || true
+case "$cmd" in
+  init)     cmd_init   "$@" ;;
+  next)     cmd_next   "$@" ;;
+  start)    cmd_start  "$@" ;;
+  done)     cmd_done   "$@" ;;
+  fail)     cmd_fail   "$@" ;;
+  rule)     cmd_rule   "$@" ;;
+  status)   cmd_status "$@" ;;
+  json)     cmd_json   "$@" ;;
+  selftest) selftest ;;
+  *) say "usage: ledger {init|next|start|done|fail|rule|status|json|selftest}"
+     say "  ledger init <id> --plan <path> | next <id> | start <id> <n>"
+     say "  ledger done <id> <n> --evidence <path> | fail <id> <n> --reason <s>"
+     say "  ledger rule <id> --text <s> | status <id> | json <id>"
+     exit 2 ;;
+esac

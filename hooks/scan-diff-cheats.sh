@@ -11,6 +11,16 @@ git rev-parse --verify "$BASE" >/dev/null 2>&1 || BASE="$(git rev-parse --verify
 DIFF="$(git diff "$BASE"...HEAD 2>/dev/null || git diff "$BASE" 2>/dev/null)"
 [ -z "$DIFF" ] && { echo "scan-diff-cheats: empty diff vs $BASE"; exit 0; }
 
+# Exclude files that legitimately contain cheat patterns AS DATA: the detectors themselves,
+# benchmark fixtures that plant cheats on purpose, and prose that quotes them. Without this
+# the scanner reads its own regex literals and self-flags — observed live: "net +7 skipped
+# tests" on a change whose tracked diff contained zero skip additions.
+SELF_RE='(hooks/scan-diff-cheats\.sh|hooks/deny-dangerous\.sh|benchmark/(scenarios|pressure)/|/selftest\.sh|\.md$)'
+DIFF="$(printf '%s' "$DIFF" | awk -v re="$SELF_RE" '
+  /^diff --git/ { skip = ($0 ~ re) }
+  !skip { print }
+')"
+
 ADDED="$(printf '%s' "$DIFF" | grep '^+' | grep -v '^+++' || true)"
 REMOVED="$(printf '%s' "$DIFF" | grep '^-' | grep -v '^---' || true)"
 FLAGS=0

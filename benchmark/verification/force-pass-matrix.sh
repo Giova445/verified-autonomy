@@ -146,11 +146,62 @@ else
 fi
 rm -rf "$r" "$V"
 
-# 6. LD_PRELOAD / DYLD_INSERT_LIBRARIES
-case "$(uname -s)" in
-  Darwin) skipm "LD_PRELOAD equivalent" "macOS SIP strips DYLD_INSERT_LIBRARIES for system binaries — UNTESTED, not proven safe" ;;
-  *)      skipm "LD_PRELOAD" "needs a compiled .so — UNTESTED, not proven safe" ;;
-esac
+# 6. LD_PRELOAD / DYLD_INSERT_LIBRARIES — dynamic-linker force-pass.
+#
+# Previously skipped with "macOS SIP strips DYLD_INSERT_LIBRARIES". That was WRONG as
+# stated: SIP strips it for SYSTEM binaries. A Homebrew/venv python is not one, so the
+# attack is fully testable here and the skip was hiding an untested surface behind a
+# plausible-sounding excuse.
+#
+# The interposer forces every exit() to 0. It never touches the source tree or any config,
+# so no allowlist or denylist can see it. Verified live: pytest prints "1 failed" and exits
+# 0 — the honest-log / lying-machine-channel pattern.
+r="$(newrepo)"
+DY="$(mktemp -d)"
+cat > "$DY/force.c" <<'ATK'
+#include <stdlib.h>
+#include <unistd.h>
+typedef struct { const void *replacement; const void *replacee; } interpose_t;
+static void my_exit(int code) { _exit(0); }
+__attribute__((used)) static const interpose_t interposers[]
+  __attribute__((section("__DATA,__interpose"))) = { { (const void *)my_exit, (const void *)exit } };
+ATK
+INJ=""; LIBVAR=""
+if [ "$(uname -s)" = Darwin ] && command -v cc >/dev/null 2>&1 \
+   && cc -dynamiclib -o "$DY/force.dylib" "$DY/force.c" >/dev/null 2>&1; then
+  INJ="$DY/force.dylib"; LIBVAR=DYLD_INSERT_LIBRARIES
+elif command -v cc >/dev/null 2>&1 && cc -shared -fPIC -o "$DY/force.so" "$DY/force.c" >/dev/null 2>&1; then
+  INJ="$DY/force.so"; LIBVAR=LD_PRELOAD
+fi
+# The runner must be a NON-system interpreter or the loader strips the variable.
+VPY=""
+if [ -n "$INJ" ] && python3 -m venv "$DY/venv" >/dev/null 2>&1 \
+   && "$DY/venv/bin/pip" install -q pytest >/dev/null 2>&1; then VPY="$DY/venv/bin/pytest"; fi
+if [ -n "$VPY" ]; then
+  mkdir -p "$r/tests"
+  printf 'from src.m import add\ndef test_add(): assert add(1, 2) == 3\n' > "$r/tests/test_h.py"
+  # Prove the attack is live before concluding anything from the gate refusing.
+  ( cd "$r" && env "$LIBVAR=$INJ" PYTHONPATH="$r" "$VPY" -q >/dev/null 2>&1 )
+  if [ $? -eq 0 ]; then
+    rm -f "$r/tests/test_h.py"
+    rc="$( export CLAUDE_PROJECT_DIR="$r" HOLDOUT_DIR="$HOLD" SRC_PATHS=src
+           export VISIBLE_CMD="$LIBVAR=$INJ PYTHONPATH=$r $VPY -q"
+           export HOLDOUT_CMD="$LIBVAR=$INJ PYTHONPATH=$r $VPY -q"
+           bash "$HOLDOUT" run >/dev/null 2>&1; echo $? )"
+    res "$LIBVAR exit-code forgery" "$rc" "1"
+    printf 'def add(a, b):\n    return a + b\n' > "$r/src/m.py"
+    rc="$( export CLAUDE_PROJECT_DIR="$r" HOLDOUT_DIR="$HOLD" SRC_PATHS=src
+           export VISIBLE_CMD="$LIBVAR=$INJ PYTHONPATH=$r $VPY -q"
+           export HOLDOUT_CMD="$LIBVAR=$INJ PYTHONPATH=$r $VPY -q"
+           bash "$HOLDOUT" run >/dev/null 2>&1; echo $? )"
+    res "  recovery: injection + correct impl" "$rc" "0"
+  else
+    skipm "$LIBVAR exit-code forgery" "attack did not fire — nothing to test"
+  fi
+else
+  skipm "linker injection" "no compiler or venv — UNTESTED, not proven safe"
+fi
+rm -rf "$r" "$DY"
 
 rm -rf "$HOLD"
 echo

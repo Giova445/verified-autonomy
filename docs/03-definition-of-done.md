@@ -7,6 +7,15 @@ and the catalog of ways an agent will try to fake it.
 
 ## 1. The rule
 
+> **The bundle is SELF-REPORTED, not a receipt.** `.claude/evidence/latest.json` carries
+> `"trust": "self-reported by the process under test; not a receipt"` and
+> `"verified_by": "producer"` for a reason: it is written by the agent's own process, on the
+> agent's own machine, as the agent's own user. It is a hint for a human or a downstream
+> checker. Signing it would add ceremony and zero security, because the key would be readable
+> by the same process that writes the file. A receipt becomes unforgeable only when the
+> deciding credential lives where the agent holds none — an ephemeral CI runner, a separate
+> uid, or hardware. Relocation, not cryptography. See `docs/15-premise-audit.md`.
+
 > **A completion claim is invalid unless every gate in the evidence bundle has
 > `exit_code: 0`, the assumption register has zero unresolved entries, and no
 > cheat-detector flag is raised.**

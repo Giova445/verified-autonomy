@@ -1,0 +1,15 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "denyWrite": [
+        "**/.claude/gates.json",
+        "**/.claude/hooks/**",
+        "**/bin/verify",
+        "**/.github/workflows/**"
+      ]
+    }
+  }
+}

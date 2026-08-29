@@ -109,6 +109,48 @@ labeled data, (c) would the change be correct with no corpus in existence?
 
 No change was made whose only justification was that a number went up.
 
+
+## Extending to all 15 projects — attempted, and not achievable with the public artifact
+
+The obvious next step was to pull the other 13 Java systems. **It cannot be done without
+substituting my own label, which would defeat the purpose.** Evidence, per project, from
+`RAW.zip`:
+
+| project | states | `@Ignore` in the corpus's own parsed annotations | `isActiveTestDisabled` set |
+|---|---|---|---|
+| camel | 29,857 | **954** | **0** |
+| hadoop | 20,637 | 288 | **0** |
+| flink | 20,165 | 228 | **0** |
+| hbase | 8,806 | 378 | **0** |
+| orientdb | 9,050 | — | 282 |
+| incubator-pinot | 7,463 | — | 254 |
+| *(9 others)* | — | — | **0** |
+
+The disabled flag is populated for **2 of 15** projects. It is not a general "is disabled"
+label in the public artifact. The repo's README advertises an `RQ_data` folder holding the
+hand-labeled subset; only `RAW.zip` shipped, and the remote has a single branch and no tags.
+
+So the third-party-labeled positive set is capped at **112**, and no amount of extraction
+changes that.
+
+## `@Ignore` capability check — 10 projects, and the label is MINE
+
+Since the corpus flag cannot answer "does the detector see `@Ignore`?", this does — on real
+code, with the limitation stated up front.
+
+Positives are transitions where `@Ignore` enters the corpus's own parsed `activeAnnotations`.
+The parse is theirs; the judgment *"`@Ignore` added ⇒ disabled"* is **mine**. **This is a
+capability check, not third-party recall**, and it does not escape circularity the way the
+112 do. 200 positives + 200 negatives, 10 projects, seed 20260828.
+
+| detector | recall | 95% CI | specificity | 95% CI |
+|---|---|---|---|---|
+| **pinned pre-fix `aa6f400e12de`** | **0 / 200 = 0.0%** | **0.0% – 1.9%** | 200/200 = 100% | 98.1% – 100% |
+| current | 199 / 200 = 99.5% | 97.2% – 99.9% | 198/200 = 99.0% | 96.4% – 99.7% |
+
+**JUnit 4 `@Ignore` is now recognized**, and the pinned detector was blind to all 200. The
+current specificity cost is 2 false positives on my own labels.
+
 ## What this still does not measure
 
 - **`@Ignore` coverage.** Zero of the 112 positives use it. Unmeasured.

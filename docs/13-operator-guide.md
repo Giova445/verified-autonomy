@@ -183,7 +183,7 @@ because both read:
 |---|---|
 | `AGENTS.md` | The contract both obey |
 | `.claude/work/<id>.json` | Task state, blast radius, file scope, attempts |
-| `.claude/evidence/latest.json` | What ran, exit codes, output hashes |
+| `.claude/evidence/latest.json` | What ran, exit codes, output hashes. **Self-reported** — written by the process under test, on its own machine. A hint, not a receipt (`"verified_by": "producer"`). |
 | `.claude/evidence/assumptions.jsonl` | Open questions — non-empty blocks completion |
 | The PR itself | Labels, attempt counters, risk tier |
 

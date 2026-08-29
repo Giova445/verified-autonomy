@@ -1,0 +1,11 @@
+name: release-gate-probe
+on:
+  push:
+    branches: [gate/test-delta]
+    paths: ['.github/workflows/release-gate-probe.yml']
+jobs:
+  gated:
+    runs-on: ubuntu-latest
+    environment: release          # requires approval; prevent_self_review is on
+    steps:
+      - run: echo "this step must not run until a human approves"

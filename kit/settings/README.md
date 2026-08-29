@@ -69,3 +69,26 @@ JSON
 **This is the only scope where "no other level, including CLI arguments, can override" holds.**
 It requires your password, so it is not something an agent can or should do for you. After
 running it, re-run the probe in `benchmark/verification/` to confirm the CLI now refuses.
+
+## Release gate — GitHub Environments, applied and verified
+
+Created on `Giova445/verified-autonomy` and confirmed by reading the settings back, not by
+trusting the write:
+
+```json
+{"can_admins_bypass": false, "prevent_self_review": true, "reviewers": ["Giova445"]}
+```
+
+`can_admins_bypass` defaults to **true** — the API returned it as true on creation, and it had
+to be set false explicitly in a second call. A protection rule an admin can wave through is
+not a protection rule, and this default silently undoes the whole control.
+
+**The honest limitation, which no setting fixes:** the repo has **one** collaborator, who is
+also the only person who could deploy. With `prevent_self_review: true` that is structurally
+unsatisfiable — the environment cannot be approved by anyone. This is the correct
+configuration and it is inert until a second human exists. A two-person rule needs two people;
+that is headcount, not tooling, and pretending otherwise would be the same self-authorization
+hole as an agent writing its own `Guardrail-Change:` trailer.
+
+No workflow currently requires this environment, so nothing is broken by it existing. Wire a
+release job to `environment: release` when there is a second reviewer.

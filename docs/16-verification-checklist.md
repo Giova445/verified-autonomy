@@ -285,3 +285,65 @@ realistic case, since `.env` and `config.json` are where credentials actually si
 **Both gates' controls failed on the first attempt.** That is now three times in this project
 that a positive control caught a test which would otherwise have reported a clean result it
 had not earned.
+
+## H2 — egress control — **VERIFIED**
+
+`benchmark/verification/egress-control.sh`. The **permission layer is held constant** —
+`curl` is explicitly allowed in every case — so the only thing varying is network policy.
+Without that separation a "blocked" result could just be a tool-approval prompt, and the gate
+would be measuring the wrong layer.
+
+| case | result |
+|---|---|
+| **CONTROL** — no network policy | **reachable** (proves egress exists at all) |
+| H2a — allowlist excludes target | blocked |
+| H2b — allowlist includes target | reachable |
+| H2c — arbitrary domain, sandbox on | blocked |
+
+H2b is the row that matters: without it, "blocked everywhere" would be indistinguishable from
+a sandbox that simply kills all traffic. Egress is **default-deny with an allowlist**, not a
+blocklist.
+
+### Two harness bugs, both worth recording
+
+**1. The gate first measured the trust layer, not the network layer.** A fresh temp workspace
+is untrusted, and an untrusted workspace has its `permissions.allow` entries *silently
+ignored*: `"Ignoring 1 permissions.allow entry from .claude/settings.json: this workspace has
+not been trusted."` The control failed, correctly. Each probe now trusts its own throwaway
+workspace and removes the entry afterwards.
+
+That silent-ignore is itself a **fail-safe worth noting under gate B1**: a repository cannot
+grant itself tool permissions merely by shipping a `.claude/settings.json`.
+
+**2. A pass row contradicted its own label — the closest call in this project.** The first
+version echoed its verdict and the caller used `"$(probe ...)"`. That captured more than the
+verdict: `res()` received **seven** arguments instead of three, six of them the word
+`blocked`, and the surplus shifted the expected value into `$3` so a *mismatched* row printed
+`ok`. The output read:
+
+```
+ok    H2b: allowlist includes target -> reachable      (blocked)
+```
+
+A pass whose displayed value contradicts its own label. It reported **4 passed, 0 failed**
+while one row was wrong, and an isolated re-run of H2b returned `200` — reachable — proving
+the row was false. The verdict now goes to a file, never sharing stdout with anything a
+function inside `$( )` might print.
+
+**The lesson generalises beyond this gate:** a green summary is not evidence that each row is
+internally consistent. Read the rows.
+
+### Harness hygiene
+
+Trust entries are written into the user's `~/.claude.json`, so cleanup is on an `EXIT INT
+TERM HUP` trap. An interrupted debug run had already left one behind — a test harness that
+mutates user config without a trap is a cleanup bug waiting to happen. The stray entry was
+removed.
+
+## H1 — retrieval vs derivation — **NOT BUILT**
+
+Egress denial is the only check that separates a solution the agent *derived* from one it
+*retrieved*, and it is not built. The design is a two-run comparison — full egress, then
+egress denied to everything not required by the task — where a material drop is itself the
+signal. H2 above supplies the mechanism; the missing part is a task whose solution has a
+known web presence, since a task I authored would show no drop and prove nothing.

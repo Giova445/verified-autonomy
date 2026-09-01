@@ -480,14 +480,43 @@ b=bytearray(open(sys.argv[1],"rb").read()); b[5]=0xff; open(sys.argv[1],"wb").wr
   # REGRESSION: `shift 2` with one argument left FAILS and does not shift, so the flag loop
   # re-read the same flag forever at 100% CPU. `--evidence $EV` with EV empty is all it took.
   # A hang is not fail-closed: it wedges the run instead of ending it with a readable code.
+  # THE KILLER USED TO ORPHAN WHAT IT KILLED. The probe ran as `( ... ) &`, so `$!` was the
+  # SUBSHELL, not the bash process inside it. `kill -9 "$bg"` killed the wrapper and the
+  # spinning grandchild reparented to PID 1 and kept burning a core. Five such orphans were
+  # found on a developer machine at ~99% CPU each, 3 days 11 hours old, load average 9.
+  # The spin itself was fixed earlier (need_value, dcd8cd3); these predated that fix and
+  # nothing ever reaped them, because the reaper was aimed at the wrong process.
+  #
+  # A test that detects a hang and then LEAKS it is worse than no test: it converts a
+  # reproducible failure into a silent, permanent resource drain on someone else's machine.
   for probe in "init t99 --plan" "done t1 1 --evidence" "fail t1 1 --reason" "rule t1 --text"; do
-    ( CLAUDE_PROJECT_DIR="$tmp" bash "$self" $probe >/dev/null 2>&1 ) &
+    # No subshell wrapper: $! must be the process that can actually hang.
+    CLAUDE_PROJECT_DIR="$tmp" bash "$self" $probe >/dev/null 2>&1 &
     bg=$!
     for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$bg" 2>/dev/null || break; sleep 0.2; done
-    if kill -0 "$bg" 2>/dev/null; then kill -9 "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; rc=HUNG
+    if kill -0 "$bg" 2>/dev/null; then
+      # descendants first, then the process itself — killing the parent first orphans them
+      pkill -9 -P "$bg" 2>/dev/null || true
+      kill -9 "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; rc=HUNG
     else wait "$bg"; rc=$?; fi
     chk "valueless flag refuses: $probe" "$rc" "2"
   done
+
+  # REGRESSION for the reaper itself. Induce a REAL hang and confirm nothing survives it.
+  # Without this, the orphan bug is invisible again the moment a new hang appears.
+  cat > "$tmp/hang.sh" <<'HANG'
+#!/usr/bin/env bash
+while :; do :; done
+HANG
+  chmod +x "$tmp/hang.sh"
+  bash "$tmp/hang.sh" >/dev/null 2>&1 &
+  hb=$!
+  sleep 0.3
+  pkill -9 -P "$hb" 2>/dev/null || true
+  kill -9 "$hb" 2>/dev/null; wait "$hb" 2>/dev/null
+  sleep 0.3
+  pgrep -f "$tmp/hang.sh" >/dev/null 2>&1 && r=leaked || r=reaped
+  chk "hung probe leaves no orphan behind" "$r" "reaped"
 
   # REGRESSION: the case pattern matched only the exact "." and "..", so `.hidden` was
   # accepted and wrote an invisible .claude/work/.hidden.json — for a tool whose premise

@@ -227,7 +227,7 @@
     },
     {
       "gate": "I1b backgrounded-runaway cap",
-      "status": "VERIFIED",
+      "status": "PARTIAL",
       "verified_on": "2026-08-29",
       "subsystems": [
         "session"
@@ -235,7 +235,7 @@
       "pinned_versions": {
         "claude_code": "2.1.250"
       },
-      "note": "bounded by agent-session lifetime, not time/CPU/memory"
+      "note": "session lifetime bounds work started via the harness's OWN background mechanism. It does NOT bound a process double-forked away from it: five orphaned ledger probes (PPID 1) ran at ~99% CPU for 3d11h on a developer machine, load avg 9. Counterexample found in production, not in test."
     },
     {
       "gate": "I2 cost visibility",

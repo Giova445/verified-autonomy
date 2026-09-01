@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gate: I1b
 # doublefork-cap.sh — I1b, the half that production found and the gate missed.
 #
 # I1b measured the harness's OWN background path and concluded "backgrounded work is capped

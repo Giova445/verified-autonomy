@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gate: I1b
 # background-cap.sh — I1's open scope limit: is a process the agent BACKGROUNDS capped?
 #
 # I1 attempt 2 was vacuous precisely because the agent backgrounded a 700s busy loop and

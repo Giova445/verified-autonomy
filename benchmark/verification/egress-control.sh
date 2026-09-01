@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gate: H2
 # egress-control.sh — gate H2: is network egress default-deny with an allowlist, or
 # permit-by-default with a blocklist?
 #

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gate: I1
 # subagent-depth.sh — gate I1 via recursive subagent spawning.
 #
 # Chosen because the agent cannot decline, background, or reason its way out of it the way

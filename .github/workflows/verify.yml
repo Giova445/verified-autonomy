@@ -1,0 +1,59 @@
+name: verify
+
+# The repo shipped no CI at all until this file. Everything below could already be run by
+# hand, which is exactly the problem: a gate suite whose own gates are only ever run by the
+# person who wrote them is an honour system.
+#
+# ORDER IS DELIBERATE. Every self-test runs BEFORE the check it belongs to. A validator that
+# has silently stopped discriminating passes a clean tree exactly like a working one, so
+# running the checks first and the controls afterwards (or not at all) would let this
+# workflow report green on a suite that had quietly stopped testing anything.
+
+on:
+  push:
+    branches: [main, "gate/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read          # no write scope: CI must not be able to edit the guardrails it runs
+
+jobs:
+  structure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Structural validators — CONTROLS FIRST
+        run: python3 benchmark/structure/validate.py --self-test
+
+      - name: Structural validators
+        run: python3 benchmark/structure/validate.py
+
+      - name: Skill trigger/routing eval
+        # Aborts on its own if any of its four rankers stops discriminating, so a green
+        # here means the controls held, not merely that no misroute was printed.
+        run: python3 benchmark/skills/trigger-eval.py
+
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Enforcement wiring
+        run: bash selftest.sh
+
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Labeled-corpus benchmark
+        run: bash benchmark/gates/bench.sh

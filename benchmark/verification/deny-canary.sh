@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gate: shared
 # Denies any Bash command containing the sentinel, and LOGS every invocation.
 # The log is the ground truth. A model's account of whether it was blocked is a self-report,
 # and self-reports are the thing this whole project exists not to trust.

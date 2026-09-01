@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gate: H1
 # egress-delta.sh — gate H1: is the answer DERIVED or RETRIEVED?
 #
 # Run the same task with full egress and with egress denied; a material drop on the denied

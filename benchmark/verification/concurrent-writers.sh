@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gate: B3
 # concurrent-writers.sh — do concurrent writers on shared git state lose work SILENTLY?
 #
 # claude-code#55724 reports 8 of 13 concurrent worktree agents failing with PERMANENT work

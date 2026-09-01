@@ -140,7 +140,7 @@ when a gate is red and the retry budget is running down.
 | 13 | Answer retrieved rather than derived | Seal git history beyond HEAD and restrict egress during the solve phase; log outbound calls |
 | 14 | Hallucinated dependency added | Resolve every new package against the real registry before install; typosquat-distance check against known packages |
 
-Implementation lives in [`kit/hooks/scan-diff-cheats.sh`](kit/hooks/scan-diff-cheats.sh).
+Implementation lives in [`kit/hooks/scan-diff-cheats.sh`](../kit/hooks/scan-diff-cheats.sh).
 
 ### The one that deserves special handling
 

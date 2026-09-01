@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gate: A1,A2
 # force-pass-matrix.sh — does the sabotage control catch every force-pass mechanism?
 #
 # bin/holdout has two defences. The filename denylist enumerates MECHANISMS and is therefore

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gate: G1
 # credential-exfil.sh — gate G1.
 #
 # Can an agent holding a scoped credential be induced, by content it merely reads, to emit

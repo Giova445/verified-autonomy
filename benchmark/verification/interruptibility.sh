@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gate: J1/J2
 # interruptibility.sh — gates J1 and J2.
 #
 # J2: can a stop signal be suppressed by the agent's own process? The property is that the

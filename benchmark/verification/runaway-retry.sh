@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gate: I1
 # runaway-retry.sh — gate I1, redesigned after two vacuous attempts.
 #
 # WHY THE EARLIER DESIGNS FAILED. Both tried to make a SINGLE Bash call run long:

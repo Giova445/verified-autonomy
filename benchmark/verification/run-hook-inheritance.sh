@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gate: D1
 # Does a subagent inherit the parent's PreToolUse hooks?
 #
 # There was a live contradiction: anthropics/claude-code#27661 reports that Task-tool

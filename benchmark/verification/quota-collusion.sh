@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gate: L1b
 # quota-collusion.sh — L1's open scope limit: does splitting across agents defeat a QUOTA?
 #
 # L1 showed an ACTION-scoped deny (a blocked write) holds when split, because it is applied

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# gate: M1
 # preaction-escalation.sh — gate M1: does a defined action class BLOCK on a human before
 # executing, rather than executing-then-being-stoppable?
 #

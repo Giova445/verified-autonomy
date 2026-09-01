@@ -134,6 +134,7 @@ suite "ambiguity selftest"       bash "$PLUGIN/bin/ambiguity"       selftest
 
 echo
 echo "structure & supply chain:"
+suite "inert-mask controls"      python3 "$PLUGIN/hooks/inert-mask.py"                        --self-test
 suite "structural validators"    python3 "$PLUGIN/benchmark/structure/validate.py"           --self-test
 suite "skill trigger eval"       python3 "$PLUGIN/benchmark/skills/trigger-eval.py"          --self-test
 suite "MCP collision detector"   python3 "$PLUGIN/benchmark/verification/mcp/collision-detect.py" --self-test

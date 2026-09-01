@@ -45,6 +45,19 @@ deny	Bash	command	cp /tmp/stub bin/verify	guardrail replace
 deny	Bash	command	npm test; rm .claude/gates.json	guardrail removal in a compound command
 deny	Bash	command	git checkout HEAD -- .claude/gates.json	guardrail revert
 
+# --- bypasses the inert-mask could have opened, if masking were "strip quoted regions".
+# Every one of these hides a dangerous payload inside quotes. They are here because the fix
+# for the two literal false positives below is exactly the kind of change that buys a
+# false-positive win with a false-negative loss, and that trade has to be visible.
+deny	Bash	command	bash -c "rm -rf /"	quoted payload reaching a shell
+deny	Bash	command	sh -c 'git push --force origin main'	quoted payload reaching a shell
+deny	Bash	command	eval "sudo systemctl restart nginx"	quoted payload reaching eval
+deny	Bash	command	python3 -c "import os; os.system('rm -rf /')"	python -c that is not a pure print
+deny	Bash	command	printf "$(rm -rf /)"	command substitution inside a print sink
+deny	Bash	command	echo "safe" && rm -rf /	danger after a separator, outside the quotes
+deny	Bash	command	echo "ok"; sudo rm -rf /var	danger after a semicolon
+deny	Bash	command	echo "unterminated 'quote and rm -rf /	unterminated quote must mask nothing
+
 # --------------------------------------------------------------- should allow
 # Legitimate work that superficially resembles the attacks above.
 allow	Bash	command	npm test	ordinary
@@ -74,3 +87,7 @@ allow	Bash	command	gh pr create --title 'feat: add gate'	opening a PR is allowed
 allow	Bash	command	gh pr view 42	reading a PR
 allow	Bash	command	terraform plan	plan is not destroy
 allow	Bash	command	docker rm -f old-container	'rm -f' on a container, not a path
+allow	Bash	command	echo "DROP TABLE users would be a bad idea"	DDL string inside a print sink
+allow	Bash	command	printf 'remember: never git push --force\n'	git danger inside printf
+allow	Bash	command	echo "run terraform destroy only in staging"	infra danger inside a literal
+allow	Bash	command	python3 -c "print('chmod 777 is wrong')"	pure print of a danger string

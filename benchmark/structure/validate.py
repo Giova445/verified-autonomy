@@ -179,12 +179,39 @@ def links_ratchet(root):
         bad.append(f"NOTE dead links fell {base} -> {len(bad)}; lower the baseline to lock it in")
     return bad
 
-VALIDATORS = {"frontmatter": frontmatter, "links": links_ratchet, "manifest": manifest}
+def duplicates(root):
+    """Files that exist at both hooks/<f> and kit/hooks/<f> must be byte-identical.
+
+    Nothing checked this, and it had already gone wrong. The recall fix for
+    scan-diff-cheats.sh — the one that took detection of disabled tests from 0% to 112/112
+    against the Kim et al. corpus by adding @Ignore and @Test(enabled=false) — landed in
+    hooks/ and never reached kit/hooks/. hooks/ is what the benchmark measures; kit/ is what
+    people install. So the benchmark reported a fixed detector while the shipped one still
+    had the total blind spot, and every number published about it was true of a file nobody
+    receives. A benchmark that measures a different copy than it ships is measuring nothing.
+    """
+    bad = []
+    a = os.path.join(root, "hooks")
+    b = os.path.join(root, "kit", "hooks")
+    if not (os.path.isdir(a) and os.path.isdir(b)):
+        return bad
+    for fn in sorted(os.listdir(a)):
+        pa, pb = os.path.join(a, fn), os.path.join(b, fn)
+        if not os.path.isfile(pa) or not os.path.exists(pb):
+            continue
+        if open(pa, "rb").read() != open(pb, "rb").read():
+            bad.append(f"hooks/{fn} and kit/hooks/{fn} have diverged — the benchmark "
+                       f"measures one and the kit ships the other")
+    return bad
+
+
+VALIDATORS = {"frontmatter": frontmatter, "links": links_ratchet, "manifest": manifest,
+              "duplicates": duplicates}
 # Declared independently of VALIDATORS, for the same reason pin-check declares
 # EXPECTED_RULES: a self-test that iterates the registry it is testing cannot notice the
 # registry shrinking. Deleting the frontmatter validator made this file report
 # "2 checks, exit 0" — green, while testing one third less than it claimed.
-EXPECTED_VALIDATORS = {"frontmatter", "links", "manifest"}
+EXPECTED_VALIDATORS = {"frontmatter", "links", "manifest", "duplicates"}
 
 RATCHETED = {"links"}   # report baseline without failing; only growth fails
 
@@ -202,6 +229,11 @@ def _break_links(t):
     open(p, "w").write("[dangling](./no-such-file-xyz.md)\n")
     return "added a markdown file linking to ./no-such-file-xyz.md"
 
+def _break_duplicates(t):
+    p = os.path.join(t, "kit", "hooks", "stop-gate.sh")
+    open(p, "a").write("\n# divergence-by-control\n")
+    return "appended a line to kit/hooks/stop-gate.sh so the two copies differ"
+
 def _break_manifest(t):
     mp = os.path.join(t, "benchmark", "manifest", "gate-manifest.json")
     d = json.load(open(mp))
@@ -210,11 +242,12 @@ def _break_manifest(t):
     return "pointed the first gate row at a script that does not exist"
 
 BREAKERS = {"frontmatter": _break_frontmatter, "links": _break_links,
-            "manifest": _break_manifest}
+            "manifest": _break_manifest, "duplicates": _break_duplicates}
 # The string the control's new finding must contain, so "detected" means "detected THIS".
 TOKEN = {"frontmatter": "definitely-not-this-directory",
          "links": "no-such-file-xyz.md",
-         "manifest": "deleted-by-control.sh"}
+         "manifest": "deleted-by-control.sh",
+         "duplicates": "stop-gate.sh"}
 
 def self_test():
     print("structural validators — positive controls\n")

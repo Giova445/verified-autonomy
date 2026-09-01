@@ -27,6 +27,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: inert-mask — CONTROLS FIRST
+        run: python3 hooks/inert-mask.py --self-test
+
       - name: Structural validators — CONTROLS FIRST
         run: python3 benchmark/structure/validate.py --self-test
 

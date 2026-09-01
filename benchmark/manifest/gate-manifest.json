@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-08-29",
+  "generated": "2026-09-01",
   "environment": {
     "claude_code": "2.1.250",
     "python": "3.14.3",
@@ -399,6 +399,75 @@
       "script": [
         "benchmark/verification/preaction-escalation.sh"
       ]
+    },
+    {
+      "gate": "N1 skill trigger/routing eval",
+      "status": "VERIFIED",
+      "verified_on": "2026-09-01",
+      "subsystems": [
+        "skill_descriptions",
+        "lexical_router"
+      ],
+      "pinned_versions": {
+        "python": "3.14.3"
+      },
+      "script": [
+        "benchmark/skills/trigger-eval.py",
+        "benchmark/skills/fixtures.json"
+      ],
+      "note": "7 of 42 prompts misroute under all four rankers; no description pair reaches the 0.45 collision threshold (max 0.218). Reports a failure SET, not a percentage: rank@1 moved 69.0->83.3% on tokenizer choice alone."
+    },
+    {
+      "gate": "N2 structural validation",
+      "status": "VERIFIED",
+      "verified_on": "2026-09-01",
+      "subsystems": [
+        "skill_frontmatter",
+        "markdown_links",
+        "gate_manifest"
+      ],
+      "pinned_versions": {
+        "python": "3.14.3"
+      },
+      "script": [
+        "benchmark/structure/validate.py"
+      ],
+      "note": "frontmatter 0 findings; 8 dead links ratcheted; manifest correspondence checked in both directions via '# gate:' declarations."
+    },
+    {
+      "gate": "N3 MCP name-collision detection",
+      "status": "VERIFIED",
+      "verified_on": "2026-09-01",
+      "subsystems": [
+        "mcp_config_scopes",
+        "mcp_stdio_transport"
+      ],
+      "pinned_versions": {
+        "python": "3.14.3"
+      },
+      "script": [
+        "benchmark/verification/mcp/collision-detect.py",
+        "benchmark/verification/mcp/impostor_server.py"
+      ],
+      "note": "mitigates K1. Live finding: 'ruflo' declared in 3 scopes with 3 different commands. Tool-name half probes real MCP tools/list, not config."
+    },
+    {
+      "gate": "N4 unpinned-dependency gate",
+      "status": "VERIFIED",
+      "verified_on": "2026-09-01",
+      "subsystems": [
+        "diff_scanner",
+        "supply_chain"
+      ],
+      "pinned_versions": {
+        "python": "3.14.3",
+        "git": "2.50.1"
+      },
+      "script": [
+        "benchmark/gates/pin-check.py",
+        "benchmark/gates/corpus-pin.txt"
+      ],
+      "note": "mitigates K2. 16/16 both classes on a self-authored corpus (weak: fitted); 4.3% FP on 47 real unseen commits (the number that counts)."
     }
   ],
   "unbacked_baseline": {

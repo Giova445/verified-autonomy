@@ -26,8 +26,18 @@ import argparse, os, re, subprocess, sys
 # Each rule: (id, compiled pattern, human explanation). Patterns match an ADDED diff line.
 RULES = [
     ("pip-unpinned",
-     re.compile(r"\b(?:pip3?|uv pip)\s+install\s+(?!.*(?:==|--require-hashes|-r\s|@[0-9a-f]{40}))"
-                r"(?!.*\b-e\b)[A-Za-z0-9._\[\]-]+"),
+     # -e was written \b-e\b, which never matches: there is no word boundary between a
+     # space and a hyphen, so 'pip install -e .' was flagged. The package token also
+     # excluded quotes, so 'pip install "django>=4.0"' slipped through as a non-match
+     # rather than being caught as an unpinned range. Both found by the labeled corpus.
+     re.compile(r"\b(?:pip3?|uv pip)\s+install\s+"
+                r"(?!.*(?:==|--require-hashes|@[0-9a-f]{40}))"
+                # (?:^|\s)-[er] was wrong: install\s+ has already consumed the space, so at
+                # the lookahead's position the flag sits at offset 0 with nothing before it
+                # to match \s, and '-e .' / '-r reqs.txt' were both flagged. A lookbehind
+                # asks the same question without needing a character to spare.
+                r"(?!.*(?<![\w-])-[er](?=\s))"
+                r"['\"]?[A-Za-z0-9._\[\]-]+"),
      "pip install without == or --require-hashes resolves to the newest release"),
     ("npm-unpinned",
      re.compile(r"\bnpm\s+(?:i|install|add)\s+(?!.*--save-exact)(?!.*\b\S+@\d)[A-Za-z0-9@._/-]+"),
@@ -52,6 +62,13 @@ RULES = [
      "container image without a tag or digest resolves to :latest"),
 ]
 
+# The rule set the controls REQUIRE, written out independently of RULES. Deriving the
+# expectation from RULES itself made the control self-referential: deleting a rule deleted
+# the detector and its expectation together, so a gate with a rule removed passed its own
+# control and the whole selftest stayed green. Verified by sabotage — see CONTROL 5.
+EXPECTED_RULES = {"pip-unpinned", "npm-unpinned", "npx-floating", "go-latest",
+                  "cargo-unpinned", "curl-pipe-shell", "gha-tag-not-sha", "docker-latest"}
+
 SKIP_MARKER = "pin-check: allow"   # explicit, per-line, and greppable
 
 # The one file that will always contain every pattern is the file that DEFINES them. It is
@@ -59,6 +76,34 @@ SKIP_MARKER = "pin-check: allow"   # explicit, per-line, and greppable
 # would be a general escape hatch wearing a narrow disguise. CONTROL 4 asserts the
 # exclusion does not leak: the identical line in any other path is still caught.
 SELF = "benchmark/gates/pin-check.py"
+
+def _inert_before(body):
+    """Index of the first character that cannot execute, or None.
+
+    Blanking every quoted span was the first attempt and it was too blunt: it erased
+    legitimate quoted package specs, turning 'pip install "django>=4.0"' into a non-match
+    instead of a catch. What actually matters is where the MATCH starts. So this returns
+    the quoted spans and the comment offset, and the caller asks whether its own match
+    begins inside one. Naming a command is not running it; running it while quoted is not
+    a thing that happens."""
+    spans, quote, start, cut = [], None, 0, None
+    for k, ch in enumerate(body):
+        if quote:
+            if ch == quote:
+                spans.append((start, k)); quote = None
+        elif ch in "'\"":
+            quote, start = ch, k
+        elif ch == "#" and cut is None:
+            cut = k
+    if quote:
+        spans.append((start, len(body)))
+    return spans, cut
+
+def _is_inert(body, pos):
+    spans, cut = _inert_before(body)
+    if cut is not None and pos > cut:
+        return True
+    return any(a < pos < b for a, b in spans)
 
 def scan_diff(text):
     """Return findings for lines the diff ADDS. File context tracked for reporting."""
@@ -73,8 +118,10 @@ def scan_diff(text):
         body = line[1:]
         if SKIP_MARKER in body:
             continue
+
         for rid, pat, why in RULES:
-            if pat.search(body):
+            m = pat.search(body)
+            if m and not _is_inert(body, m.start()):
                 out.append((path, rid, body.strip()[:110], why))
                 break
     return out
@@ -111,8 +158,10 @@ UNPINNED = """--- a/setup.sh
 
 def self_test(fp_budget=10.0, sample=60):
     ok = True
+    n = 0
     def check(label, got, want):
-        nonlocal ok
+        nonlocal ok, n
+        n += 1
         print(f"    {label:<50} {got}  (expect {want})")
         if got != want:
             ok = False
@@ -128,7 +177,8 @@ def self_test(fp_budget=10.0, sample=60):
     # never touched, and it was broken — it anchored on "uses:" and so missed the standard
     # YAML list form "- uses:", which is nearly every real workflow line. A control that
     # covers most of a gate certifies the whole gate.
-    check("every rule has a positive fixture", len(hit), len(RULES))
+    check("every expected rule fires on its fixture", hit, EXPECTED_RULES)
+    check("no rule was removed from RULES", {r for r, _, _ in RULES}, EXPECTED_RULES)
     check("silent on the pinned equivalents", [f[1] for f in miss], [])
 
     print("  CONTROL 2 — removed lines are not offences")
@@ -163,7 +213,7 @@ def self_test(fp_budget=10.0, sample=60):
     # prove only that nothing was there to find. So require the gate to still fire on a
     # planted diff, verifying the scanner ran over this corpus rather than no-opped.
     check("scanner still fires after the corpus run", len(scan_diff(UNPINNED)) > 0, True)
-    print()
+    print(f"\n  unpinned-dependency gate ({n} checks)")
     return 0 if ok else 1
 
 def main():

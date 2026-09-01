@@ -180,6 +180,12 @@ def links_ratchet(root):
     return bad
 
 VALIDATORS = {"frontmatter": frontmatter, "links": links_ratchet, "manifest": manifest}
+# Declared independently of VALIDATORS, for the same reason pin-check declares
+# EXPECTED_RULES: a self-test that iterates the registry it is testing cannot notice the
+# registry shrinking. Deleting the frontmatter validator made this file report
+# "2 checks, exit 0" — green, while testing one third less than it claimed.
+EXPECTED_VALIDATORS = {"frontmatter", "links", "manifest"}
+
 RATCHETED = {"links"}   # report baseline without failing; only growth fails
 
 # --------------------------------------------------------------------------- controls
@@ -213,6 +219,12 @@ TOKEN = {"frontmatter": "definitely-not-this-directory",
 def self_test():
     print("structural validators — positive controls\n")
     ok = True
+    n = 0
+    if set(VALIDATORS) != EXPECTED_VALIDATORS:
+        missing = EXPECTED_VALIDATORS - set(VALIDATORS)
+        print(f"  !! VALIDATOR SET CHANGED: missing {sorted(missing) or 'none'}, "
+              f"unexpected {sorted(set(VALIDATORS) - EXPECTED_VALIDATORS) or 'none'}")
+        return 1
     for name in VALIDATORS:
         with tempfile.TemporaryDirectory() as td:
             t = os.path.join(td, "tree")
@@ -234,10 +246,11 @@ def self_test():
             print(f"    after the break : {len(broken)} finding(s)  detected={grew}")
             if new:
                 print(f"    new finding     : {new[0]}")
+            n += 1
             if not grew:
                 print(f"    !! CONTROL FAILED: breaking the tree did not change the verdict.")
                 ok = False
-    print()
+    print(f"\n  structural validators ({n} checks)")
     return 0 if ok else 1
 
 def main():

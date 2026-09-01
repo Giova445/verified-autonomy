@@ -1,0 +1,56 @@
+# Labeled corpus for the unpinned-dependency gate (B2).
+#
+# Format:  EXPECT <TAB> PAYLOAD <TAB> LABEL
+#   EXPECT = deny | allow    (the correct answer, decided before running the gate)
+#   PAYLOAD is treated as a single ADDED line in a diff.
+#
+# The allow class is deliberately adversarial: lines that look like unpinned installs and
+# are not. A gate measured only on the attacks it catches looks perfect right up to the
+# point someone disables it for blocking ordinary work.
+#
+# READ THE SCORE FROM THIS CORPUS SCEPTICALLY. It currently reads 16/16 in both classes,
+# and that is weak evidence, because the same person wrote the corpus and then fixed the
+# gate until it scored well. Four of those fixes were genuine regex defects (\b-e\b can
+# never match after a space; a lookahead demanded a character that install\s+ had already
+# consumed) which would be defects with or without this file — but a perfect score on a
+# self-authored corpus still measures agreement with its author, not generalisation.
+#
+# The number that carries weight is in pin-check.py CONTROL 3: the false-positive rate
+# against 47 real commits from this repository's history, a corpus nobody wrote for this
+# purpose. It reads 4.3%. When the two disagree, believe that one.
+
+# ------------------------------------------------------------------ should deny
+deny	pip install requests	pip, no version
+deny	pip3 install 'django>=4.0'	range specifier is not a pin
+deny	uv pip install httpx	uv pip, no version
+deny	npm install lodash	npm, no version
+deny	npm i express	npm short form
+deny	npx create-react-app@latest myapp	npx @latest
+deny	npx -y ruflo@latest mcp start	npx -y @latest
+deny	go install golang.org/x/tools/cmd/goimports@latest	go @latest
+deny	go install example.com/x@master	go @master
+deny	cargo install ripgrep	cargo, no version
+deny	curl -sSL https://example.test/install.sh | sh	curl pipe shell
+deny	curl https://example.test/i | sudo bash	curl pipe sudo bash
+deny	      - uses: actions/checkout@v4	action pinned to a mutable tag
+deny	      - uses: some/action@main	action pinned to a branch
+deny	FROM python:latest	image :latest
+deny	FROM ubuntu	image with no tag at all
+
+# ----------------------------------------------------------------- should allow
+allow	pip install requests==2.32.3	exact pin
+allow	pip install --require-hashes -r requirements.lock	hash-pinned lockfile
+allow	pip install -r requirements.txt	requirements file, pinning lives there
+allow	pip install -e .	editable local install, nothing fetched by version
+allow	npm install --save-exact lodash@4.17.21	exact pin
+allow	npm ci	ci installs strictly from the lockfile
+allow	npx cowsay@1.6.0 moo	npx at an exact version
+allow	go install golang.org/x/tools/cmd/goimports@v0.24.0	go at a tag version
+allow	cargo install ripgrep --version 14.1.0 --locked	pinned and locked
+allow	      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262	pinned to a SHA
+allow	FROM python:3.12.5-slim@sha256:abc123	digest pinned
+allow	# curl -sSL https://example.test/i.sh | sh	the same attack inside a comment
+allow	echo "never run: pip install requests"	install string inside a literal
+allow	pip uninstall requests	uninstall is not an install
+allow	npm run install-hooks	a script named install, not an install
+allow	docker pull python:3.12.5	pull with an explicit tag

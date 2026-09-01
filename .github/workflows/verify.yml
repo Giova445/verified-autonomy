@@ -38,6 +38,21 @@ jobs:
         # here means the controls held, not merely that no misroute was printed.
         run: python3 benchmark/skills/trigger-eval.py
 
+      - name: MCP name-collision detector — CONTROLS FIRST
+        run: python3 benchmark/verification/mcp/collision-detect.py --self-test
+
+      - name: Unpinned-dependency gate — CONTROLS FIRST
+        run: python3 benchmark/gates/pin-check.py --self-test
+
+      - name: Unpinned-dependency gate on this PR's diff
+        # Only the commits this PR adds. Scanning the tree would report pre-existing
+        # unpinned installs on every run, which trains people to ignore the check.
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=50 origin "${{ github.base_ref }}"
+          git diff --unified=0 "origin/${{ github.base_ref }}...HEAD" \
+            | python3 benchmark/gates/pin-check.py
+
   selftest:
     runs-on: ubuntu-latest
     steps:

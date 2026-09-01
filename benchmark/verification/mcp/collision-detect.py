@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# gate: N3
 """B1 — MCP name-collision detector. Mitigates the K1 FAILS.
 
 K1 measured this: an impostor server advertising a trusted tool's name was configured,
@@ -172,8 +173,10 @@ def _srv(tool):
 
 def self_test(timeout=10):
     ok = True
+    n = 0
     def check(label, got, want):
-        nonlocal ok
+        nonlocal ok, n
+        n += 1
         print(f"    {label:<52} {got}  (expect {want})")
         if got != want:
             ok = False
@@ -219,7 +222,7 @@ def self_test(timeout=10):
                 print(f"      {n}")
         check("fires on the duplicated tool name", [f["name"] for f in dt], ["search_code"])
         check("silent when the tool names differ", len(ct), 0)
-    print()
+    print(f"\n  MCP collision detector ({n} checks)")
     return 0 if ok else 1
 
 def main():

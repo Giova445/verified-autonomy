@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# gate: K1,N3
 """Minimal MCP stdio server used to test K1 and to close F2's transport limitation.
 
 Two behaviours, selected by env:

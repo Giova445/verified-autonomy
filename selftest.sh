@@ -133,5 +133,12 @@ suite "mutate-changed selftest"  bash "$PLUGIN/bin/mutate-changed"  selftest
 suite "ambiguity selftest"       bash "$PLUGIN/bin/ambiguity"       selftest
 
 echo
+echo "structure & supply chain:"
+suite "structural validators"    python3 "$PLUGIN/benchmark/structure/validate.py"           --self-test
+suite "skill trigger eval"       python3 "$PLUGIN/benchmark/skills/trigger-eval.py"          --self-test
+suite "MCP collision detector"   python3 "$PLUGIN/benchmark/verification/mcp/collision-detect.py" --self-test
+suite "unpinned-dependency gate" python3 "$PLUGIN/benchmark/gates/pin-check.py"              --self-test
+
+echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0
 else echo "SELF-TEST FAILED  ($fail of $((pass+fail)) checks)"; exit 1; fi

@@ -154,6 +154,11 @@ def _fourgram(t):
     s = re.sub(r"[^a-z ]", " ", t.lower())
     return [s[i:i + 4] for i in range(max(0, len(s) - 3))]
 
+# Independent of RANKERS. The ensemble's whole claim is that a finding survived FOUR
+# different tokenizers; with rankers deleted the intersection is taken over fewer, or one,
+# and the claim quietly weakens while the output still reads green.
+EXPECTED_RANKERS = {"stemmed TF-IDF", "unstemmed", "no stopwords", "char 4-gram"}
+
 RANKERS = {"stemmed TF-IDF": None, "unstemmed": _nostem,
            "no stopwords": _nostop, "char 4-gram": _fourgram}
 
@@ -168,6 +173,10 @@ def main():
           f"{len(fx['negatives'])} negatives\n")
 
     base_toks = toks
+    if set(RANKERS) != EXPECTED_RANKERS:
+        print(f"  !! RANKER SET CHANGED: expected {sorted(EXPECTED_RANKERS)}, "
+              f"got {sorted(RANKERS)}. The ensemble claim does not hold.", file=sys.stderr)
+        return 1
     probe = "systematic-debugging"
     if probe not in skills:
         print("  CONTROL SETUP FAILED: probe skill absent", file=sys.stderr); return 1
@@ -195,7 +204,14 @@ def main():
                   file=sys.stderr)
             return 1
     toks = base_toks
+    nchk = 2 * len(RANKERS)
     print("  all four rankers discriminate in both directions\n")
+    if "--self-test" in sys.argv:
+        # Controls only. Lets selftest.sh assert the instrument still discriminates
+        # without also asserting today's routing findings, which are a separate question
+        # and would make an unrelated description edit look like a broken instrument.
+        print(f"  skill trigger eval controls ({nchk} checks)")
+        return 0
 
     per, fails = {}, {}
     for name, fn in RANKERS.items():

@@ -235,7 +235,7 @@
       "pinned_versions": {
         "claude_code": "2.1.250"
       },
-      "note": "session lifetime bounds work started via the harness's OWN background mechanism. It does NOT bound a process double-forked away from it: five orphaned ledger probes (PPID 1) ran at ~99% CPU for 3d11h on a developer machine, load avg 9. Counterexample found in production, not in test."
+      "note": "MEASURED BOTH PATHS. Harness background path IS bounded by session lifetime (7-9 beats then dead). A process double-forked away from it is NOT (29-30 beats, ppid 1, reparented to init; unbounded in principle). Production counterexample: 5 orphans, ~99% CPU, 3d11h, load avg 9."
     },
     {
       "gate": "I2 cost visibility",

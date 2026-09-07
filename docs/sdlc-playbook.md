@@ -9,25 +9,20 @@ Written 2026-09-03.
 
 ## Where the stage numbering comes from — read this first
 
-**No document in this repository defines the stage numbering.** `grep -rn "Stage 5c" docs/
-README.md skills/` returns nothing but this file. The numbering arrived with the brief that
-commissioned these artifacts.
+The numbering is the playbook's: **claude.com/blog/the-ai-native-sdlc-playbook**. Six stages,
+fifteen lettered sub-stages: 1, 2, 3a–3e, 4a–4b, 5a–5c, 6a–6c.
 
-Four labels are nevertheless **attested inside the repo**, because sibling artifacts written
-in the same change set carry them in their own headers:
+This section previously said no document defined the numbering and that labels 1–4 and 5b
+were *inferred by position and elimination*. That was true when it was written — the author
+had the brief, not the source — and it left a real gap: the map's own "Stage 3" and
+"Stage 4" were **its** numbers, not the playbook's, and the playbook's 3b, 3c, 3d, 3e and 4a
+were attested by no block. `benchmark/gates/playbook-coverage.py` was re-keyed to the
+source and found all six on its first run.
 
-| Label | Attested by | Line |
-|---|---|---|
-| **4b** | [`evals/model.py`](../evals/model.py), [`evals/lib.py`](../evals/lib.py) | "An EVAL is a task+check pair, in the Stage 4b sense" |
-| **5a** | [`REVIEW.md`](../REVIEW.md) | "REVIEW.md — Stage 5a: PR review policy" |
-| **5c** | the brief only | "deployment via MCP, tiered per-environment autonomy" |
-| **6a** | [`bands.yaml`](../bands.yaml), [`monitoring/detect.py`](../monitoring/detect.py) | "Stage 6a control bands" |
-
-Everything else below — the labels 1, 2, 3, 4 and 5b — is **inferred by position and
-elimination**, and 5b is the weakest of them: nothing in or out of the repo tells me what
-letter adjudication carries, only that 5a is review and 5c is deploy. Where a section's
-label is inferred it says so. The artifact rows are correct regardless of what the labels
-turn out to be.
+Every block below now carries a **Playbook** row naming the sub-stage(s) it attests. The
+heading titles are this repo's names for the work (Intent, Spec, Plan, Implement and gate);
+the Playbook row is the cross-reference. Where a block attests two sub-stages — the gate
+block is both 3d (hooks as guardrails) and 4a (the feedback loop) — the row says so.
 
 The nearest in-repo equivalents to a stage list are two state machines, cited per stage:
 
@@ -58,6 +53,7 @@ arranged to prevent.
 | | |
 |---|---|
 | **Artifact** | [`intent/templates/intent.md`](../intent/templates/intent.md) — problem, proposed outcome, affected users/systems, constraints, open questions |
+| **Playbook** | 1 — sub-stage(s) of claude.com/blog/the-ai-native-sdlc-playbook this block attests |
 | **Also** | [`skills/brainstorming`](../skills/brainstorming/SKILL.md) — path classification, and the "no code before approval" gate |
 | **Layer** | **1.** Nothing reads the file. `approved_by:` is text an agent can write. |
 | **Nearest layer 2** | `bin/verify preflight` refuses while `.claude/evidence/assumptions.jsonl` holds any `"status": "open"` entry. That is the assumption register, not the intent — related, not the same. |
@@ -71,6 +67,7 @@ Until this change set, `intent.md` did not exist in any form. Stage 1 was a conv
 | | |
 |---|---|
 | **Artifact** | [`intent/templates/spec.md`](../intent/templates/spec.md) — requirements, design, policy validation, flagged concerns |
+| **Playbook** | 2 — sub-stage(s) of claude.com/blog/the-ai-native-sdlc-playbook this block attests |
 | **And** | [`templates/spec.md`](../templates/spec.md), the older and longer one `skills/brainstorming` names. See the duplication note below. |
 | **Layer** | **1** for the document; **2** for one property of it |
 | **Layer 2 part** | `bin/ambiguity` answers a narrower, mechanically decidable question — *which decisions does this diff make that the spec never mentions?* Every new branch, default, caught error and magic constant is a decision; if its concept appears nowhere in the spec, nobody recorded the choice. `AG_STRICT=1` makes findings blocking. |
@@ -86,6 +83,7 @@ that would be someone's taste dressed as a measurement.
 | | |
 |---|---|
 | **Artifact** | [`intent/templates/plan.md`](../intent/templates/plan.md) — files changing, work order, tests needed, risks, proof statements |
+| **Playbook** | 3a — sub-stage(s) of claude.com/blog/the-ai-native-sdlc-playbook this block attests |
 | **And** | [`templates/plan.md`](../templates/plan.md), [`skills/writing-plans`](../skills/writing-plans/SKILL.md), [`skills/orchestrating`](../skills/orchestrating/SKILL.md) |
 | **Layer** | **2 when invoked, 1 otherwise.** The first stage whose mechanisms *refuse* things — but every one of them is opt-in. See the row below before reading this as a gate. |
 | **Wiring, measured** | `grep -rl 'ledger\|worktree-guard' hooks/ kit/hooks/ .github/workflows/ .claude/settings.json` returns **nothing** — only `selftest.sh` names them, and it runs their selftests, not the tools on real work. Nothing requires a ledger to exist before a branch does, and nothing requires a scope claim before a write. An agent that never runs these commands is never refused by them. That is a weaker property than Stage 4's `Stop` hook, which fires on every turn wherever it is registered, and the two should not share the word "enforced" unqualified. |
@@ -98,11 +96,43 @@ that would be someone's taste dressed as a measurement.
 This is the hop where the chain stops being paperwork: the plan's work order is **parsed**,
 not read. A plan whose tasks are prose produces no ledger and the run has nowhere to start.
 
+### Stage 3b — CLAUDE.md · *label from source*
+
+| | |
+|---|---|
+| **Artifact** | [`CLAUDE.md`](../CLAUDE.md) — build/test/lint commands, conventions, architecture, common mistakes; one page |
+| **Playbook** | 3b — sub-stage(s) of claude.com/blog/the-ai-native-sdlc-playbook this block attests |
+| **Layer** | **1.** Read by every session; enforces nothing by itself. Its verification block is what Stage 4a consumes. |
+| **Layer 2 part** | `evals/run.py` — the `verify-subcommands-dispatch` eval fails when `bin/verify` stops dispatching a subcommand CLAUDE.md tells the agent to run, so the contract and the tool cannot drift apart silently. |
+| **Verify** | every command CLAUDE.md states was run and its exit code recorded before being written down. One, the cheat scanner, is documented there as exit 1 by design and is deliberately not backticked here — a **Verify** row asserts exit 0. |
+
+### Stage 3c — Skills · *label from source*
+
+| | |
+|---|---|
+| **Artifact** | [`skills/`](../skills/) — 14 `skills/<name>/SKILL.md`, plugin layout (the playbook's `.claude/skills/<name>/SKILL.md`, distributed via plugin) |
+| **Playbook** | 3c — sub-stage(s) of claude.com/blog/the-ai-native-sdlc-playbook this block attests |
+| **Layer** | **1.** Advisory: applied as constraints in session, bypassable by an agent that does not invoke them. |
+| **Layer 2 part** | `benchmark/structure/validate.py` — frontmatter present, `name` matches directory. `benchmark/skills/trigger-eval.py` — four-ranker routing eval; 7 of 42 prompts misroute under every ranker (a failure SET, not a percentage — the single-ranker figure swung 14 points on tokenizer choice). |
+| **Verify** | `python3 benchmark/skills/trigger-eval.py --self-test` → 8 checks |
+
+### Stage 3e — Subagents · *label from source*
+
+| | |
+|---|---|
+| **Artifact** | [`agents/verifier.md`](../agents/verifier.md) — plugin layout (the playbook's `.claude/agents/<name>.md`); declares `tools: Read, Grep, Glob, Bash` and `disallowedTools: Write, Edit, NotebookEdit` |
+| **Playbook** | 3e — sub-stage(s) of claude.com/blog/the-ai-native-sdlc-playbook this block attests |
+| **Layer** | **2 for the tool limit** — `disallowedTools` is enforced by the harness, not requested. **1 for everything else.** |
+| **Also** | [`skills/using-worktrees`](../skills/using-worktrees/SKILL.md) and `bin/worktree-guard` — one writer per worktree, exit 2 on a contested path (the parallel-sessions half of 3e) |
+| **Not implemented** | Only one subagent is defined. The playbook's "repeated jobs packaged as subagents" is one job packaged. |
+| **Verify** | `bash bin/worktree-guard selftest` → 39 checks |
+
 ### Stage 4 — Implement and gate · *label inferred*
 
 | | |
 |---|---|
 | **Artifacts** | [`skills/test-driven-development`](../skills/test-driven-development/SKILL.md), [`skills/systematic-debugging`](../skills/systematic-debugging/SKILL.md), [`skills/using-worktrees`](../skills/using-worktrees/SKILL.md), [`skills/gate`](../skills/gate/SKILL.md), `bin/verify` |
+| **Playbook** | 3d, 4a — sub-stage(s) of claude.com/blog/the-ai-native-sdlc-playbook this block attests |
 | **Layer** | **2** |
 | **Mechanism** | `hooks/deny-dangerous.sh` on `PreToolUse` — blocks force-push, `reset --hard`, self-merge, credential reads, **and edits to the gate config itself** |
 | **Mechanism** | `hooks/scan-diff-cheats.sh` — skipped tests, deleted assertions, `\|\| true`, retry-to-green, snapshot re-recording |
@@ -121,6 +151,7 @@ after it.
 | | |
 |---|---|
 | **Artifact** | [`evals/`](../evals/) — `model.py`, `lib.py`, `evals_config.py`, `evals_suites.py`, `evals_hooks.py`, `evals_ci.py`, `expected.json` |
+| **Playbook** | 4b — sub-stage(s) of claude.com/blog/the-ai-native-sdlc-playbook this block attests |
 | **Owner** | Concurrent work by another agent in this same change set |
 | **Verified by this document** | **Presence and self-description only.** The files exist and `evals/model.py` states "An EVAL is a task+check pair, in the Stage 4b sense". **I did not run them and make no claim about whether they pass.** |
 
@@ -129,6 +160,7 @@ after it.
 | | |
 |---|---|
 | **Artifact** | [`REVIEW.md`](../REVIEW.md) — PR review policy, written as concurrent work by another agent |
+| **Playbook** | 5a — sub-stage(s) of claude.com/blog/the-ai-native-sdlc-playbook this block attests |
 | **And** | [`skills/requesting-review`](../skills/requesting-review/SKILL.md), [`skills/finishing-a-branch`](../skills/finishing-a-branch/SKILL.md), [`agents/verifier.md`](../agents/verifier.md) |
 | **Layer** | **1** — model judgment. `REVIEW.md` states the boundary itself: a review "cannot clear a red gate", findings never approve and never block, and merge authority sits with a human code owner under branch protection and CODEOWNERS. |
 | **Verified by this document** | Presence, and the quoted lines above, read from the file. Nothing more. |
@@ -139,6 +171,7 @@ after it.
 | | |
 |---|---|
 | **Artifact** | [`.github/workflows/verify.yml`](../.github/workflows/verify.yml) — three jobs: `structure`, `selftest`, `bench` |
+| **Playbook** | 5b — sub-stage(s) of claude.com/blog/the-ai-native-sdlc-playbook this block attests |
 | **Layer** | **3** |
 | **Mechanism** | CI re-runs every gate with `permissions: contents: read` — **no write scope, so CI cannot edit the guardrails it runs** |
 | **Mechanism** | Every control runs **before** the check it belongs to. A validator that has silently stopped discriminating passes a clean tree exactly like a working one, so controls-after-checks would let the workflow report green over a suite that had stopped testing anything. |
@@ -158,12 +191,13 @@ something else, this section is still the repo's adjudication layer; only its he
 | | |
 |---|---|
 | **Artifact** | [`bands.yaml`](../bands.yaml) + [`monitoring/`](../monitoring/) — `detect.py`, `collect.py`, `bandconf.py`, `yamlsub.py`, `selftest.py`, `history/`, `intents/`, `invocations/`. Concurrent work by another agent. |
+| **Playbook** | 6a — sub-stage(s) of claude.com/blog/the-ai-native-sdlc-playbook this block attests |
 | **Self-described mechanism** | A deterministic detector watches a metric against a rolling baseline: ≥1σ logs, ≥2σ invokes Claude **read-only** to write a diagnosis as an `intent.md`, ≥3σ permits action via PR or a pre-approved runbook. Below `min_samples` it **refuses to return a verdict** rather than firing on noise. |
-| **Verified by this document** | **Presence and self-description only. I did not run `monitoring/selftest.py`** and make no claim about whether its controls pass. |
+| **Verified by this document** | `python3 monitoring/selftest.py` → 164 checks, exit 0. Ten control groups (A–J); group J runs the detector over the history this repo actually ships and asserts it reaches no verdict on it. |
 | **Also** | [`benchmark/manifest/gate-manifest.json`](../benchmark/manifest/gate-manifest.json) — 30 gate rows with status, `verified_on`, pinned versions, and `trigger_rules` naming which subsystem changes invalidate which gate |
 | **Layer 2 part** | `benchmark/structure/validate.py` checks manifest↔script correspondence in **both** directions: a row's script must exist, the script's own `# gate:` header must name the row claiming it, and a verification script no row claims is flagged as an orphan. Unbacked rows and dead links are ratcheted against a recorded baseline. |
 | **Not implemented** | Nothing collects the [`08-adoption-playbook.md`](08-adoption-playbook.md) §3 metrics — first-pass gate rate, rework loops, CI-after-local-green failure rate. No telemetry, no run history for those. That table is a specification of what to measure. |
-| **Verify** | `python3 benchmark/structure/validate.py --self-test`, then `python3 benchmark/structure/validate.py` |
+| **Verify** | `python3 monitoring/selftest.py` → 164 checks; and for the manifest half, `python3 benchmark/structure/validate.py` |
 
 Note the interesting seam: `bands.yaml`'s 2σ tier writes its diagnosis **as an `intent.md`**,
 which feeds Stage 1. That closes the loop, and it is the one place a stage boundary in this

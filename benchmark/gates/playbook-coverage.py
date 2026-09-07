@@ -43,24 +43,37 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DOC = os.path.join("docs", "sdlc-playbook.md")
 
-# The six stages of the playbook, as published, plus the sub-stages it names. Declared
-# independently of the document under test. Update this when the PLAYBOOK changes, never
-# to match what the repo happens to implement.
+# The playbook's stages and every lettered sub-stage, as published at
+# claude.com/blog/the-ai-native-sdlc-playbook. Declared independently of the document under
+# test. Update this when the PLAYBOOK changes, never to match what the repo implements.
+#
+# A first version had 11 keys and collapsed 3a-3e into "3" and 4a into "4". That was not the
+# playbook's numbering; it was the DOCUMENT's own inferred numbering, copied here -- so the
+# gate was checking the map against the map's own scheme. A block titled "Stage 3" satisfied
+# it while saying nothing about skills (3c) or subagents (3e). Re-keyed from the source.
 PLAYBOOK_STAGES = {
-    "1": "Plan — capture as intent.md",
-    "2": "Design — requirements and design collapse into one session",
-    "3": "Build — plan mode, CLAUDE.md, skills, hooks, parallel sessions",
-    "4": "Test — feedback loops",
-    "4b": "Test — continuous evals in CI",
-    "5a": "Deploy — AI in the PR review loop",
+    "1":  "Plan — capture as intent.md",
+    "2":  "Design — requirements and design collapse into one session (spec.md)",
+    "3a": "Build — plan mode as the default starting point (plan.md)",
+    "3b": "Build — CLAUDE.md as machine-readable institutional context",
+    "3c": "Build — skills as institutional knowledge (skills/<name>/SKILL.md)",
+    "3d": "Build — hooks as build-time guardrails (settings.json, hook scripts)",
+    "3e": "Build — parallel sessions and subagents (agents/<name>.md)",
+    "4a": "Test — give Claude a feedback loop (verifier commands, healthy output)",
+    "4b": "Test — continuous evals in CI (evals/, agent-evals.yml)",
+    "5a": "Deploy — AI in the PR review loop (REVIEW.md)",
     "5b": "Deploy — hooks as approval gates",
     "5c": "Deploy — CI/CD integration, MCP deployment, tiered autonomy",
-    "6a": "Maintain — control-band monitoring",
+    "6a": "Maintain — control-band monitoring (bands.yaml)",
     "6b": "Maintain — recurring codebase scans",
     "6c": "Maintain — Claude on call",
 }
 
-STAGE_RE = re.compile(r"^###\s+Stage\s+([0-9]+[a-c]?)\b(.*)$", re.M)
+# [a-e], not [a-c]: the playbook goes to 3e. A first version stopped at c, so "### Stage 3e"
+# was never parsed as a block and a "3d, 4a" Playbook row matched "3" and "4a" -- both
+# sub-stages read as uncovered while the document attested them. Found by the re-keyed gate
+# reporting 3d and 3e missing from a document that had just gained a 3e block.
+STAGE_RE = re.compile(r"^###\s+Stage\s+([0-9]+[a-e]?)\b(.*)$", re.M)
 ROW_RE = re.compile(r"^\|\s*\*\*(\w[\w -]*)\*\*\s*\|\s*(.*?)\s*\|?\s*$", re.M)
 CODE_RE = re.compile(r"`([^`]+)`")
 COUNT_RE = re.compile(r"(\d+)\s*checks?|→\s*(\d+)\s|\((\d+)\)")
@@ -107,7 +120,7 @@ def not_implemented_ids(text):
         return set()
     j = text.find("\n## ", i + 4)
     section = text[i: j if j > 0 else len(text)]
-    return set(re.findall(r"Stage\s+([0-9]+[a-c]?)\b", section))
+    return set(re.findall(r"Stage\s+([0-9]+[a-e]?)\b", section))
 
 
 def stated_count(cell, cmd):
@@ -138,15 +151,22 @@ def audit(root, run_commands=True, skip_slow=False, only=None):
     stages = parse_stages(text)
     skipped = not_implemented_ids(text)
 
-    # A. coverage
+    # A. coverage. A block attests the sub-stages named in its **Playbook** row
+    # ("3d, 4a"); a block with no such row attests whatever its heading number is. The
+    # explicit row exists because the document's heading numbers were inferred by its
+    # author before the source was available, and several blocks attest more than one
+    # playbook sub-stage (the gate block is both 3d hooks and 4a feedback loop).
+    attested = set()
+    for sid, st in stages.items():
+        row = st["rows"].get("playbook", "")
+        ids = re.findall(r"\b([1-6][a-e]?)\b", row)
+        attested.update(ids if ids else [sid])
     for sid in sorted(PLAYBOOK_STAGES):
-        if sid in stages or sid in skipped:
+        if sid in attested or sid in skipped:
             continue
-        # A stage may be covered by its parent block (3 covers 3a-3e).
-        if sid[0] in stages and sid not in PLAYBOOK_STAGES:
-            continue
-        bad.append(f"A. stage {sid} ({PLAYBOOK_STAGES[sid]}) is neither mapped nor listed "
-                   f"under 'Not implemented, and why' — silently uncovered")
+        bad.append(f"A. stage {sid} ({PLAYBOOK_STAGES[sid]}) is neither attested by any "
+                   f"block's **Playbook** row nor listed under 'Not implemented, and why' "
+                   f"— silently uncovered")
 
     for sid, st in sorted(stages.items()):
         rows = st["rows"]

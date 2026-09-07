@@ -1,0 +1,193 @@
+# bands.yaml — Stage 6a control bands.
+#
+# A deterministic detector (monitoring/detect.py) watches a metric against a rolling
+# baseline built from monitoring/history/observations.jsonl and escalates by how far the
+# latest observation sits from that baseline:
+#
+#   >= 1 sigma   log only — recorded, nothing invoked
+#   >= 2 sigma   invoke Claude READ-ONLY to diagnose; it writes a diagnosis as an intent.md
+#   >= 3 sigma   Claude may act, via a PR or a pre-approved runbook
+#
+# This file is the policy. The detector holds no thresholds of its own; delete a tier here
+# and the tier stops existing, which monitoring/selftest.py asserts against thresholds it
+# declares independently, so a deletion turns the controls red instead of going unnoticed.
+#
+# THE REFUSAL MATTERS MORE THAN THE FIRING. With too few samples the detector reports no
+# verdict and emits nothing. A band computed from one or two points fires on noise or never
+# fires at all, and either way nobody can tell which. See `min_samples`.
+#
+# Parsed by monitoring/yamlsub.py, a strict subset loader: flow collections ([] {}),
+# anchors, block scalars and tabs are hard errors here, not silently-dropped keys.
+
+version: 1
+
+# ---------------------------------------------------------------------------
+# Window
+# ---------------------------------------------------------------------------
+
+# How many prior observations form the baseline. The current observation is never part of
+# its own baseline.
+window: 20
+
+# Refuse to compute a sigma below this many effective baseline samples. Sample variance
+# from fewer points is not an estimate of anything. 8 is a judgement call, not a derived
+# number: it is the point at which a sample standard deviation stops being dominated by a
+# single observation, and it is low enough that a repo running the suite on every push
+# reaches a verdict inside a fortnight rather than a quarter.
+min_samples: 8
+
+# Collapse observations taken on an identical source tree (same commit, same working-tree
+# digest) to the most recent one before counting. Re-running the suite ten times without
+# changing anything does not produce ten independent samples; counting them as ten shrinks
+# the estimated sigma and makes the detector hair-trigger. Two dirty trees on one commit
+# ARE different source states and are kept apart.
+dedupe_by_tree: true
+
+# Whether dirty-worktree observations may enter the baseline. Left true because a
+# dirty-tree measurement is still a real measurement and this repo is usually mid-change;
+# every record carries `dirty` and `tree_digest`, and the detector reports how many
+# baseline points came from dirty trees so the caveat is visible rather than assumed.
+baseline_requires_clean_tree: false
+
+# A metric whose baseline is a constant has zero variance, so a z-score is undefined —
+# every change is division by zero, not "infinite sigma". Reporting infinity would be a
+# fabricated number. Instead a changed constant is escalated to this tier directly and
+# labelled `zero-variance-change` in the output. Per-metric overrides below.
+zero_variance_default_tier: 2
+
+# ---------------------------------------------------------------------------
+# Tiers — ascending. The highest tier whose sigma is met wins.
+# ---------------------------------------------------------------------------
+
+tiers:
+  - sigma: 1.0
+    tier: 1
+    action: log
+    tools: null
+    writes: null
+    runbooks: null
+    prompt: null
+
+  - sigma: 2.0
+    tier: 2
+    action: diagnose
+    tools:
+      - Read
+      - Grep
+      - Glob
+      - "Bash(git log:*)"
+      - "Bash(git diff:*)"
+      - "Bash(git show:*)"
+      - "Bash(git status:*)"
+    writes:
+      - monitoring/intents/
+    runbooks: null
+    prompt:
+      - "Control band breach on {metric}: latest {value}, baseline mean {mean} sd {stdev} over n={n} ({window}-observation window), z={z}."
+      - "Diagnose only. Read the history at monitoring/history/observations.jsonl and the commits between {baseline_commit} and {commit}."
+      - "Write the diagnosis to {intent_path}: what changed, which commit changed it, whether the metric moved because the system changed or because the measurement changed, and what you would do next."
+      - "Change nothing else. Do not edit code, tests, gates, bands.yaml, or the history file."
+
+  - sigma: 3.0
+    tier: 3
+    action: act
+    tools:
+      - Read
+      - Grep
+      - Glob
+      - Edit
+      - Write
+      - "Bash(git log:*)"
+      - "Bash(git diff:*)"
+      - "Bash(git show:*)"
+      - "Bash(git status:*)"
+      - "Bash(git checkout -b:*)"
+    writes:
+      - monitoring/intents/
+      - "a branch and pull request; never a direct push to main"
+    # No pre-approved runbook exists in this repo yet. Left null deliberately rather than
+    # filled with a plausible-sounding name: a runbook nobody approved is not pre-approved,
+    # and the detector must not emit an authorisation that was never granted.
+    runbooks: null
+    prompt:
+      - "Control band breach on {metric} at {z} sigma: latest {value}, baseline mean {mean} sd {stdev} over n={n}."
+      - "Write the diagnosis to {intent_path} FIRST, then you may act — but only via a branch and pull request, and only on the cause you named in the diagnosis."
+      - "You may not edit bands.yaml, monitoring/history/, .claude/gates.json, hooks/, or .github/workflows/ under this authorisation. Widening a band to clear a breach is the failure this whole repo exists to stop."
+
+# ---------------------------------------------------------------------------
+# Metrics — every one is something this repo already produces.
+#
+# direction   which way is bad. A move the good way is capped at tier 1 (log): acting on
+#             an improvement is wrong, but ignoring one is also wrong, because an
+#             improvement is just as often the measurement breaking (a corpus row that
+#             stopped loading raises recall too).
+# required    a required metric that is missing or unavailable in the latest observation
+#             fails the detector. Collection breaking must not read as "nothing to report".
+# ---------------------------------------------------------------------------
+
+metrics:
+  - id: selftest.checks_total
+    source: selftest
+    description: "top-level checks counted by selftest.sh"
+    direction: lower_is_worse
+    required: true
+
+  - id: selftest.checks_failed
+    source: selftest
+    description: "top-level checks reported FAIL by selftest.sh"
+    direction: higher_is_worse
+    required: true
+    zero_variance_tier: 3
+
+  - id: selftest.subsuite_checks_total
+    source: selftest
+    description: "sum of the per-sub-suite check counts selftest.sh prints; falls when a sub-suite quietly stops running cases"
+    direction: lower_is_worse
+    required: true
+
+  - id: bench.cases
+    source: bench
+    description: "labeled corpus cases scored by benchmark/gates/bench.sh"
+    direction: lower_is_worse
+    required: true
+
+  - id: bench.recall
+    source: bench
+    description: "share of should-block cases the gates blocked"
+    direction: lower_is_worse
+    required: true
+
+  - id: bench.specificity
+    source: bench
+    description: "share of should-pass cases the gates allowed"
+    direction: lower_is_worse
+    required: true
+
+  - id: bench.fpr
+    source: bench
+    description: "false-positive rate; the number that gets a gate switched off"
+    direction: higher_is_worse
+    required: true
+
+  - id: structure.links_findings
+    source: structure
+    description: "dead relative markdown links, against the ratcheted dead_link_baseline"
+    direction: higher_is_worse
+    required: true
+
+  - id: structure.nonratcheted_findings
+    source: structure
+    description: "findings from the validators that are not ratcheted (frontmatter, manifest, duplicates); any of these already fails CI"
+    direction: higher_is_worse
+    required: true
+
+  # Not required: the eval harness at evals/run.py is being built separately and did not
+  # exist when this file was written, so the collector's probe for it is unconfirmed. It
+  # records `unavailable` with a reason, never 0 — a pass rate of zero and no harness at
+  # all are different facts. Flip required to true once evals/run.py lands and one
+  # observation shows this metric ok.
+  - id: evals.pass_rate
+    source: evals
+    description: "pass rate reported by evals/run.py, if that harness is present"
+    direction: lower_is_worse
+    required: false

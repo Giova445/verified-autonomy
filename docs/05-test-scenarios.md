@@ -5,7 +5,7 @@ writing whatever cases occur to it. This is the antidote to the specific failure
 the agent tests the happy path it just implemented and stops.
 
 Designed to be copied verbatim into a project skill. See
-[`kit/agents/`](kit/) for the packaged form.
+[`kit/agents/`](../kit/) for the packaged form.
 
 ---
 

@@ -49,6 +49,22 @@ hr() { printf '%s\n' "----------------------------------------------------------
 # ---------------------------------------------------------------------------
 # GATE 1 — deny-dangerous.sh   (PreToolUse deny list)
 # ---------------------------------------------------------------------------
+bench_pin() {
+  # B2. Reads the labeled corpus and feeds each payload as a single ADDED diff line.
+  local g="pin-check"
+  local t0=$TP f0=$FP n0=$TN m0=$FN
+  while IFS=$'\t' read -r expect payload label; do
+    case "${expect:-}" in ''|\#*) continue ;; esac
+    local actual
+    if printf -- '--- a/x\n+++ b/setup.sh\n@@ -1,0 +1,1 @@\n+%s\n' "$payload" \
+         | python3 "$HERE/pin-check.py" >/dev/null 2>&1; then actual=pass; else actual=block; fi
+    [ "$expect" = "deny" ] && expect=block || expect=pass
+    record "$expect" "$actual" "$label — $payload" "$g"
+  done < "$HERE/corpus-pin.txt"
+  printf '  %-20s TP=%-3s FN=%-3s TN=%-3s FP=%s\n' "$g" \
+    $((TP-t0)) $((FN-m0)) $((TN-n0)) $((FP-f0))
+}
+
 bench_deny() {
   local g="deny-dangerous" hook="$ROOT/hooks/deny-dangerous.sh"
   local t0=$TP f0=$FP n0=$TN m0=$FN
@@ -355,6 +371,7 @@ bench_stop
 bench_testdelta
 bench_cheatscan
 bench_ambiguity
+bench_pin
 hr
 
 TOTAL=$((TP+FP+TN+FN))

@@ -225,7 +225,7 @@ decided not to."*
 **Claude Code's hooks are a lighter instance of the same architecture** — `PreToolUse` sees
 the full command including pipes and subshells, evaluates deny → ask → allow, and a hook
 deny applies even in `bypassPermissions`. For most projects that is sufficient, and
-[`kit/hooks/deny-dangerous.sh`](kit/hooks/deny-dangerous.sh) is that PDP. Reach for
+[`kit/hooks/deny-dangerous.sh`](../kit/hooks/deny-dangerous.sh) is that PDP. Reach for
 Cedar/OPA when you need policies that are themselves reviewable, versioned, and formally
 checkable across many agents.
 

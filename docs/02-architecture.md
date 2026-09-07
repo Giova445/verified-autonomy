@@ -232,10 +232,22 @@ Context is a degrading resource, not storage.
   Human review at escalation triggers ──► merge
 ```
 
-The critical property: **the gate runner and the evidence bundle live outside the
-agent's write scope.** A `PreToolUse` hook denies `Write`/`Edit` targeting
-`.claude/hooks/**`, `.claude/gates.json`, and CI configuration. Otherwise the agent can
-simply lower the bar — which is precisely the documented reward-hacking behavior.
+> **CORRECTION (2026-08-28).** The paragraph below overclaimed and is kept only so the
+> correction is legible. The gate runner and the evidence bundle do **not** live outside the
+> agent's write scope. They live on the same machine, under the same user, and are protected
+> by a hook that the agent's own runtime enforces. That is a convention inside the trust
+> boundary, not a boundary. See `docs/15-premise-audit.md` and 5.1 below.
+
+**The intent:** a `PreToolUse` hook denies `Write`/`Edit` targeting `.claude/hooks/**`,
+`.claude/gates.json`, and CI configuration, so the agent cannot simply lower the bar — the
+documented reward-hacking behavior.
+
+**The reality:** a deny-list hook stops mistakes and casual shortcuts. It does not resist
+intent. An agent running as your user can edit the hook, shadow the interpreter on `PATH`,
+set `BASH_ENV`, or leave a background process that rewrites state between the check and the
+run. Every guarantee in this section is worth exactly what the OS boundary underneath it is
+worth, and by default there is none. Put the deciding check somewhere the agent holds no
+credential — see 5.1.
 
 ## 7. Applying this to a real repo
 

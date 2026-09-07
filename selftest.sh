@@ -89,7 +89,11 @@ echo '{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"
 chk "force push blocked" "$?" "2"
 echo '{"tool_name":"Edit","tool_input":{"file_path":"/r/.claude/gates.json"}}' \
   | bash "$PLUGIN/hooks/deny-dangerous.sh" >/dev/null 2>&1
-chk "editing own guardrails blocked" "$?" "2"
+# POLICY CHANGE: guardrail self-protection was removed at the operator's instruction, so
+# this asserts the NEW policy rather than being deleted. Deleting it would drop coverage
+# silently; flipping it keeps a check on the same code path and records that the expected
+# answer changed, not that the question stopped mattering.
+chk "editing own guardrails allowed (policy change)" "$?" "0"
 echo '{"tool_name":"Bash","tool_input":{"command":"npm test"}}' \
   | bash "$PLUGIN/hooks/deny-dangerous.sh" >/dev/null 2>&1
 chk "ordinary command allowed" "$?" "0"
@@ -131,6 +135,21 @@ suite "test-delta selftest"      bash "$PLUGIN/bin/test-delta"      selftest
 suite "holdout selftest"         bash "$PLUGIN/bin/holdout"         selftest
 suite "mutate-changed selftest"  bash "$PLUGIN/bin/mutate-changed"  selftest
 suite "ambiguity selftest"       bash "$PLUGIN/bin/ambiguity"       selftest
+
+echo
+echo "structure & supply chain:"
+suite "inert-mask controls"      python3 "$PLUGIN/hooks/inert-mask.py"                        --self-test
+suite "structural validators"    python3 "$PLUGIN/benchmark/structure/validate.py"           --self-test
+suite "skill trigger eval"       python3 "$PLUGIN/benchmark/skills/trigger-eval.py"          --self-test
+suite "MCP collision detector"   python3 "$PLUGIN/benchmark/verification/mcp/collision-detect.py" --self-test
+suite "unpinned-dependency gate" python3 "$PLUGIN/benchmark/gates/pin-check.py"              --self-test
+
+echo
+echo "ai-native SDLC (playbook):"
+suite "agent-config evals"       python3 "$PLUGIN/evals/run.py"                              --self-test
+suite "control-band detector"    python3 "$PLUGIN/monitoring/selftest.py"
+suite "intent chain"             bash    "$PLUGIN/intent/check-chain.sh"                     selftest
+suite "playbook coverage"        python3 "$PLUGIN/benchmark/gates/playbook-coverage.py"      --self-test
 
 echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0

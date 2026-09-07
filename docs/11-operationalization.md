@@ -166,6 +166,7 @@ where a Claude Code session stopped.
   "attempts": { "count": 0, "max": 3 },
   "assumptions": [],
   "evidence": ".claude/evidence/latest.json"
+  // self-reported by the process under test; not a receipt. See 03 and 15.
 }
 ```
 

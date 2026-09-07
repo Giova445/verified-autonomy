@@ -1,0 +1,115 @@
+name: verify
+
+# The repo shipped no CI at all until this file. Everything below could already be run by
+# hand, which is exactly the problem: a gate suite whose own gates are only ever run by the
+# person who wrote them is an honour system.
+#
+# ORDER IS DELIBERATE. Every self-test runs BEFORE the check it belongs to. A validator that
+# has silently stopped discriminating passes a clean tree exactly like a working one, so
+# running the checks first and the controls afterwards (or not at all) would let this
+# workflow report green on a suite that had quietly stopped testing anything.
+
+on:
+  push:
+    branches: [main, "gate/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read          # no write scope: CI must not be able to edit the guardrails it runs
+
+jobs:
+  structure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0   # gates read real git history; depth 1 starves them
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyYAML
+        # monitoring/yamlsub.py is this repo's own minimal YAML parser. The bands
+        # suite cross-checks it against real PyYAML as an oracle. Without PyYAML that
+        # comparison prints "NOT RUN (not counted as a pass)" and the suite reports
+        # 163 checks instead of 164 -- honest, but the differential check, the whole
+        # reason for having an oracle, silently did not run in CI.
+        run: python3 -m pip install --quiet PyYAML==6.0.2
+
+      - name: inert-mask — CONTROLS FIRST
+        run: python3 hooks/inert-mask.py --self-test
+
+      - name: Playbook coverage — CONTROLS FIRST
+        run: python3 benchmark/gates/playbook-coverage.py --self-test
+
+      - name: Playbook coverage — does the map still describe this repo
+        # Runs the map's own Verify commands and compares the check counts it
+        # states against what they report. That is the row that rots: the map said
+        # selftest.sh reports 31 while it reported 34.
+        run: python3 benchmark/gates/playbook-coverage.py
+
+      - name: Structural validators — CONTROLS FIRST
+        run: python3 benchmark/structure/validate.py --self-test
+
+      - name: Structural validators
+        run: python3 benchmark/structure/validate.py
+
+      - name: Control-band detector — CONTROLS FIRST
+        # Run directly, not only through selftest.sh. selftest.sh reports one line
+        # per suite, so a suite whose check COUNT differs between environments looks
+        # identical to one that matches. Running it here puts every check label in
+        # the log, which is what made the 163-vs-164 discrepancy diagnosable.
+        run: BANDS_VERBOSE=1 python3 monitoring/selftest.py
+
+      - name: Skill trigger/routing eval
+        # Aborts on its own if any of its four rankers stops discriminating, so a green
+        # here means the controls held, not merely that no misroute was printed.
+        run: python3 benchmark/skills/trigger-eval.py
+
+      - name: MCP name-collision detector — CONTROLS FIRST
+        run: python3 benchmark/verification/mcp/collision-detect.py --self-test
+
+      - name: Unpinned-dependency gate — CONTROLS FIRST
+        run: python3 benchmark/gates/pin-check.py --self-test
+
+      - name: Unpinned-dependency gate on this PR's diff
+        # Only the commits this PR adds. Scanning the tree would report pre-existing
+        # unpinned installs on every run, which trains people to ignore the check.
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=50 origin "${{ github.base_ref }}"
+          git diff --unified=0 "origin/${{ github.base_ref }}...HEAD" \
+            | python3 benchmark/gates/pin-check.py
+
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0   # gates read real git history; depth 1 starves them
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        # bin/holdout and bin/mutate-changed drive a REAL test runner: they sabotage a
+        # copy of the suite and require it to go red. Without pytest they print
+        # "SKIP no working pytest runner", exit 0, and emit no check count -- which
+        # selftest.sh reports as counted=none rather than crediting a silent pass.
+        # Pinned: benchmark/gates/pin-check.py fails an unpinned install.
+        run: python3 -m pip install --quiet pytest==8.3.5 PyYAML==6.0.2
+      - name: Enforcement wiring
+        run: bash selftest.sh
+
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0   # gates read real git history; depth 1 starves them
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - name: Labeled-corpus benchmark
+        run: bash benchmark/gates/bench.sh

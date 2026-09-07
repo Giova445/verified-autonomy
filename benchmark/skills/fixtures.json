@@ -1,0 +1,27 @@
+{
+  "_doc": "Positive prompts must rank their own skill top-1. Negatives must rank NO skill above the floor. Prompts are written in the vocabulary a user would actually say, NOT by echoing the description back — a fixture that reuses the description's own words tests string matching, not routing.",
+  "positives": {
+    "blast":                  ["what breaks if I change this function", "who calls this endpoint before I edit it", "impact of renaming a shared class"],
+    "brainstorming":          ["I want to add a new feature, where do we start", "lets design the approach before coding", "thinking through a behaviour change"],
+    "dispatching-agents":     ["can we split this across several agents", "is parallelism worth it here", "run these tasks concurrently without collisions"],
+    "executing-plans":        ["work through the implementation plan we wrote", "keep progress on disk so we survive compaction", "implement the plan task by task"],
+    "finishing-a-branch":     ["gates are green, how do we integrate this", "the work is done, what now", "merge or PR this branch"],
+    "gate":                   ["run the gate ladder and show exit codes", "is this actually done", "verify before I claim completion"],
+    "orchestrating":          ["drive the multi task plan through the ledger", "claim file scope before writing", "resume the fan out after compaction"],
+    "pressure-testing":       ["does this rule actually change behaviour", "should we keep this instruction in CLAUDE.md", "audit the rules we added"],
+    "requesting-review":      ["get an adversarial review before the PR", "have someone try to refute these findings", "review this before opening a pull request"],
+    "systematic-debugging":   ["this test fails and I dont know why", "find the root cause of this bug", "unexpected behaviour, need to diagnose"],
+    "test-driven-development":["write the failing test first", "TDD this bugfix", "prove the test fails for the right reason"],
+    "using-worktrees":        ["isolate this feature work", "run two agents without stepping on each other", "set up an isolated checkout"],
+    "verified-autonomy":      ["what does gates.json mean here", "why did the stop hook refuse to end my turn", "explain the mechanical done contract"],
+    "writing-plans":          ["turn this approved spec into tasks", "break the design into dispatchable units", "plan the implementation steps"]
+  },
+  "negatives": [
+    "what is the weather in Lisbon today",
+    "convert this photo to grayscale",
+    "who won the world cup in 1998",
+    "recommend a pasta recipe for tonight",
+    "translate this paragraph into German",
+    "what is my current account balance"
+  ]
+}

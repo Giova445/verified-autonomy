@@ -76,7 +76,7 @@ The guardrail-disabling row is the one people forget, and it is the most importa
 agent that can edit its own gate config has no gates. Enforce at the tool-permission
 layer, not just by regex.
 
-Implementation: [`kit/hooks/deny-dangerous.sh`](kit/hooks/deny-dangerous.sh).
+Implementation: [`kit/hooks/deny-dangerous.sh`](../kit/hooks/deny-dangerous.sh).
 
 ## 4. Prompt injection in the agent's own workflow
 

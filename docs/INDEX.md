@@ -87,7 +87,7 @@ A rule that matters lives in layer 2 or 3. A rule in layer 1 is a preference.
 | 12 | [PR lifecycle](12-pr-lifecycle.md) | The second loop: CI-failure auto-fix, review comments, risk tiering, convergence. |
 | 14 | [Superpowers comparison](14-superpowers-comparison.md) | How this composes with obra/superpowers. Different layers, not competitors. |
 | 13 | [Operator's guide](13-operator-guide.md) | How it works, what to expect, where it breaks, Codex delegation. |
-| — | [kit/](kit/) | Runnable hooks, gate runner, verifier subagent, config templates. |
+| — | [kit/](../kit/) | Runnable hooks, gate runner, verifier subagent, config templates. |
 
 ## Quickstart
 

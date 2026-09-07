@@ -77,6 +77,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install pytest
+        # bin/holdout and bin/mutate-changed drive a REAL test runner: they sabotage a
+        # copy of the suite and require it to go red. Without pytest they print
+        # "SKIP no working pytest runner", exit 0, and emit no check count -- which
+        # selftest.sh reports as counted=none rather than crediting a silent pass.
+        # Pinned: benchmark/gates/pin-check.py fails an unpinned install.
+        run: python3 -m pip install --quiet pytest==8.3.5
+
       - name: Eval positive controls — CONTROLS FIRST
         # Every eval is shown FAILING against a deliberately broken fixture, and where a
         # passing control is declared, PASSING against a correct one. An eval that cannot

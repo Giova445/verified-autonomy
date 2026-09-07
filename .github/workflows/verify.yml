@@ -29,6 +29,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install PyYAML
+        # monitoring/yamlsub.py is this repo's own minimal YAML parser. The bands
+        # suite cross-checks it against real PyYAML as an oracle. Without PyYAML that
+        # comparison prints "NOT RUN (not counted as a pass)" and the suite reports
+        # 163 checks instead of 164 -- honest, but the differential check, the whole
+        # reason for having an oracle, silently did not run in CI.
+        run: python3 -m pip install --quiet PyYAML==6.0.2
+
       - name: inert-mask — CONTROLS FIRST
         run: python3 hooks/inert-mask.py --self-test
 
@@ -81,7 +89,7 @@ jobs:
         # "SKIP no working pytest runner", exit 0, and emit no check count -- which
         # selftest.sh reports as counted=none rather than crediting a silent pass.
         # Pinned: benchmark/gates/pin-check.py fails an unpinned install.
-        run: python3 -m pip install --quiet pytest==8.3.5
+        run: python3 -m pip install --quiet pytest==8.3.5 PyYAML==6.0.2
       - name: Enforcement wiring
         run: bash selftest.sh
 

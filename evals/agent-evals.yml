@@ -83,7 +83,7 @@ jobs:
         # "SKIP no working pytest runner", exit 0, and emit no check count -- which
         # selftest.sh reports as counted=none rather than crediting a silent pass.
         # Pinned: benchmark/gates/pin-check.py fails an unpinned install.
-        run: python3 -m pip install --quiet pytest==8.3.5
+        run: python3 -m pip install --quiet pytest==8.3.5 PyYAML==6.0.2
 
       - name: Eval positive controls — CONTROLS FIRST
         # Every eval is shown FAILING against a deliberately broken fixture, and where a

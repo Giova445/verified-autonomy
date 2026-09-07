@@ -68,7 +68,8 @@ def report(records, bad_lines):
     """Return (lines, counts). Pure: takes parsed records, returns text."""
     out = []
     n = len(records)
-    counts = {"crashed": 0, "unavailable": 0, "moved": 0, "slower": 0, "malformed": len(bad_lines)}
+    counts = {"crashed": 0, "unavailable": 0, "moved": 0, "slower": 0, "drift": 0,
+              "malformed": len(bad_lines)}
 
     out.append(f"observations: {n}")
     if bad_lines:
@@ -145,6 +146,30 @@ def report(records, bad_lines):
         counts["slower"] = len(slower)
         out += slower or ["  nothing materially slower"]
 
+    # ---- slow drift across the whole window
+    # The DURATION section above compares consecutive observations only, so a source that
+    # creeps up a little every commit never trips it. Real example from this repo's own
+    # history: selftest went 44.0s -> 69.4s over eleven observations, 1.58x, while no
+    # single step reached 1.5x. Pairwise comparison cannot see a trend; this can.
+    out.append("")
+    drift = []
+    if n < 3:
+        out.append(f"DRIFT — needs 3 observations, have {n}. Not computed.")
+    else:
+        out.append(f"DRIFT across all {n} observations (oldest vs latest, >{SLOWER_FACTOR}x)")
+        for k in sorted(_sources(latest)):
+            first = next((( _sources(r).get(k) or {}).get("seconds") for r in records
+                          if isinstance((_sources(r).get(k) or {}).get("seconds"), (int, float))
+                          and (_sources(r).get(k) or {}).get("seconds", 0) > 0), None)
+            last = (_sources(latest).get(k) or {}).get("seconds")
+            if not isinstance(first, (int, float)) or not isinstance(last, (int, float)):
+                continue
+            if last >= SLOWER_FLOOR_S and first > 0 and last / first >= SLOWER_FACTOR:
+                drift.append(f"  {k}: {first:.1f}s -> {last:.1f}s ({last / first:.1f}x "
+                             f"across the window, no single step flagged)")
+        counts["drift"] = len(drift)
+        out += drift or ["  no source drifted materially across the window"]
+
     # ---- what to fix, ordered
     out.append("")
     out.append("WHAT TO IMPROVE, most actionable first")
@@ -153,6 +178,9 @@ def report(records, bad_lines):
     todo += [f"  make '{k}' measurable — {v.get('reason', '')[:90]}" for k, v in unavail]
     if counts["slower"]:
         todo.append(f"  investigate {counts['slower']} source(s) that got materially slower")
+    if counts["drift"]:
+        todo.append(f"  investigate {counts['drift']} source(s) drifting slower across the "
+                    f"window — no single step was large enough to flag")
     if n < 3:
         todo.append(f"  accumulate history: {n} observation(s); "
                     f"detect.py needs more before any band can fire")
@@ -183,6 +211,7 @@ def main(argv=None):
 EXPECTED_CONTROLS = {
     "crash-surfaced", "unavailable-surfaced", "movement-needs-two", "regression-surfaced",
     "slower-surfaced", "malformed-not-skipped", "clean-history-says-so",
+    "drift-surfaced", "drift-needs-three",
 }
 
 
@@ -244,6 +273,16 @@ def self_test():
           [_rec("t1", sources={"selftest": {"status": "ok", "exit_code": 0, "seconds": 20.0}}),
            _rec("t2", sources={"selftest": {"status": "ok", "exit_code": 0, "seconds": 22.0}})],
           [], "20.0s -> 22.0s", want=False)
+
+    # Slow creep: three steps each under the pairwise threshold, 2.4x overall.
+    creep = [_rec(f"t{i}", sources={"selftest": {"status": "ok", "exit_code": 0,
+                                                 "seconds": sec}})
+             for i, sec in enumerate([25.0, 33.0, 44.0, 60.0], 1)]
+    check("drift-surfaced", creep, [], "selftest: 25.0s -> 60.0s (2.4x across the window")
+    check("drift-surfaced (no pairwise flag on the same data)", creep, [],
+          "nothing materially slower")
+    check("drift-needs-three", creep[:2], [],
+          "DRIFT — needs 3 observations, have 2. Not computed.")
 
     # A history line that does not parse is a finding. Silently skipping it would let a
     # corrupted record read as a shorter, healthier history.

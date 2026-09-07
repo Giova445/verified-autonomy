@@ -139,7 +139,7 @@ not read. A plan whose tasks are prose produces no ledger and the run has nowher
 | **Mechanism** | `bin/test-delta` — production code changed, so tests must have **grown**. Built because a gate enforcing tests *pass* never enforced tests *exist*, and reported ALL GATES GREEN over four pre-existing tests. |
 | **Mechanism** | `bin/mutate-changed`, `bin/holdout` — mutation on the diff; a suite in a directory the agent cannot reach |
 | **Mechanism** | `hooks/stop-gate.sh` on `Stop`/`SubagentStop` — **exit 2 while red**, so the turn does not end and stderr returns as the reason. Exit 2 blocks even against a JSON `permissionDecision: "allow"`. Fails closed: an unparseable `.claude/gates.json` is `REFUSING TO CERTIFY`; a stubbed `bin/verify` is detected. |
-| **Verify** | `bash selftest.sh` → 36 checks, exit 0 (~40s) |
+| **Verify** | `bash selftest.sh` → 36 checks, exit 0 (~70s) |
 | **FSM** | `RED → GREEN → REFACTOR → VERIFY` |
 
 Whether the playbook puts the gate ladder in stage 4 or stage 5 is not knowable from here.
@@ -198,7 +198,7 @@ something else, this section is still the repo's adjudication layer; only its he
 | **Layer 2 part** | `benchmark/structure/validate.py` checks manifest↔script correspondence in **both** directions: a row's script must exist, the script's own `# gate:` header must name the row claiming it, and a verification script no row claims is flagged as an orphan. Unbacked rows and dead links are ratcheted against a recorded baseline. |
 | **Not implemented** | Nothing collects the [`08-adoption-playbook.md`](08-adoption-playbook.md) §3 metrics — first-pass gate rate, rework loops, CI-after-local-green failure rate. No telemetry, no run history for those. That table is a specification of what to measure. |
 | **Reporting half** | [`monitoring/digest.py`](../monitoring/digest.py) — reads the observation history and reports what crashed, what is unmeasurable, what moved and what got slower. A reporter, not a gate: it exits 0 whatever it finds. `detect.py` answers one narrow banded question; this answers "what should I fix next". |
-| **Verify** | `python3 monitoring/selftest.py` → 164 checks; `python3 monitoring/digest.py --self-test` → 9 checks; and for the manifest half, `python3 benchmark/structure/validate.py` |
+| **Verify** | `python3 monitoring/selftest.py` → 164 checks; `python3 monitoring/digest.py --self-test` → 12 checks; and for the manifest half, `python3 benchmark/structure/validate.py` |
 
 Note the interesting seam: `bands.yaml`'s 2σ tier writes its diagnosis **as an `intent.md`**,
 which feeds Stage 1. That closes the loop, and it is the one place a stage boundary in this

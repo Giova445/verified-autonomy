@@ -40,6 +40,9 @@ jobs:
       - name: inert-mask — CONTROLS FIRST
         run: python3 hooks/inert-mask.py --self-test
 
+      - name: Observation digest — CONTROLS FIRST
+        run: python3 monitoring/digest.py --self-test
+
       - name: Playbook coverage — CONTROLS FIRST
         run: python3 benchmark/gates/playbook-coverage.py --self-test
 

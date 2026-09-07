@@ -420,6 +420,24 @@
       "note": "7 of 42 prompts misroute under all four rankers; no description pair reaches the 0.45 collision threshold (max 0.218). Reports a failure SET, not a percentage: rank@1 moved 69.0->83.3% on tokenizer choice alone."
     },
     {
+      "gate": "N10 observation digest",
+      "status": "VERIFIED",
+      "verified_on": "2026-09-07",
+      "subsystems": [
+        "observation_history",
+        "crash_reporting",
+        "duration_tracking"
+      ],
+      "pinned_versions": {
+        "python": "3.14.7"
+      },
+      "script": [
+        "monitoring/digest.py",
+        "monitoring/history/observations.jsonl"
+      ],
+      "note": "reads monitoring/history/observations.jsonl and reports what crashed, what cannot be measured, what moved and what got slower. REPORTER, not a gate: exits 0 whatever it finds, so nothing is tempted to suppress a finding to stay green. 9 hermetic controls, control names declared in EXPECTED_CONTROLS independently of the calls; deleting a control fails the suite (sabotage-verified). Refuses to compute movement or duration on a single observation."
+    },
+    {
       "gate": "N2 structural validation",
       "status": "VERIFIED",
       "verified_on": "2026-09-01",

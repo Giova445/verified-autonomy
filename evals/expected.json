@@ -129,7 +129,7 @@
         "benchmark/gates/pin-check.py",
         "--self-test"
       ],
-      "checks": 9
+      "checks": 11
     }
   }
 }

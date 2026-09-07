@@ -75,7 +75,16 @@ SKIP_MARKER = "pin-check: allow"   # explicit, per-line, and greppable
 # excluded by exact path, hardcoded — NOT by a marker any file could add to itself, which
 # would be a general escape hatch wearing a narrow disguise. CONTROL 4 asserts the
 # exclusion does not leak: the identical line in any other path is still caught.
-SELF = "benchmark/gates/pin-check.py"
+# Both files that CONTAIN every pattern by construction: the source that defines the rules,
+# and the labeled corpus whose deny class is deliberately-unpinned fixtures. Excluded by
+# exact path, hardcoded -- NOT by a marker any file could add to itself, which would be a
+# general escape hatch wearing a narrow disguise. CONTROL 4 asserts the exclusion does not
+# leak: the identical line in any other path, including a lookalike, is still caught.
+#
+# corpus-pin.txt was added after CI caught it. The PR-diff step -- which only runs on a
+# pull_request event, so it had never fired -- flagged 12 of its own fixtures as unpinned
+# installs. A gate that fails its own test data is one somebody switches off.
+SELF = frozenset({"benchmark/gates/pin-check.py", "benchmark/gates/corpus-pin.txt"})
 
 def _inert_before(body):
     """Index of the first character that cannot execute, or None.
@@ -111,7 +120,7 @@ def scan_diff(text):
     for line in text.splitlines():
         if line.startswith("+++ b/"):
             path = line[6:]; continue
-        if path == SELF:
+        if path in SELF:
             continue
         if not line.startswith("+") or line.startswith("+++"):
             continue
@@ -187,9 +196,11 @@ def self_test(fp_budget=10.0, sample=60):
 
     print("  CONTROL 4 — the self-exclusion is narrow")
     hdr = "--- a/x\n+++ b/%s\n@@ -1,0 +1,1 @@\n+pip install requests\n"
-    check("its own source is skipped", len(scan_diff(hdr % SELF)), 0)
+    for own in sorted(SELF):
+        check(f"skipped: {own}", len(scan_diff(hdr % own)), 0)
     check("the same line elsewhere is still caught", len(scan_diff(hdr % "src/setup.sh")), 1)
-    check("a lookalike path is not skipped", len(scan_diff(hdr % ("x/" + SELF))), 1)
+    for own in sorted(SELF):
+        check(f"lookalike not skipped: x/{own}", len(scan_diff(hdr % ("x/" + own))), 1)
 
     print(f"  CONTROL 3 — false positives on this repo's real commits (budget {fp_budget}%)")
     revs = subprocess.run(["git", "rev-list", "--max-count", str(sample), "HEAD"],

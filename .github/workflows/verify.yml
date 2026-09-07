@@ -38,6 +38,13 @@ jobs:
       - name: Structural validators
         run: python3 benchmark/structure/validate.py
 
+      - name: Control-band detector — CONTROLS FIRST
+        # Run directly, not only through selftest.sh. selftest.sh reports one line
+        # per suite, so a suite whose check COUNT differs between environments looks
+        # identical to one that matches. Running it here puts every check label in
+        # the log, which is what made the 163-vs-164 discrepancy diagnosable.
+        run: BANDS_VERBOSE=1 python3 monitoring/selftest.py
+
       - name: Skill trigger/routing eval
         # Aborts on its own if any of its four rankers stops discriminating, so a green
         # here means the controls held, not merely that no misroute was printed.

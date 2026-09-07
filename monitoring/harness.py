@@ -20,8 +20,19 @@ import bandconf, collect, detect, yamlsub  # noqa: E402,F401
 SCORE = {"pass": 0, "fail": 0}
 FAILURES = []
 
+# Emit one line per check when set. chk() is silent on a pass, so a suite whose check
+# COUNT differs between two environments looks identical in both logs -- which is exactly
+# how a 163-vs-164 discrepancy stayed undiagnosable. Labels make the two runs diffable.
+VERBOSE = bool(os.environ.get("BANDS_VERBOSE"))
+
+
+def _seen(label, ok):
+    if VERBOSE:
+        print(f"    {'ok  ' if ok else 'FAIL'} {label}")
+
 
 def chk(label, got, want):
+    _seen(label, got == want)
     if got == want:
         SCORE["pass"] += 1
     else:
@@ -34,6 +45,7 @@ def refuses(label, fn, *exc):
     try:
         fn()
     except exc:
+        _seen(label, True)
         SCORE["pass"] += 1
         return
     except Exception as other:  # noqa: BLE001 - the wrong exception is still a failure

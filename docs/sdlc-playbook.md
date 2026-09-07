@@ -109,7 +109,7 @@ not read. A plan whose tasks are prose produces no ledger and the run has nowher
 | **Mechanism** | `bin/test-delta` — production code changed, so tests must have **grown**. Built because a gate enforcing tests *pass* never enforced tests *exist*, and reported ALL GATES GREEN over four pre-existing tests. |
 | **Mechanism** | `bin/mutate-changed`, `bin/holdout` — mutation on the diff; a suite in a directory the agent cannot reach |
 | **Mechanism** | `hooks/stop-gate.sh` on `Stop`/`SubagentStop` — **exit 2 while red**, so the turn does not end and stderr returns as the reason. Exit 2 blocks even against a JSON `permissionDecision: "allow"`. Fails closed: an unparseable `.claude/gates.json` is `REFUSING TO CERTIFY`; a stubbed `bin/verify` is detected. |
-| **Verify** | `bash selftest.sh` → 31 checks, exit 0 (~40s) |
+| **Verify** | `bash selftest.sh` → 35 checks, exit 0 (~40s) |
 | **FSM** | `RED → GREEN → REFACTOR → VERIFY` |
 
 Whether the playbook puts the gate ladder in stage 4 or stage 5 is not knowable from here.
@@ -197,6 +197,31 @@ between `governance.yaml` and any code that reads it is the whole of Stage 5c mi
 deployment substrate, and closing it needs a substrate that does not exist here. Anyone wiring
 this into a real pipeline should treat `governance.yaml` as a specification to implement
 against, not as a control that is running.
+
+### Stage 6b — recurring codebase scans
+
+Not implemented. The playbook's 6b is Claude Security running scheduled scans without a
+human in the invocation path, each finding validated and carrying a confidence rating,
+bounded ones arriving as a suggested patch and larger ones as an `intent.md`.
+
+That is a hosted product surface, not something a repository can contain. What exists here
+covers only the *downstream* half: a finding that becomes an `intent.md` flows through
+`intent/` and the PR gate like any other. The scanning half, the scheduling, the confidence
+rating and the dismissal record with reasons, is absent.
+
+Nearest thing present: `benchmark/gates/pin-check.py` and `hooks/deny-dangerous.sh` catch
+two narrow classes on a diff. Neither is a scan, neither is scheduled, and calling them 6b
+would be the overclaim this document exists to avoid.
+
+### Stage 6c — Claude on call
+
+Not implemented. The playbook's 6c is Claude as a member of incident channels under its own
+identity, first-responding to every message, with the channel as the audit trail and MCP
+access to verify metrics and write a post-mortem.
+
+Needs a Slack or Teams workspace, an installed app and an identity. None is a repository
+artifact. `monitoring/detect.py` emits what *would* be invoked on a band breach and stops
+there — that is the trigger 6c would consume, not 6c.
 
 ### The managed-settings admin path
 

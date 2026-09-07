@@ -149,6 +149,7 @@ echo "ai-native SDLC (playbook):"
 suite "agent-config evals"       python3 "$PLUGIN/evals/run.py"                              --self-test
 suite "control-band detector"    python3 "$PLUGIN/monitoring/selftest.py"
 suite "intent chain"             bash    "$PLUGIN/intent/check-chain.sh"                     selftest
+suite "playbook coverage"        python3 "$PLUGIN/benchmark/gates/playbook-coverage.py"      --self-test
 
 echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-09-04",
+  "generated": "2026-09-07",
   "environment": {
     "claude_code": "2.1.250",
     "python": "3.14.3",
@@ -542,6 +542,24 @@
         "intent/check-chain.sh"
       ],
       "note": "playbook Stages 1-3. 16 control checks. PARTIAL deliberately: the checker decides field PRESENCE and work-order parseability, which is the mechanically decidable part. It says nothing about whether the content is true or sufficient \u2014 a chain of empty headings passes. Recorded rather than overstated."
+    },
+    {
+      "gate": "N9 playbook coverage",
+      "status": "VERIFIED",
+      "verified_on": "2026-09-07",
+      "subsystems": [
+        "sdlc_playbook_map",
+        "stage_coverage",
+        "verify_commands"
+      ],
+      "pinned_versions": {
+        "python": "3.14.7"
+      },
+      "script": [
+        "benchmark/gates/playbook-coverage.py",
+        "docs/sdlc-playbook.md"
+      ],
+      "note": "checks that docs/sdlc-playbook.md still describes the repo that exists: every playbook stage mapped or excused, every Verify command exits 0, every stated check count matches, and no stage claims enforcement while naming only markdown. 4 controls. Found on first run: stages 6b and 6c silently uncovered, and the map stating selftest.sh reports 31 checks when it reports 34. Decides presence, exit codes and arithmetic only \u2014 not whether the prose is true."
     }
   ],
   "unbacked_baseline": {

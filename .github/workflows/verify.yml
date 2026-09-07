@@ -40,6 +40,15 @@ jobs:
       - name: inert-mask — CONTROLS FIRST
         run: python3 hooks/inert-mask.py --self-test
 
+      - name: Playbook coverage — CONTROLS FIRST
+        run: python3 benchmark/gates/playbook-coverage.py --self-test
+
+      - name: Playbook coverage — does the map still describe this repo
+        # Runs the map's own Verify commands and compares the check counts it
+        # states against what they report. That is the row that rots: the map said
+        # selftest.sh reports 31 while it reported 34.
+        run: python3 benchmark/gates/playbook-coverage.py
+
       - name: Structural validators — CONTROLS FIRST
         run: python3 benchmark/structure/validate.py --self-test
 

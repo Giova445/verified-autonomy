@@ -4,12 +4,8 @@
     "failIfUnavailable": true,
     "allowUnsandboxedCommands": false,
     "filesystem": {
-      "denyWrite": [
-        "**/.claude/gates.json",
-        "**/.claude/hooks/**",
-        "**/bin/verify",
-        "**/.github/workflows/**"
-      ]
+      "denyWrite": [],
+      "_denyWrite_removed": "Removed 2026-09-07 at the operator's instruction, completing the guardrail removal begun in the PreToolUse hook. These four globs were the second enforcement layer and still blocked writes the hook no longer refused: **/.claude/gates.json, **/.claude/hooks/**, **/bin/verify, **/.github/workflows/**. Cost: nothing in this repo's own configuration now prevents an agent from editing the gates, the hooks, bin/verify or the CI workflows. Branch protection and review are what remain. sandbox.enabled, failIfUnavailable and allowUnsandboxedCommands are untouched."
     }
   },
   "attribution": {

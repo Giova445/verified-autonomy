@@ -1,0 +1,97 @@
+name: agent-evals
+# eval-suite: agent-evals
+#
+# Stage 4b — continuous evals over the AGENT CONFIGURATION, as distinct from the gates.
+#
+# verify.yml runs the gate suite: it asks whether this repo's enforcement CODE works. This
+# workflow asks the other question — whether the configuration that tells an agent how to
+# behave still says what it is supposed to say. The two change for different reasons and by
+# different hands, so they are gated separately.
+#
+# WHY IT IS ALSO ON A SCHEDULE. Every path filter below is a bet about which edits can
+# affect the configuration, and that bet is wrong in at least one way nobody has thought of
+# yet. A weekly run catches drift that arrives without touching a watched path: an action
+# tag repointed at new code, a toolchain bump changing what a suite counts, a plugin cache
+# updated out of band. A suite that runs only when someone edits a watched file is an
+# honour system with a YAML file in front of it.
+#
+# ORDER IS DELIBERATE, and evals/run.py enforces it on this very file: the controls step
+# runs BEFORE the evals step. A check that has silently stopped discriminating passes a
+# clean tree exactly like a working one, so running the evals first and their controls
+# afterwards would report green on a suite that had quietly stopped testing anything.
+#
+# ACTIONS ARE PINNED BY COMMIT SHA, not by tag. benchmark/gates/pin-check.py fails a diff
+# that adds a tag-pinned action and evals/run.py fails a tree that contains one, because a
+# tag is mutable: the code behind v4 can be replaced without the ref changing.
+
+on:
+  schedule:
+    # Mondays 06:17 UTC. Off the hour on purpose — the top of the hour is the most
+    # contended scheduling slot on shared runners and takes the longest queue delay.
+    - cron: "17 6 * * 1"
+  push:
+    branches: [main, "gate/**"]
+    paths:
+      - 'CLAUDE.md'
+      - 'AGENTS.md'
+      - 'skills/**'
+      - 'hooks/**'
+      - '.claude/**'
+      - '.claude-plugin/**'
+      - 'agents/**'
+      - 'evals/**'
+      - 'kit/**'
+      - 'benchmark/gates/corpus-deny.txt'
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - 'CLAUDE.md'
+      - 'AGENTS.md'
+      - 'skills/**'
+      - 'hooks/**'
+      - '.claude/**'
+      - '.claude-plugin/**'
+      - 'agents/**'
+      - 'evals/**'
+      - 'kit/**'
+      - 'benchmark/gates/corpus-deny.txt'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read          # no write scope: CI must not be able to edit the guardrails it runs
+
+concurrency:
+  group: agent-evals-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+
+      - name: Eval positive controls — CONTROLS FIRST
+        # Every eval is shown FAILING against a deliberately broken fixture, and where a
+        # passing control is declared, PASSING against a correct one. An eval that cannot
+        # fail is not an eval; an eval that always fails detects nothing either.
+        #
+        # This step also fails on drift between EXPECTED_EVAL_IDS and the registry, so a
+        # deleted eval stops the run here rather than shrinking the denominator below.
+        run: python3 evals/run.py --self-test
+
+      - name: Agent-configuration evals
+        run: python3 evals/run.py
+
+      - name: Registry manifest
+        # Last, not first. An earlier draft put this step at the top for a fast fail and
+        # evals/run.py's own ci-controls-run-first check rejected the workflow: it ran
+        # run.py before run.py's controls. The rule was right and the ordering was wrong,
+        # so the workflow moved. The fast-fail is not lost — --self-test above already
+        # fails on the same ID drift this prints.
+        if: always()
+        run: python3 evals/run.py --list

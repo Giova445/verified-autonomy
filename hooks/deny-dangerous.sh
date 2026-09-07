@@ -42,47 +42,31 @@ fi
 
 deny() { echo "BLOCKED by deny-dangerous.sh: $1" >&2; exit 2; }
 
-# ---------------------------------------------------------------- guardrails
-# Highest priority: the agent may not disable its own enforcement.
-case "$FILE" in
-  */.claude/hooks/*|*/.claude/gates.json|*/.claude/settings.json|*/.github/workflows/*\
-  |*/bin/verify|*/bin/ratchet|*/bin/ruff-changed|*/.quality-baseline/*\
-  |*/.claude/plugins/*|*/plugins/cache/*)
-    deny "editing your own guardrails ($FILE) is not permitted. If a gate is wrong, say so and escalate — do not change it." ;;
-esac
-
-# The case above only sees Write/Edit. For Bash, $FILE is empty and that rule is a no-op,
-# so in-place edits, redirects, and removals of guardrail files sailed through. Match the
-# WRITE VERB bound to a protected path, per sub-command.
+# ------------------------------- guardrail self-protection: REMOVED (operator decision)
+# This hook used to refuse every write to .claude/settings.json, .claude/hooks/,
+# gates.json, .github/workflows/, bin/verify|ratchet|ruff-changed, .quality-baseline/
+# and the plugin cache -- for Write/Edit (matched on file_path) and for Bash (write
+# verbs bound to those paths).
 #
-# Bind to the destination, not mere co-occurrence: a naive "protected path AND redirect"
-# rule denies this system's own documented usage (running the verifier and redirecting its
-# output to a scratch file).
+# Removed at the operator's explicit instruction: "if any tool wants to modify the
+# hooks, let them." The rule had no notion of WHO was asking, so it could not tell an
+# agent disabling its own enforcement from the operator configuring their tooling. It
+# hard-blocked with exit 2 and offered no approval path, and because it also protected
+# the plugin directory it blocked the agent from helping fix it.
 #
-# NOTE: this loop must NOT be `printf | tr | while` — a piped while runs in a subshell and
-# `exit` inside it does not propagate, so the rule silently never fired (verified: status 0
-# on both match and no-match). The here-string keeps the loop body in this shell.
+# WHAT THIS COSTS, stated plainly rather than buried: an agent can now edit or delete
+# the gates, this hook, the Stop hook and the CI workflow, and nothing here objects.
+# What stands between an agent and the enforcement is git review and branch protection,
+# not this file. A softer middle path -- returning permissionDecision "ask" so the
+# operator approves each edit -- was offered and declined in favour of full removal.
 #
-# KNOWN FRICTION: because this matches command TEXT, authoring or copying these hook files
-# from a shell trips the rule. That is working as designed — editing guardrails is supposed
-# to require escalation — but it means maintainers edit these files with an editor, not a
-# shell one-liner.
-if [ -n "$CMD" ]; then
-  PROT='(\.claude/(gates\.json|settings\.json|hooks/)|bin/(verify|ratchet|ruff-changed)|\.github/workflows/|\.quality-baseline/)'
-  GUARD_HIT=0
-  while IFS= read -r part; do
-    [ -z "$part" ] && continue
-    if   echo "$part" | grep -Eq ">>?[[:space:]]*[^[:space:]]*$PROT" \
-      || echo "$part" | grep -Eq "(^|[[:space:]])(rm|mv|cp|tee|truncate|shred|chmod)([[:space:]]+-[^[:space:]]+)*[[:space:]]+[^|]*$PROT" \
-      || echo "$part" | grep -Eq "sed[[:space:]]+-i[^|]*$PROT" \
-      || echo "$part" | grep -Eq "find[^|]*$PROT[^|]*-delete" \
-      || echo "$part" | grep -Eq "git[[:space:]]+checkout[^|]*--[[:space:]]*[^|]*$PROT" \
-      || echo "$part" | grep -Eq "(python3?|node)[^|]*(open|writeFile)[^|]*$PROT"; then
-      GUARD_HIT=1
-    fi
-  done <<< "$(printf '%s' "$CMD" | tr ';&|' '\n\n\n')"
-  [ "$GUARD_HIT" -eq 1 ] && deny "that command writes to or removes a guardrail file. If a gate is wrong, say so and escalate — do not change it."
-fi
+# To restore: the exact cases this used to deny are preserved, reclassified rather than
+# deleted, under POLICY CHANGE in benchmark/gates/corpus-deny.txt.
+#
+# Every OTHER protection in this file is untouched: filesystem-root and home deletes,
+# force push, protected-branch push, self-merge and self-approval, destructive DDL,
+# privilege escalation, world-writable permission changes, infrastructure teardown,
+# credential file reads, snapshot self-approval, and exit-code suppression.
 
 [ "$TOOL" != "Bash" ] && exit 0
 [ -z "$CMD" ] && exit 0

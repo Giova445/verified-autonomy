@@ -1,0 +1,135 @@
+{
+  "_doc": [
+    "PINNED EXPECTATIONS. Every number here was read off a passing run of the artifact it",
+    "describes and then written down BY HAND. Nothing in the eval suite regenerates this",
+    "file: a suite that recomputes its own expectations cannot notice them changing, which",
+    "is the whole failure this file exists to catch.",
+    "",
+    "When a number here is wrong, exactly one of two things happened. Either the artifact",
+    "gained checks (raise the number, in the same commit that added them, and say so), or",
+    "it lost checks (do not touch this file \u2014 find out why it shrank).",
+    "",
+    "The eval IDs themselves are NOT declared here. They are declared as a literal set in",
+    "evals/run.py, so deleting a row below removes an eval from the registry and the run",
+    "fails on the missing ID instead of silently getting smaller."
+  ],
+  "deny_corpus": {
+    "_doc": "Row counts in benchmark/gates/corpus-deny.txt, per label class. bench.sh reads the same corpus but derives its denominator from it, so deleting rows leaves bench.sh green. Pinning the count here makes a shrinking corpus a failure in its own right.",
+    "should_block": 31,
+    "should_pass": 42,
+    "_policy_change": "2026-09-04: 11 guardrail-edit rows moved deny -> allow when guardrail self-protection was removed at the operator's instruction. Counts re-pinned to match. The rows were reclassified in place, not deleted, so the total is unchanged at 73 and the shift is visible in the diff."
+  },
+  "suites": {
+    "_doc": "Each artifact's own control suite: the command that runs it, and the number of checks it reported on the run that pinned it. Exit 0 is not enough \u2014 a suite that exits 0 having verified nothing is the fabricated receipt this repo exists to stop, and this repo has already shipped a silently-shrinking suite twice.",
+    "selftest.sh": {
+      "cmd": [
+        "bash",
+        "selftest.sh"
+      ],
+      "checks": 34
+    },
+    "tests/orchestration-test.sh": {
+      "cmd": [
+        "bash",
+        "tests/orchestration-test.sh"
+      ],
+      "checks": 80
+    },
+    "bin/ledger": {
+      "cmd": [
+        "bash",
+        "bin/ledger",
+        "selftest"
+      ],
+      "checks": 43
+    },
+    "bin/escalate": {
+      "cmd": [
+        "bash",
+        "bin/escalate",
+        "selftest"
+      ],
+      "checks": 25
+    },
+    "bin/worktree-guard": {
+      "cmd": [
+        "bash",
+        "bin/worktree-guard",
+        "selftest"
+      ],
+      "checks": 39
+    },
+    "bin/test-delta": {
+      "cmd": [
+        "bash",
+        "bin/test-delta",
+        "selftest"
+      ],
+      "checks": 15
+    },
+    "bin/holdout": {
+      "cmd": [
+        "bash",
+        "bin/holdout",
+        "selftest"
+      ],
+      "checks": 16
+    },
+    "bin/mutate-changed": {
+      "cmd": [
+        "bash",
+        "bin/mutate-changed",
+        "selftest"
+      ],
+      "checks": 11
+    },
+    "bin/ambiguity": {
+      "cmd": [
+        "bash",
+        "bin/ambiguity",
+        "selftest"
+      ],
+      "checks": 12
+    },
+    "hooks/inert-mask.py": {
+      "cmd": [
+        "python3",
+        "hooks/inert-mask.py",
+        "--self-test"
+      ],
+      "checks": 12
+    },
+    "benchmark/structure/validate.py": {
+      "cmd": [
+        "python3",
+        "benchmark/structure/validate.py",
+        "--self-test"
+      ],
+      "checks": 4
+    },
+    "benchmark/skills/trigger-eval.py": {
+      "cmd": [
+        "python3",
+        "benchmark/skills/trigger-eval.py",
+        "--self-test"
+      ],
+      "checks": 8
+    },
+    "benchmark/verification/mcp/collision-detect.py": {
+      "cmd": [
+        "python3",
+        "benchmark/verification/mcp/collision-detect.py",
+        "--self-test"
+      ],
+      "checks": 6
+    },
+    "benchmark/gates/pin-check.py": {
+      "cmd": [
+        "python3",
+        "benchmark/gates/pin-check.py",
+        "--self-test"
+      ],
+      "checks": 9
+    }
+  }
+}

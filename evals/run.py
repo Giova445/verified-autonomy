@@ -25,6 +25,7 @@ expected.json, an unreadable configuration file, a suite that will not run: all 
 None of them is "nothing to check here".
 """
 import contextlib
+import json
 import os
 import sys
 import tempfile
@@ -32,7 +33,8 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from lib import ROOT, copy_tree, load_json  # noqa: E402
-import evals_ci                             # noqa: E402
+import evals_ci
+import evals_docs                             # noqa: E402
 import evals_config                         # noqa: E402
 import evals_hooks                          # noqa: E402
 import evals_suites                         # noqa: E402
@@ -45,6 +47,7 @@ EXPECTED_PATH = "evals/expected.json"
 # alongside it, leaving a smaller suite reporting a perfect score. Adding an eval means
 # adding its ID here, in the same commit.
 EXPECTED_EVAL_IDS = frozenset({
+    "bench-readme-current",
     # instruction surface
     "skill-usage-triggers",
     "config-name-collisions",
@@ -90,7 +93,8 @@ def build_registry():
                     f"can be checked against anything"]
     registry, duplicates = {}, []
     for item in (evals_config.EVALS + evals_hooks.build(expected)
-                 + evals_ci.EVALS + evals_suites.build(expected)):
+                 + evals_ci.EVALS + evals_suites.build(expected)
+                 + evals_docs.build()):
         if item.id in registry:
             duplicates.append(f"duplicate eval ID '{item.id}'")
         registry[item.id] = item
@@ -115,7 +119,7 @@ def _rule():
     print("-" * 74)
 
 
-def run_all(only=None):
+def run_all(only=None, json_out=None):
     registry, fatal = build_registry()
     print("agent-configuration evals — Stage 4b")
     print(f"repo: {ROOT}")
@@ -162,6 +166,30 @@ def run_all(only=None):
     print()
     ok = not failed and not problems
     print("EVALS PASSED" if ok else "EVALS FAILED")
+
+    # Machine-readable result for monitoring/collect.py, whose source_evals() calls
+    # `evals/run.py --json <file>` and falls back to the last JSON object on stdout.
+    # That contract was documented on the collector side and never implemented here, so
+    # evals.pass_rate -- the metric bands.yaml most wants to watch -- recorded
+    # "unavailable" on every observation. The collector was right to refuse a number
+    # rather than invent one; the missing half was this.
+    #
+    # `filtered` is emitted because a --only run is not a suite-wide pass rate. A consumer
+    # that ignores it and records 1/1 as 100% is recording something else.
+    if json_out:
+        payload = {
+            "schema": "verified-autonomy/evals/result@1",
+            "passed": passed,
+            "total": total,
+            "pass_rate": (passed / total) if total else None,
+            "failed": sorted(failed),
+            "problems": problems,
+            "declared": len(EXPECTED_EVAL_IDS),
+            "filtered": bool(only),
+        }
+        with open(json_out, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, sort_keys=True)
+            fh.write("\n")
     return 0 if ok else 1
 
 
@@ -257,6 +285,13 @@ def list_registry():
 
 def main(argv):
     only = None
+    json_out = None
+    if "--json" in argv:
+        idx = argv.index("--json")
+        if idx + 1 >= len(argv):
+            print("--json needs a path")
+            return 1
+        json_out = argv[idx + 1]
     if "--only" in argv:
         idx = argv.index("--only")
         if idx + 1 >= len(argv):
@@ -267,7 +302,7 @@ def main(argv):
         return list_registry()
     if "--self-test" in argv:
         return self_test(only)
-    return run_all(only)
+    return run_all(only, json_out)
 
 
 if __name__ == "__main__":

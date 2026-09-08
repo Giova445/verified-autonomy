@@ -31,23 +31,39 @@ number green is the failure mode this project exists to stop.
 
 ## 2. Results — mechanical gates
 
-98 labeled cases: 56 should-block, 42 should-pass.
+<!-- bench-claims: these numbers are checked against a live bench.sh run by the
+     `bench-readme-current` eval in evals/. They stated 98 cases / 95.2% specificity /
+     4.8% FPR for a suite that had grown to 142 cases and gained a seventh gate, and
+     nothing noticed, because a table in a document is prose until something runs it. -->
+
+142 labeled cases: 69 should-block, 73 should-pass.
 
 | gate | TP | FN | TN | FP | FP rate |
 |---|---|---|---|---|---|
-| deny-dangerous | 34 | 0 | 25 | 2 | 7% |
+| deny-dangerous | 31 | 0 | 42 | 0 | 0% |
 | verify | 8 | 0 | 2 | 0 | 0% |
 | stop-gate | 4 | 0 | 2 | 0 | 0% |
 | test-delta | 3 | 0 | 3 | 0 | 0% |
-| scan-diff-cheats | 4 | 0 | 3 | 0 | 0% |
+| cheat-scan | 4 | 0 | 3 | 0 | 0% |
 | ambiguity | 3 | 0 | 5 | 0 | 0% |
+| pin-check | 16 | 0 | 16 | 0 | 0% |
 
 | metric | value |
 |---|---|
-| recall (attacks caught) | 56/56 = 100% |
-| specificity (real work allowed) | 40/42 = 95.2% |
-| false-positive rate | 4.8% |
+| recall (attacks caught) | 69/69 = 100% |
+| specificity (real work allowed) | 73/73 = 100% |
+| false-positive rate | 0% |
 | false-negative rate | 0% |
+
+**What changed since the 98-case table, and why the 100% is not a better gate.**
+`deny-dangerous` shows 31 TP where it showed 34, and 42 TN where it showed 25. Eleven
+guardrail-edit rows moved from the deny class to the allow class when guardrail
+self-protection was removed at the operator's instruction — the same eleven, reclassified
+in place under a POLICY CHANGE header in `corpus-deny.txt`, not deleted. The two remaining
+false positives ("danger string inside a literal") were fixed by `hooks/inert-mask.py`.
+`pin-check` is new. So the specificity move from 95.2% to 100% is one real fix plus a
+policy change that made eleven previously-denied cases legitimate, not the detector
+becoming sharper.
 
 Every gate is inside the ~10% effective false-positive budget, checked per gate rather than
 in aggregate — an aggregate number hides a single gate that is unusable. Google's

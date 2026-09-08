@@ -33,7 +33,8 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from lib import ROOT, copy_tree, load_json  # noqa: E402
-import evals_ci                             # noqa: E402
+import evals_ci
+import evals_docs                             # noqa: E402
 import evals_config                         # noqa: E402
 import evals_hooks                          # noqa: E402
 import evals_suites                         # noqa: E402
@@ -46,6 +47,7 @@ EXPECTED_PATH = "evals/expected.json"
 # alongside it, leaving a smaller suite reporting a perfect score. Adding an eval means
 # adding its ID here, in the same commit.
 EXPECTED_EVAL_IDS = frozenset({
+    "bench-readme-current",
     # instruction surface
     "skill-usage-triggers",
     "config-name-collisions",
@@ -91,7 +93,8 @@ def build_registry():
                     f"can be checked against anything"]
     registry, duplicates = {}, []
     for item in (evals_config.EVALS + evals_hooks.build(expected)
-                 + evals_ci.EVALS + evals_suites.build(expected)):
+                 + evals_ci.EVALS + evals_suites.build(expected)
+                 + evals_docs.build()):
         if item.id in registry:
             duplicates.append(f"duplicate eval ID '{item.id}'")
         registry[item.id] = item

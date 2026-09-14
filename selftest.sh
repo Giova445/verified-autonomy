@@ -153,6 +153,7 @@ suite "playbook coverage"        python3 "$PLUGIN/benchmark/gates/playbook-cover
 suite "observation digest"       python3 "$PLUGIN/monitoring/digest.py"                      --self-test
 suite "commit-trailer gate"      python3 "$PLUGIN/benchmark/gates/trailer-check.py"          --self-test
 suite "identity preflight"       python3 "$PLUGIN/benchmark/gates/identity-preflight.py"     --self-test
+suite "agent portability matrix" bash    "$PLUGIN/benchmark/gates/agent-matrix.sh"           --self-test
 
 echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0

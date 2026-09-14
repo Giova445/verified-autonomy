@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-09-07",
+  "generated": "2026-09-13",
   "environment": {
     "claude_code": "2.1.250",
     "python": "3.14.3",
@@ -436,6 +436,22 @@
         "monitoring/history/observations.jsonl"
       ],
       "note": "reads monitoring/history/observations.jsonl and reports what crashed, what cannot be measured, what moved and what got slower. REPORTER, not a gate: exits 0 whatever it finds, so nothing is tempted to suppress a finding to stay green. 9 hermetic controls, control names declared in EXPECTED_CONTROLS independently of the calls; deleting a control fails the suite (sabotage-verified). Refuses to compute movement or duration on a single observation."
+    },
+    {
+      "gate": "N11 commit-trailer policy",
+      "status": "VERIFIED",
+      "verified_on": "2026-09-13",
+      "subsystems": [
+        "commit_attribution",
+        "repo_policy"
+      ],
+      "pinned_versions": {
+        "python": "3.14.7"
+      },
+      "script": [
+        "benchmark/gates/trailer-check.py"
+      ],
+      "note": "Checks Co-Authored-By against the target repo's attribution.commit, both directions (prohibited and required). MEASURED on a real labelled corpus rather than asserted: 91/769 Griffin commits violate, recall 100% specificity 100%, and the ground truth was rebuilt by an INDEPENDENT regex over raw %B bodies that agrees exactly -- same-parser agreement would have been circular. Policy inversion partitions the corpus 91/678 with no overlap, proving the verdict follows settings.json. 10 controls; fails closed on unreadable settings."
     },
     {
       "gate": "N2 structural validation",

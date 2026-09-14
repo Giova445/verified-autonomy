@@ -40,6 +40,13 @@ jobs:
       - name: inert-mask — CONTROLS FIRST
         run: python3 hooks/inert-mask.py --self-test
 
+      - name: Commit-trailer gate — CONTROLS FIRST
+        run: python3 benchmark/gates/trailer-check.py --self-test
+
+      - name: Commit-trailer gate — this repo's own history
+        # attribution.commit is true here, so every commit must carry the trailer.
+        run: python3 benchmark/gates/trailer-check.py --since-policy
+
       - name: Observation digest — CONTROLS FIRST
         run: python3 monitoring/digest.py --self-test
 

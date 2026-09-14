@@ -49,10 +49,15 @@ ranking by corrections surfaces the ones that taught something.
 ("explicit prohibited").
 
 ```
-commits since 2026-08-01:        369
-carrying Co-Authored-By:          37   (10.0%)
+all recorded history:            769 commits
+carrying Co-Authored-By:          91   (11.8%)
+window since 2026-08-01:         369 commits, 37 carrying (10.0%)
 .claude/settings.json attribution: {"commit": ""}
 ```
+
+Both counts were rebuilt by a second, independent method — a regex over raw `%B` commit
+bodies, touching git's trailer parser not at all — and agree exactly (91/91, 37/37). Same-
+parser agreement would have proved nothing.
 
 The memory note names two of them (`2e8aa71`, `59b6a44`) and both still carry the trailer.
 The rule is stated in three places, is mechanically decidable from one JSON field, and
@@ -124,7 +129,7 @@ Ordered by evidence strength, not ambition. Each item names the layer it moves a
 to, and the control that proves it works — a gate with no control is the failure mode this
 repository exists to prevent.
 
-### P1 — Commit-trailer gate (Layer 2). Evidence: F1, 37 real violations
+### P1 — Commit-trailer gate (Layer 2). BUILT 2026-09-13. Evidence: F1, 91 real violations
 
 A pre-commit check reading `.claude/settings.json`: if `attribution.commit` is falsy and
 the message carries `Co-Authored-By`, block. If truthy and the trailer is missing, block.
@@ -132,9 +137,23 @@ the message carries `Co-Authored-By`, block. If truthy and the trailer is missin
 Both directions matter — Griffin prohibits it and verified-autonomy requires it, so a
 one-way check is wrong in one of the two repos.
 
-*Control:* run it over the last 369 Griffin commits. It must flag exactly the 37 known
-violations, and 0 of the 332 clean ones. That is a labelled corpus that already exists, so
-this gate can be measured rather than asserted on the day it is written.
+*Shipped as* `benchmark/gates/trailer-check.py`, 10 controls, wired into `selftest.sh`
+and both CI jobs. Measured, not asserted:
+
+| | |
+|---|---|
+| Griffin corpus | 769 commits, 91 violations, 678 clean |
+| recall / specificity | **100% / 100%** (91 TP, 0 FP, 0 FN) |
+| independent cross-check | regex over raw `%B` agrees on all 91 |
+| policy inversion | flips to 678 violations, partitioning the corpus with no overlap |
+| verified-autonomy, scoped to its policy | 10 commits, 0 violations |
+
+Three defects were found in the gate while building it, each by running it rather than
+reading it: a temp dir was handed to `git -C` before it existed; `--since` reads committer
+date and returned 2 commits where the exact rev-range returns 10; and scoping to the
+policy's introducing commit *errored* when no such commit exists, which is precisely the
+shape of a repo that has always prohibited the trailer — the one whose 91 violations
+motivated the gate. It now treats that as "the policy applied for all history".
 
 ### P2 — Host-scoped memory tier (Layer 1, but correctly placed). Evidence: F3
 

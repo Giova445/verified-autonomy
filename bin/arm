@@ -35,7 +35,11 @@ set -uo pipefail
 
 CMD="${1:-detect}"
 TARGET="${2:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-PROBE_TIMEOUT="${ARM_TIMEOUT:-120}"
+# A timeout here is a HANG detector, not a speed limit. A `full`-tier suite legitimately
+# running for minutes is ordinary; treating that as a hang rejects exactly the gates most
+# worth arming. The first version shipped 120s against this repository's own 123s suite and
+# refused to arm it — measured in the same session that chose the number.
+PROBE_TIMEOUT="${ARM_TIMEOUT:-600}"
 
 say() { printf '%s\n' "$*" >&2; }
 
@@ -140,26 +144,32 @@ candidates() { # dir
 # Populates PASS_FAST / PASS_FULL with JSON objects, and prints one verdict line per
 # candidate. A rejected candidate is reported with its reason: silence about what was
 # dropped is how a config ends up smaller than anyone realises.
-PASS_FAST=(); PASS_FULL=(); N_CAND=0; N_PASS=0
+PASS_FAST=(); PASS_FULL=(); N_CAND=0; N_PASS=0; N_UNKNOWN=0
 probe_all() { # dir quiet
   local d="$1" quiet="${2:-}" tier name cmd body rc verdict
-  PASS_FAST=(); PASS_FULL=(); N_CAND=0; N_PASS=0
+  PASS_FAST=(); PASS_FULL=(); N_CAND=0; N_PASS=0; N_UNKNOWN=0
   while IFS="$SEP" read -r tier name cmd body; do
     [ -n "${tier:-}" ] || continue
     N_CAND=$((N_CAND + 1))
     if is_placeholder "${body:-$cmd}"; then
       verdict="REJECTED (placeholder — a gate that cannot fail is not a gate)"
     else
+      local t0 t1 secs; t0=$(date +%s)
       run_probe "$d" "$cmd"; rc=$?
+      t1=$(date +%s); secs=$((t1 - t0))
       if [ "$rc" -eq 0 ]; then
-        verdict="passes"
+        verdict="passes (${secs}s)"
         N_PASS=$((N_PASS + 1))
         local obj; obj="$(printf '{"name":"%s","cmd":"%s"}' "$name" "$cmd")"
         if [ "$tier" = fast ]; then PASS_FAST+=("$obj"); else PASS_FULL+=("$obj"); fi
       elif [ "$rc" -eq 137 ]; then
-        verdict="REJECTED (no verdict within ${PROBE_TIMEOUT}s — a probe that hangs is not a pass)"
+        # Distinct from a rejection ON PURPOSE. A command that exits non-zero is definitively
+        # not a gate. A command still running at the budget is UNKNOWN, and calling that
+        # "rejected" tells someone their suite is broken when it is merely slow.
+        N_UNKNOWN=$((N_UNKNOWN + 1))
+        verdict="NO VERDICT (still running at ${PROBE_TIMEOUT}s — raise ARM_TIMEOUT to probe longer)"
       else
-        verdict="REJECTED (exit $rc here and now)"
+        verdict="REJECTED (exit $rc after ${secs}s)"
       fi
     fi
     [ -n "$quiet" ] || printf '  %-6s %-14s %-46s %s\n' "$tier" "$name" "$cmd" "$verdict"
@@ -181,6 +191,7 @@ do_detect() {
   probe_all "$TARGET"
   say ""
   say "$N_PASS of $N_CAND candidate(s) pass here."
+  [ "$N_UNKNOWN" -gt 0 ] && say "$N_UNKNOWN gave no verdict inside ${PROBE_TIMEOUT}s. That is unknown, not failing — re-run with a larger ARM_TIMEOUT before concluding anything about them."
   if [ "${#PASS_FULL[@]}" -eq 0 ]; then
     say "Nothing would be written: the 'full' tier would be empty, and an armed config that"
     say "gates nothing certifies everything. Give this repo one command that passes first."
@@ -194,6 +205,7 @@ do_write() {
   probe_all "$TARGET" quiet
   if [ "${#PASS_FULL[@]}" -eq 0 ]; then
     say "REFUSING: no 'full' gate passes in $TARGET ($N_PASS of $N_CAND candidates pass)."
+    [ "$N_UNKNOWN" -gt 0 ] && say "$N_UNKNOWN candidate(s) were still running at ${PROBE_TIMEOUT}s and gave no verdict. Try: ARM_TIMEOUT=1800 arm write"
     say "Writing an armed config with an empty full tier would report enforcement that is"
     say "not happening. Run 'arm detect' to see what was rejected and why."
     return 1
@@ -213,7 +225,7 @@ do_write() {
 }
 
 # ---------------------------------------------------------------- controls
-EXPECTED_CONTROLS=7
+EXPECTED_CONTROLS=8
 selftest() {
   local tmp="${TMPDIR:-/tmp}/arm-selftest.$$" ok=0 ran=0
   mkdir -p "$tmp"
@@ -290,6 +302,19 @@ PY
   bash "$self" write "$tmp/script" >/dev/null 2>&1
   grep -q 'selftest.sh' "$tmp/script/.claude/gates.json" 2>/dev/null
   chk "a manifest-less repo arms through its script entrypoint" $?
+
+  # 8 — a command still running at the budget is reported as NO VERDICT and arms nothing.
+  # This branch shipped with no control, and that is exactly how the default timeout came to
+  # be 120s against this repository's own 123s suite: a slow-but-passing gate was reported
+  # as rejected, and nothing tested the difference between "failed" and "did not finish".
+  mkdir -p "$tmp/slow"
+  printf '%s\n' '#!/usr/bin/env bash' 'sleep 30' 'exit 0' > "$tmp/slow/selftest.sh"
+  chmod +x "$tmp/slow/selftest.sh"
+  local slow_out; slow_out="$(ARM_TIMEOUT=2 bash "$self" detect "$tmp/slow" 2>&1)"
+  printf '%s' "$slow_out" | grep -q 'NO VERDICT' \
+    && ! printf '%s' "$slow_out" | grep -q 'REJECTED (exit' \
+    && [ ! -f "$tmp/slow/.claude/gates.json" ]
+  chk "a probe that outlives the budget is NO VERDICT, not REJECTED, and arms nothing" $?
 
   rm -rf "$tmp"
   [ "$ran" -eq "$EXPECTED_CONTROLS" ] || { printf '  FAIL  ran %s controls, expected %s\n' "$ran" "$EXPECTED_CONTROLS"; ok=-1; }

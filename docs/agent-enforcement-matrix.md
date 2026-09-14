@@ -170,7 +170,7 @@ config whose `full` tier would be empty, since an armed config that gates nothin
 enforcement that is not happening. An existing config is never clobbered — `.new` lands beside
 it, as `install.sh` already does.
 
-Seven controls, and two of them found real defects in the tool itself before it shipped:
+Eight controls. Three of them exist because the thing they check was already broken:
 
 | control | result |
 |---|---|
@@ -181,6 +181,7 @@ Seven controls, and two of them found real defects in the tool itself before it 
 | 5 — an existing config survives; the new one lands beside it | ok |
 | 6 — the written config is the shape the Stop gate consumes (red → exit 2) | ok |
 | 7 — a manifest-less repo arms through its script entrypoint | ok |
+| 8 — a probe outliving the budget is NO VERDICT, not REJECTED, and arms nothing | ok |
 
 **Defect found by control 3.** The placeholder test ran against the gate *command*, but the
 command is a wrapper: `npm test` runs whatever `package.json` says. A repo whose `test` script
@@ -194,12 +195,31 @@ its suite is a shell script. That is a whole class of project, not an edge case.
 script entrypoints (`selftest.sh`, `test.sh`, `run-tests.sh`, `scripts/test.sh`, `bin/test`)
 are now proposed and probed like anything else.
 
-Run against this repository it now proposes two candidates, arms one, and rejects the other
-with its reason:
+**Defect found by the first real user, not by a control.** `arm write` refused to arm this
+repository: *"0 of 1 candidates pass"*. The default probe budget was 120s and this
+repository's own suite takes 123s, so a passing gate was killed at the boundary and reported
+as rejected. The 2:01.95 figure had been measured in the same session that chose 120.
+
+The timeout branch had **no control at all** — control 2 covered a command that exits 1, and
+nothing covered a command that never finishes. That is why it shipped broken, and control 8
+now closes it. Two changes followed from the diagnosis rather than from the symptom:
+
+- The budget is a **hang detector, not a speed limit**. A `full`-tier suite running for
+  minutes is ordinary, and treating that as a hang rejects exactly the gates most worth
+  arming. Default raised to 600s.
+- A timed-out probe is **NO VERDICT, not REJECTED**. A command that exits non-zero is
+  definitively not a gate; a command still running at the budget is unknown. Collapsing the
+  two tells someone their suite is broken when it is merely slow. Both still refuse to arm —
+  fail-closed is unchanged — but they now say different things, and the unknown case names
+  `ARM_TIMEOUT`.
+
+Elapsed time is reported for every candidate, so a slow gate is visible rather than silently
+near a cliff. Run against this repository with defaults it now proposes two candidates, arms
+one, and rejects the other with its reason:
 
 ```
-full  script-selftest.sh  ./selftest.sh   passes
-full  py-test-bare        pytest -q       REJECTED (exit 5 here and now)
+full  script-selftest.sh  ./selftest.sh   passes (125s)
+full  py-test-bare        pytest -q       REJECTED (exit 5 after 0s)
 ```
 
 **Not done:** `arm` is not yet called from `install.sh`, and no project has been armed with it.

@@ -77,7 +77,14 @@ def commits(root, since=None, rev_range=None, limit=None):
     made while building this gate's own corpus.
     """
     fmt = f"%H{FIELD}%s{FIELD}%(trailers:key={TRAILER_KEY},valueonly){REC}"
-    cmd = ["git", "-C", root, "log", f"--format={fmt}"]
+    # --no-merges: a merge commit is not authored content. Nobody writes one by hand, and
+    # GitHub GENERATES one for every pull request checkout -- `refs/pull/N/merge`, whose
+    # HEAD is a synthetic "Merge <sha> into <sha>" with no trailer and no author of its
+    # own. Without this the gate failed its own PR (#7) in CI while passing locally, which
+    # is the worst shape a gate can have: green where you develop, red where it lands.
+    # Requiring an attribution trailer on a machine-generated merge asserts authorship of
+    # something nobody authored.
+    cmd = ["git", "-C", root, "log", "--no-merges", f"--format={fmt}"]
     if since:
         cmd.append(f"--since={since}")
     if limit:
@@ -154,6 +161,7 @@ EXPECTED_CONTROLS = {
     "unreadable-settings-fails-closed", "absent-settings-fails-closed",
     "message-hook-both-ways", "empty-string-is-falsy",
     "policy-start-found", "policy-start-absent-means-all-history",
+    "merge-commit-exempt", "non-merge-still-flagged",
 }
 
 
@@ -254,6 +262,22 @@ def self_test():
         start = policy_start(r)
         scoped = len(commits(r, rev_range=f"{start}..HEAD")) if start else -1
         check("policy-start-found", (start is not None, scoped), (True, 1))
+
+        # Merge commits are exempt -- but the exemption must not become a hiding place.
+        # Both arms on one repo: the merge is ignored, a plain commit beside it is not.
+        r = _repo(os.path.join(td, "g"), {"commit": True}, [f"base\n\n{TRAILER}"])
+        _git(r, "checkout", "-q", "-b", "side")
+        with open(os.path.join(r, "s.txt"), "w", encoding="utf-8") as fh: fh.write("s")
+        _git(r, "add", "-A"); _git(r, "commit", "-q", "-m", f"side\n\n{TRAILER}")
+        _git(r, "checkout", "-q", "main")
+        # A merge with NO trailer, exactly the shape GitHub generates for a PR.
+        _git(r, "merge", "--no-ff", "-q", "-m", "Merge side into main", "side")
+        _, bad, _ = audit(r)
+        check("merge-commit-exempt", [b[2] for b in bad], [])
+        with open(os.path.join(r, "p.txt"), "w", encoding="utf-8") as fh: fh.write("p")
+        _git(r, "add", "-A"); _git(r, "commit", "-q", "-m", "plain, no trailer")
+        _, bad2, _ = audit(r)
+        check("non-merge-still-flagged", [b[2] for b in bad2], ["missing-trailer"])
 
     missing = EXPECTED_CONTROLS - seen
     extra = seen - EXPECTED_CONTROLS

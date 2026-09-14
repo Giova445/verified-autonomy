@@ -49,11 +49,17 @@ ranking by corrections surfaces the ones that taught something.
 ("explicit prohibited").
 
 ```
-all recorded history:            769 commits
-carrying Co-Authored-By:          91   (11.8%)
-window since 2026-08-01:         369 commits, 37 carrying (10.0%)
-.claude/settings.json attribution: {"commit": ""}
+authored commits (merges excluded):  635
+carrying Co-Authored-By:              90   (14.2%)
+.claude/settings.json attribution:    {"commit": ""}
 ```
+
+**The denominator moved once, on purpose.** The first measurement was 91/769 counting
+every commit. Merge commits were then excluded, because GitHub *generates* one for every
+pull-request checkout and requiring an attribution trailer on a machine-generated merge
+asserts authorship of something nobody authored. That dropped 134 merges and one
+violation, and raised the rate from 11.8% to **14.2%** — the stricter denominator makes the
+finding worse, not better.
 
 Both counts were rebuilt by a second, independent method — a regex over raw `%B` commit
 bodies, touching git's trailer parser not at all — and agree exactly (91/91, 37/37). Same-
@@ -129,7 +135,7 @@ Ordered by evidence strength, not ambition. Each item names the layer it moves a
 to, and the control that proves it works — a gate with no control is the failure mode this
 repository exists to prevent.
 
-### P1 — Commit-trailer gate (Layer 2). BUILT 2026-09-13. Evidence: F1, 91 real violations
+### P1 — Commit-trailer gate (Layer 2). BUILT 2026-09-13. Evidence: F1, 90 real violations
 
 A pre-commit check reading `.claude/settings.json`: if `attribution.commit` is falsy and
 the message carries `Co-Authored-By`, block. If truthy and the trailer is missing, block.
@@ -142,14 +148,19 @@ and both CI jobs. Measured, not asserted:
 
 | | |
 |---|---|
-| Griffin corpus | 769 commits, 91 violations, 678 clean |
-| recall / specificity | **100% / 100%** (91 TP, 0 FP, 0 FN) |
-| independent cross-check | regex over raw `%B` agrees on all 91 |
-| policy inversion | flips to 678 violations, partitioning the corpus with no overlap |
+| Griffin corpus | 635 authored commits, 90 violations, 545 clean |
+| recall / specificity | **100% / 100%** (90 TP, 0 FP, 0 FN) |
+| independent cross-check | regex over raw `%B` agrees on all 90 |
+| policy inversion | flips to 545 violations, partitioning the corpus with no overlap |
 | verified-autonomy, scoped to its policy | 10 commits, 0 violations |
 
-Three defects were found in the gate while building it, each by running it rather than
-reading it: a temp dir was handed to `git -C` before it existed; `--since` reads committer
+Four defects were found in the gate, each by running it rather than reading it. The
+fourth only appeared in CI: the gate **failed its own pull request** while passing locally,
+because GitHub checks out a synthetic `refs/pull/N/merge` commit that carries no trailer.
+Green where you develop and red where it lands is the worst shape a gate can have. Merge
+commits are now exempt, with both arms controlled so the exemption cannot become a hiding
+place — a merge without a trailer is ignored, a plain commit beside it is still flagged.
+The other three: a temp dir was handed to `git -C` before it existed; `--since` reads committer
 date and returned 2 commits where the exact rev-range returns 10; and scoping to the
 policy's introducing commit *errored* when no such commit exists, which is precisely the
 shape of a repo that has always prohibited the trailer — the one whose 91 violations

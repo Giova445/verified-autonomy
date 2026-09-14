@@ -165,7 +165,7 @@ loads everywhere: which CLIs carry which identity, one-credential-per-host spend
 confirm the host rules are present in context. If they are not, the promotion did not work
 — which is exactly the state today.
 
-### P3 — Identity preflight (Layer 2). Evidence: F3, F5 — the costliest class
+### P3 — Identity preflight (Layer 2). BUILT 2026-09-13. Evidence: F3, F5 — the costliest class
 
 Before any command that creates a remote resource (`render`, `vercel`, `gh`, `shopify`,
 `supabase`), assert the authenticated identity matches the project's expected org. Refuse
@@ -174,8 +174,24 @@ on mismatch.
 This is the only class in the audit that has already leaked a credential into the wrong
 company's account. It is also mechanically decidable: each CLI can report its identity.
 
-*Control:* a fixture where the expected org and the logged-in identity disagree must be
-refused; one where they agree must pass. Both arms, or the check proves nothing.
+*Shipped as* `benchmark/gates/identity-preflight.py`, 14 controls, wired into `selftest.sh`
+and CI. Verified live on this host, from files:
+
+```
+gh       {'user': 'Giova445'}
+render   {'workspace_name': 'Cadre AI'}        <- the memory note, confirmed from disk
+vercel   {'userId': 'eqGW...', 'expired': True}
+```
+
+A project declaring `render.workspace_name: "Orchid"` gets `render services create`
+**refused**, exit 1, naming the mismatch. `gh pr view 42` passes untouched.
+
+**It reads config files and never invokes the CLIs.** The standing host rule is not to
+*use* render/vercel at all, so a gate shelling out to `vercel whoami` would violate the
+rule it exists to enforce — and a preflight that can have side effects is not a preflight.
+The honest cost: a config file can be stale relative to the live session. Expiry is checked
+where the file records one, which narrows the gap without closing it. It also surfaced
+something unasked: the Vercel credential on this machine is **already expired**.
 
 ### P4 — Codex memory bridge. Evidence: F2, 10,756 discarded corrections
 

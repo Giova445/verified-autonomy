@@ -1,0 +1,4 @@
+{
+  "_doc": "Expected CLI identity for this repo. benchmark/gates/identity-preflight.py refuses a resource-creating command when the identity on disk does not match. Read from config files; no CLI is invoked, because the standing host rule is not to use the render/vercel CLIs at all.",
+  "gh": { "user": "Giova445" }
+}

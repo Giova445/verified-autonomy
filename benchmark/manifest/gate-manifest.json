@@ -454,6 +454,24 @@
       "note": "Checks Co-Authored-By against the target repo's attribution.commit, both directions (prohibited and required). MEASURED on a real labelled corpus rather than asserted: 91/769 Griffin commits violate, recall 100% specificity 100%, and the ground truth was rebuilt by an INDEPENDENT regex over raw %B bodies that agrees exactly -- same-parser agreement would have been circular. Policy inversion partitions the corpus 91/678 with no overlap, proving the verdict follows settings.json. 10 controls; fails closed on unreadable settings."
     },
     {
+      "gate": "N12 identity preflight",
+      "status": "VERIFIED",
+      "verified_on": "2026-09-13",
+      "subsystems": [
+        "cli_identity",
+        "remote_resource_creation",
+        "tenancy"
+      ],
+      "pinned_versions": {
+        "python": "3.14.7"
+      },
+      "script": [
+        "benchmark/gates/identity-preflight.py",
+        ".claude/identity.json"
+      ],
+      "note": "P3 of the cross-account audit -- the only class that already cost something: a Vercel project filed under Cadre while the work was Orchid, with a Siigo key in it. Refuses a resource-creating command when the CLI identity on disk does not match .claude/identity.json. Reads config FILES and never invokes the CLIs, because the standing host rule is not to use render/vercel at all -- a gate that shelled out to `vercel whoami` would violate the rule it enforces. Verified live: reads render workspace_name 'Cadre AI', refuses an Orchid deploy, passes a read-only command, and flags the vercel credential as expired. 14 controls. LIMIT: a config file can be stale; expiry is checked where recorded, which narrows but does not close that gap."
+    },
+    {
       "gate": "N2 structural validation",
       "status": "VERIFIED",
       "verified_on": "2026-09-01",

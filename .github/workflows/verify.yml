@@ -40,6 +40,9 @@ jobs:
       - name: inert-mask — CONTROLS FIRST
         run: python3 hooks/inert-mask.py --self-test
 
+      - name: Identity preflight — CONTROLS FIRST
+        run: python3 benchmark/gates/identity-preflight.py --self-test
+
       - name: Commit-trailer gate — CONTROLS FIRST
         run: python3 benchmark/gates/trailer-check.py --self-test
 

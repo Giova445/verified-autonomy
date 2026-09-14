@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "verified-autonomy",
-  "description": "Mechanical enforcement for autonomous coding agents — 13 workflow skills, each stating what enforces it.",
+  "description": "Mechanical enforcement for autonomous coding agents \u2014 14 workflow skills, each stating what enforces it.",
   "owner": {
     "name": "Giova445",
     "url": "https://github.com/Giova445"

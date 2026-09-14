@@ -48,6 +48,7 @@ EXPECTED_PATH = "evals/expected.json"
 # adding its ID here, in the same commit.
 EXPECTED_EVAL_IDS = frozenset({
     "bench-readme-current",
+    "marketplace-skill-count",
     # instruction surface
     "skill-usage-triggers",
     "config-name-collisions",

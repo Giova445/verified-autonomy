@@ -138,20 +138,78 @@ expectation-derived-from-subject defect this repository has now hit six times.
 ## 3. The plan
 
 The shape of the problem: **the enforcement is built, measured, and deployed nowhere.** Not a
-capability gap. A distribution gap. So the plan is ordered by how many real sessions each step
-would have covered, not by how interesting it is.
+capability gap. A distribution gap.
 
-### T1 — Arm layer 2 where the corrections actually are. Evidence: G1
+**Every step below is generic machinery.** Naming a repository in a plan step is the defect,
+not the plan: "go arm project X" does not scale to 242 roots and does nothing for root 243. A
+step earns its place here only if it works on a project nobody has seen yet, including one
+created tomorrow. Where a step needs project-specific facts, the project declares them and the
+machinery stays general.
 
-`.claude/gates.json` in the top projects by correction count, each holding commands that pass
-today. Griffin first: 15,770 correction signals and 471 sessions behind a hook that exits 0.
+### T1 — Arming must be mechanical, not remembered. BUILT 2026-09-13. Evidence: G1
 
-Not a template copy. `kit/gates.json` ships `echo 'TODO'` in every slot, and a gate whose
-command is `echo` is worse than no gate — it reports green. Each project needs its real lint,
-typecheck and test commands, verified to pass before being written down.
+Stack detection was never the missing piece. `kit/install.sh` has had `detect_gates()` for a
+while: it greps `package.json` for `"lint"`, writes `npm run lint`, and labels the result
+*"AUTO-DETECTED. Replace with commands that pass on a clean checkout TODAY."*
 
-**Done when:** `stop-gate.sh` returns exit 2 on a deliberately broken tree in each armed
-project, and 0 on a clean one. Both arms, per project, or it is not armed.
+**It writes commands it has never run.** That is why the count is zero. A config a human must
+audit before trusting is a config nobody arms, and an aspirational gate gets switched off by
+the first agent that hits it.
+
+`bin/arm` closes that loop. It proposes candidates from whatever files are present, then
+**runs every one** and writes only what exited 0 in this repository, right now. The output
+needs no review because nothing unverified is in it.
+
+```
+arm detect [dir]   every candidate with its verdict; writes nothing
+arm write  [dir]   .claude/gates.json from the candidates that passed
+```
+
+It refuses to write a command that failed, timed out, or does not exist; a placeholder; or a
+config whose `full` tier would be empty, since an armed config that gates nothing reports
+enforcement that is not happening. An existing config is never clobbered — `.new` lands beside
+it, as `install.sh` already does.
+
+Seven controls, and two of them found real defects in the tool itself before it shipped:
+
+| control | result |
+|---|---|
+| 1 — a passing command is written | ok |
+| 2 — a failing command is refused, and nothing is armed | ok |
+| 3 — a placeholder is rejected as a placeholder, not run | ok |
+| 4 — an undetectable repo is refused rather than armed empty | ok |
+| 5 — an existing config survives; the new one lands beside it | ok |
+| 6 — the written config is the shape the Stop gate consumes (red → exit 2) | ok |
+| 7 — a manifest-less repo arms through its script entrypoint | ok |
+
+**Defect found by control 3.** The placeholder test ran against the gate *command*, but the
+command is a wrapper: `npm test` runs whatever `package.json` says. A repo whose `test` script
+is literally `echo TODO` would have been armed with a command that exits 0 and checks nothing —
+the vacuous green this kit exists to prevent, reached through the kit. Candidates now carry the
+script body where one can be read, and the judgement is made against that.
+
+**Defect found by control 7.** Detecting only package manifests produced **zero candidates for
+this repository**, which has no `package.json`, `pyproject.toml`, `go.mod` or `Cargo.toml` —
+its suite is a shell script. That is a whole class of project, not an edge case. Conventional
+script entrypoints (`selftest.sh`, `test.sh`, `run-tests.sh`, `scripts/test.sh`, `bin/test`)
+are now proposed and probed like anything else.
+
+Run against this repository it now proposes two candidates, arms one, and rejects the other
+with its reason:
+
+```
+full  script-selftest.sh  ./selftest.sh   passes
+full  py-test-bare        pytest -q       REJECTED (exit 5 here and now)
+```
+
+**Not done:** `arm` is not yet called from `install.sh`, and no project has been armed with it.
+Arming a repository writes `.claude/gates.json`, which this project's own contract forbids an
+agent from touching. That prohibition is correct — arming enforcement on a repository is a
+decision its owner makes, not one an agent makes for them. The mechanism is the deliverable;
+the arming is one command.
+
+**Done when:** `install.sh` calls `arm write` instead of `detect_gates`, so every future
+install arms with verified commands rather than aspirational ones.
 
 ### T2 — Measure whether Codex honours a blocking hook. Evidence: G3
 
@@ -198,23 +256,33 @@ wrong property.
 
 **Done when:** the grocery list is refused and a real gate-run receipt is accepted.
 
-### T6 — Deliverable-scoped acceptance gate. Evidence: the product gap
+### T6 — Deliverable-scoped acceptance gate, as generic machinery. Evidence: the product gap
 
 Every gate here is process-facing. `bin/mutate-changed` says so in its own header: *"it assesses
 whether an algorithm is implemented correctly, not whether it is the CORRECT algorithm — the
 spec-level failure that dominates in practice is out of its reach."*
 
 The shape already exists in `evals/`: a plausible request that would damage the deliverable,
-plus deterministic acceptance checks, plus positive controls, and zero model calls. Thirty of
-them, aimed at this repository's configuration because that is this repository's product. Point
-the same shape at a real deliverable.
+plus deterministic acceptance checks, plus positive controls, zero model calls. Thirty of them,
+aimed at this repository's configuration because that is this repository's product.
 
-Acceptance outcomes must be **declared independently**, not read from the artifact, or deleting
-a deliverable deletes its own check.
+**The generic version is a contract file plus one runner.** A project declares its acceptance
+outcomes in `.claude/acceptance.json`; the runner is project-agnostic and executes them. No
+gate in this repository ever names a product.
 
-**Blocked on:** which deliverable. The CEB product-imagery failure is the strongest candidate —
-`brand_contract` read by no code, no `reference_images` passed, and a product-fidelity failure
-no gate here could have caught.
+Each declared outcome carries three things, and the runner refuses the outcome without all
+three: a **check** command that exercises the real artifact, a **control** that must fail when
+the outcome is genuinely broken, and the **expectation stated in the declaration** rather than
+read from the artifact. That last one is the load-bearing rule — an outcome whose expectation is
+derived from the thing under test disappears the moment the thing does, which is the defect this
+repository has now hit six times.
+
+Fails closed: a missing artifact, an unreadable contract, or a control that did not discriminate
+is never a pass.
+
+**Done when:** a project with an `.claude/acceptance.json` is refused on a deliberately broken
+artifact and passes on a whole one, and a project without one is reported as having no
+deliverable contract rather than silently passing.
 
 ### T7 — Carry-over from the companion audit
 

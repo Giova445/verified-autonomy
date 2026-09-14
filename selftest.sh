@@ -154,6 +154,7 @@ suite "observation digest"       python3 "$PLUGIN/monitoring/digest.py"         
 suite "commit-trailer gate"      python3 "$PLUGIN/benchmark/gates/trailer-check.py"          --self-test
 suite "identity preflight"       python3 "$PLUGIN/benchmark/gates/identity-preflight.py"     --self-test
 suite "agent portability matrix" bash    "$PLUGIN/benchmark/gates/agent-matrix.sh"           --self-test
+suite "gate auto-arming"         bash    "$PLUGIN/bin/arm"                                    selftest
 
 echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0

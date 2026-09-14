@@ -1,0 +1,306 @@
+#!/usr/bin/env bash
+# arm — write a gate config for ANY repo, containing only commands proven to pass here.
+#
+#   arm detect [dir]    print every candidate and whether it passes. Writes nothing.
+#   arm write  [dir]    write .claude/gates.json from the candidates that passed.
+#   arm selftest        run the positive controls
+#
+# WHY THIS EXISTS
+#
+# The Stop gate is installed globally and exits 0 when a project has no .claude/gates.json.
+# Measured across 242 project roots in the session corpus: zero have one. The enforcement
+# is built, measured, shipped — and switched on nowhere.
+#
+# Stack detection was not the missing piece; kit/install.sh has had it for a while. What it
+# does is grep package.json for "lint" and write `npm run lint` WITHOUT EVER RUNNING IT,
+# then label the output "AUTO-DETECTED. Replace with commands that pass on a clean checkout
+# TODAY." That review step is the manual gap, and it is why the count is zero. A config a
+# human must audit before trusting is a config nobody arms.
+#
+# So this runs every candidate first. A command that does not pass right now never enters
+# the file. The output needs no review because nothing aspirational is in it.
+#
+# WHAT IT REFUSES TO DO
+#
+#   - write a gate whose command failed, timed out, or does not exist
+#   - write a placeholder (echo/true/:) — bin/verify rejects these at run time, and a
+#     config that parses but certifies nothing is worse than no config, because the Stop
+#     hook then reports armed
+#   - write a config whose `full` tier is empty, for the same reason
+#   - clobber an existing gates.json — writes .new beside it, exactly like install.sh
+#
+# Nothing here is specific to a language, a product, or a repository. Candidates come from
+# files that are present; verdicts come from running them.
+set -uo pipefail
+
+CMD="${1:-detect}"
+TARGET="${2:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+PROBE_TIMEOUT="${ARM_TIMEOUT:-120}"
+
+say() { printf '%s\n' "$*" >&2; }
+
+# Placeholders, as a declared literal. bin/verify has its own copy of this judgement; both
+# are deliberate. A single shared definition would mean one edit disarms both layers.
+is_placeholder() {
+  case "$(printf '%s' "$1" | sed 's/^[[:space:]]*//')" in
+    echo*|true*|:*|"#"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Portable timeout. macOS ships no `timeout(1)`, and a candidate like `npm test` on a repo
+# with a watch-mode default runs forever. A probe that hangs is not a passing probe.
+run_probe() { # dir cmd -> exit code
+  local dir="$1" cmd="$2" pid rc=0
+  ( cd "$dir" && eval "$cmd" ) >/dev/null 2>&1 &
+  pid=$!
+  ( sleep "$PROBE_TIMEOUT"; kill -9 "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  local killer=$!
+  wait "$pid" 2>/dev/null; rc=$?
+  kill -9 "$killer" 2>/dev/null
+  wait "$killer" 2>/dev/null
+  return $rc
+}
+
+# ---------------------------------------------------------------- candidates
+# Four SEPARATOR-delimited fields: tier, name, command, body.
+#
+# `body` exists because the command is usually a WRAPPER. `npm test` runs whatever
+# package.json says, and if that script is `echo TODO` the wrapper still exits 0. Probing
+# the wrapper therefore passes a gate that checks nothing — the exact vacuous green this
+# tool exists to prevent, reached through the tool itself. So the placeholder judgement is
+# made against the body where one can be read, and against the command otherwise.
+#
+# The separator is \x1f, not `|`: script bodies contain pipes.
+SEP=$'\x1f'
+
+# Read one npm script body, or print nothing if it is absent.
+npm_script() { # dir name
+  python3 - "$1/package.json" "$2" <<'PY' 2>/dev/null
+import json, sys
+try:
+    s = json.load(open(sys.argv[1])).get("scripts") or {}
+except Exception:
+    raise SystemExit(0)
+v = s.get(sys.argv[2])
+if isinstance(v, str):
+    print(v)
+PY
+}
+
+# Read the first recipe line of a Makefile target, or print nothing.
+make_recipe() { # dir target
+  awk -v t="^$2:" '$0 ~ t {f=1; next} f && /^\t/ {sub(/^\t/,""); print; exit} f && /^[^\t]/ {exit}' \
+    "$1/Makefile" 2>/dev/null
+}
+
+emit() { printf '%s%s%s%s%s%s%s\n' "$1" "$SEP" "$2" "$SEP" "$3" "$SEP" "${4:-$3}"; }
+
+candidates() { # dir
+  local d="$1" b
+  if [ -f "$d/package.json" ]; then
+    b="$(npm_script "$d" lint)";      [ -n "$b" ] && emit fast js-lint      'npm run lint'      "$b"
+    b="$(npm_script "$d" typecheck)"; [ -n "$b" ] && emit fast js-typecheck 'npm run typecheck' "$b"
+    b="$(npm_script "$d" test)";      [ -n "$b" ] && emit full js-test      'npm test --silent' "$b"
+    [ -f "$d/tsconfig.json" ] && emit full js-tsc 'npx --no-install tsc --noEmit'
+  fi
+  if [ -f "$d/pyproject.toml" ] || [ -f "$d/requirements.txt" ] || [ -f "$d/setup.py" ]; then
+    local r=""; command -v uv >/dev/null 2>&1 && r="uv run "
+    emit fast py-lint      "${r}ruff check ."
+    emit fast py-typecheck "${r}mypy ."
+    emit full py-test      "${r}pytest -q"
+  fi
+  [ -f "$d/go.mod" ]     && { emit fast go-vet    'go vet ./...';                  emit full go-test 'go test ./...'; }
+  [ -f "$d/Cargo.toml" ] && { emit fast rs-clippy 'cargo clippy -- -D warnings';   emit full rs-test 'cargo test'; }
+  if [ -f "$d/Makefile" ]; then
+    b="$(make_recipe "$d" lint)"; [ -n "$b" ] && emit fast make-lint 'make lint' "$b"
+    b="$(make_recipe "$d" test)"; [ -n "$b" ] && emit full make-test 'make test' "$b"
+  fi
+  # Script-entrypoint repos. A large share of real projects have no package manifest at
+  # all: the suite is a shell script at a conventional path. Detecting only manifests meant
+  # THIS repository produced zero candidates, which is how the gap was found. Conventional
+  # names only — guessing at arbitrary scripts would run whatever happens to be executable.
+  local s
+  for s in selftest.sh test.sh run-tests.sh runtests.sh scripts/test.sh bin/test; do
+    [ -x "$d/$s" ] && emit full "script-${s##*/}" "./$s"
+  done
+  # A tests/ tree with no manifest still runs under pytest when pytest is installed. The
+  # probe decides; this only proposes.
+  if [ ! -f "$d/pyproject.toml" ] && [ ! -f "$d/requirements.txt" ] && [ ! -f "$d/setup.py" ]; then
+    if { [ -d "$d/tests" ] || [ -d "$d/test" ]; } && command -v pytest >/dev/null 2>&1; then
+      emit full py-test-bare 'pytest -q'
+    fi
+  fi
+  # This kit's own detector. Present once the kit is installed; probed like everything else.
+  [ -x "$d/.claude/hooks/scan-diff-cheats.sh" ] && emit full cheat-scan '.claude/hooks/scan-diff-cheats.sh'
+  return 0
+}
+
+# ---------------------------------------------------------------- probing
+# Populates PASS_FAST / PASS_FULL with JSON objects, and prints one verdict line per
+# candidate. A rejected candidate is reported with its reason: silence about what was
+# dropped is how a config ends up smaller than anyone realises.
+PASS_FAST=(); PASS_FULL=(); N_CAND=0; N_PASS=0
+probe_all() { # dir quiet
+  local d="$1" quiet="${2:-}" tier name cmd body rc verdict
+  PASS_FAST=(); PASS_FULL=(); N_CAND=0; N_PASS=0
+  while IFS="$SEP" read -r tier name cmd body; do
+    [ -n "${tier:-}" ] || continue
+    N_CAND=$((N_CAND + 1))
+    if is_placeholder "${body:-$cmd}"; then
+      verdict="REJECTED (placeholder — a gate that cannot fail is not a gate)"
+    else
+      run_probe "$d" "$cmd"; rc=$?
+      if [ "$rc" -eq 0 ]; then
+        verdict="passes"
+        N_PASS=$((N_PASS + 1))
+        local obj; obj="$(printf '{"name":"%s","cmd":"%s"}' "$name" "$cmd")"
+        if [ "$tier" = fast ]; then PASS_FAST+=("$obj"); else PASS_FULL+=("$obj"); fi
+      elif [ "$rc" -eq 137 ]; then
+        verdict="REJECTED (no verdict within ${PROBE_TIMEOUT}s — a probe that hangs is not a pass)"
+      else
+        verdict="REJECTED (exit $rc here and now)"
+      fi
+    fi
+    [ -n "$quiet" ] || printf '  %-6s %-14s %-46s %s\n' "$tier" "$name" "$cmd" "$verdict"
+  done < <(candidates "$d")
+}
+
+emit_config() {
+  local IFS=,
+  printf '{\n'
+  printf '  "_comment": "Written by bin/arm. Every command here was RUN and exited 0 in this repository before it was written down. Nothing aspirational is in this file; add a gate only after it passes.",\n'
+  printf '  "fast": [%s],\n'   "${PASS_FAST[*]:-}"
+  printf '  "full": [%s],\n'   "${PASS_FULL[*]:-}"
+  printf '  "deferred": []\n}\n'
+}
+
+# ---------------------------------------------------------------- commands
+do_detect() {
+  say "candidates in: $TARGET"
+  probe_all "$TARGET"
+  say ""
+  say "$N_PASS of $N_CAND candidate(s) pass here."
+  if [ "${#PASS_FULL[@]}" -eq 0 ]; then
+    say "Nothing would be written: the 'full' tier would be empty, and an armed config that"
+    say "gates nothing certifies everything. Give this repo one command that passes first."
+    return 1
+  fi
+  say ""
+  emit_config
+}
+
+do_write() {
+  probe_all "$TARGET" quiet
+  if [ "${#PASS_FULL[@]}" -eq 0 ]; then
+    say "REFUSING: no 'full' gate passes in $TARGET ($N_PASS of $N_CAND candidates pass)."
+    say "Writing an armed config with an empty full tier would report enforcement that is"
+    say "not happening. Run 'arm detect' to see what was rejected and why."
+    return 1
+  fi
+  mkdir -p "$TARGET/.claude"
+  local out="$TARGET/.claude/gates.json"
+  if [ -s "$out" ]; then
+    emit_config > "$out.new"
+    say "$out EXISTS — wrote $out.new. Merge it; clobbering a project's real gate config is"
+    say "exactly the irreversible surprise this kit exists to prevent."
+  else
+    emit_config > "$out"
+    say "armed: $out  (${#PASS_FAST[@]} fast, ${#PASS_FULL[@]} full — all verified passing)"
+  fi
+  python3 -m json.tool "$out" >/dev/null 2>&1 || { say "BUG: emitted invalid JSON"; return 1; }
+  return 0
+}
+
+# ---------------------------------------------------------------- controls
+EXPECTED_CONTROLS=7
+selftest() {
+  local tmp="${TMPDIR:-/tmp}/arm-selftest.$$" ok=0 ran=0
+  mkdir -p "$tmp"
+  chk() { # label condition-result
+    ran=$((ran + 1))
+    if [ "$2" = 0 ]; then ok=$((ok + 1)); printf '  ok    %s\n' "$1"
+    else printf '  FAIL  %s\n' "$1"; fi
+  }
+  local self; self="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/$(basename "${BASH_SOURCE[0]:-$0}")"
+
+  # 1 — a repo whose test command PASSES gets armed.
+  mkdir -p "$tmp/green"
+  printf '%s\n' '{"scripts":{"test":"exit 0"}}' > "$tmp/green/package.json"
+  bash "$self" write "$tmp/green" >/dev/null 2>&1
+  grep -q '"js-test"' "$tmp/green/.claude/gates.json" 2>/dev/null
+  chk "a passing command is written" $?
+
+  # 2 — a repo whose test command FAILS is not armed with it. This is the whole point: the
+  # existing installer would have written this command without ever running it.
+  mkdir -p "$tmp/red"
+  printf '%s\n' '{"scripts":{"test":"exit 1"}}' > "$tmp/red/package.json"
+  bash "$self" write "$tmp/red" >/dev/null 2>&1
+  [ ! -f "$tmp/red/.claude/gates.json" ]
+  chk "a failing command is refused, and nothing is armed" $?
+
+  # 3 — a placeholder never enters the config even if it exits 0. `echo TODO` is the
+  # template this repo ships, and it passes every probe.
+  mkdir -p "$tmp/ph"
+  printf '%s\n' '{"scripts":{"test":"echo TODO"}}' > "$tmp/ph/package.json"
+  # Captured, not piped: `detect` exits 1 when nothing is armable, and under `set -o
+  # pipefail` a pipeline would report THAT rather than grep's verdict. The first draft of
+  # this control did pipe, and failed against a working detector.
+  local ph_out; ph_out="$(bash "$self" detect "$tmp/ph" 2>&1)"
+  printf '%s' "$ph_out" | grep -q 'placeholder'
+  chk "a placeholder is rejected as a placeholder, not run" $?
+
+  # 4 — a repo with no detectable stack arms nothing and says so.
+  mkdir -p "$tmp/bare"
+  bash "$self" write "$tmp/bare" >/dev/null 2>&1
+  [ "$?" -ne 0 ] && [ ! -f "$tmp/bare/.claude/gates.json" ]
+  chk "an undetectable repo is refused rather than armed empty" $?
+
+  # 5 — an existing config is never clobbered.
+  mkdir -p "$tmp/exists/.claude"
+  printf '%s\n' '{"scripts":{"test":"exit 0"}}' > "$tmp/exists/package.json"
+  printf '%s\n' '{"_mine":true,"fast":[],"full":[{"name":"x","cmd":"exit 0"}],"deferred":[]}' \
+    > "$tmp/exists/.claude/gates.json"
+  bash "$self" write "$tmp/exists" >/dev/null 2>&1
+  grep -q '_mine' "$tmp/exists/.claude/gates.json" && [ -f "$tmp/exists/.claude/gates.json.new" ]
+  chk "an existing config survives; the new one lands beside it" $?
+
+  # 6 — the armed config actually arms the Stop gate. Without this the other five prove
+  # only that a file was written in a shape nobody consumes.
+  local sg; sg="$(cd "$(dirname "$self")/.." && pwd)/hooks/stop-gate.sh"
+  ( cd "$tmp/green" && git init -q . && git config user.email h@h && git config user.name h \
+    && git add -A >/dev/null 2>&1 && git commit -qm init >/dev/null 2>&1 )
+  # swap the verified-passing gate for one that cannot pass, then demand a refusal
+  python3 - "$tmp/green/.claude/gates.json" <<'PY'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+d["full"] = [{"name": "always-red", "cmd": "exit 1"}]
+json.dump(d, open(p, "w"))
+PY
+  local rc; rc=$( cd "$tmp/green" && CLAUDE_PROJECT_DIR="$tmp/green" bash "$sg" </dev/null >/dev/null 2>&1; echo $? )
+  [ "$rc" = 2 ]
+  chk "the written config is the shape the Stop gate consumes (red -> exit 2)" $?
+
+  # 7 — a repo with no package manifest at all is still armable through a conventional
+  # script entrypoint. Detecting only manifests produced zero candidates for THIS
+  # repository, which is a whole class of project (shell and script suites), not an edge.
+  mkdir -p "$tmp/script"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$tmp/script/selftest.sh"
+  chmod +x "$tmp/script/selftest.sh"
+  bash "$self" write "$tmp/script" >/dev/null 2>&1
+  grep -q 'selftest.sh' "$tmp/script/.claude/gates.json" 2>/dev/null
+  chk "a manifest-less repo arms through its script entrypoint" $?
+
+  rm -rf "$tmp"
+  [ "$ran" -eq "$EXPECTED_CONTROLS" ] || { printf '  FAIL  ran %s controls, expected %s\n' "$ran" "$EXPECTED_CONTROLS"; ok=-1; }
+  echo
+  if [ "$ok" -eq "$EXPECTED_CONTROLS" ]; then echo "SELF-TEST PASSED  ($EXPECTED_CONTROLS checks)"; return 0
+  else echo "SELF-TEST FAILED  ($ok of $EXPECTED_CONTROLS checks)"; return 1; fi
+}
+
+case "$CMD" in
+  detect)   do_detect ;;
+  write)    do_write ;;
+  selftest) selftest ;;
+  *) say "usage: arm {detect|write} [dir] | arm selftest"; exit 2 ;;
+esac

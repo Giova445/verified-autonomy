@@ -50,12 +50,11 @@ function loadPlaywright() {
   const roots = [];
   if (process.env.PLAYWRIGHT_PATH) roots.push(process.env.PLAYWRIGHT_PATH);
   roots.push("playwright");
-  // A repo that has playwright installed anywhere obvious. Explicit list, not a filesystem
-  // crawl: guessing at node_modules trees is how you end up driving someone else's version.
-  for (const extra of [
-    join(process.cwd(), "node_modules", "playwright"),
-    join(process.env.HOME || "", "Documents/Cadre AI/Griffin/griffin-chatbot-frontend/node_modules/playwright"),
-  ]) roots.push(extra);
+  // The project's own install, and nothing else. An earlier version also reached into a
+  // specific checkout under $HOME — which made this pass on one laptop and exit 2 in CI and
+  // on every other machine. A resolution path that only works where it was written is worse
+  // than no fallback: it hides the missing dependency from the person who could install it.
+  roots.push(join(process.cwd(), "node_modules", "playwright"));
 
   for (const r of roots) {
     try { return require_(r); } catch { /* try the next */ }

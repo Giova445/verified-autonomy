@@ -21,6 +21,14 @@ jobs:
           # project-specific: language runtimes + deps
           echo "TODO: install deps"
 
+      # A gate that cannot run is not a gate that passed. .claude/gates/drive.mjs opens the
+      # deliverable in a real browser and exits 2 — refusing to report — when Playwright is
+      # absent, so without this step the acceptance gate goes red in CI for a reason that has
+      # nothing to do with the code. Delete this step only together with the acceptance gate.
+      - name: Install the runtime driver (only if this project gates its deliverable)
+        if: hashFiles('.claude/acceptance.json') != ''
+        run: npm install --no-save playwright@1.61.0 && npx playwright install --with-deps chromium
+
       - name: Verify — same gate runner the agent used
         run: ./bin/verify done
         env:

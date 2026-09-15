@@ -35,6 +35,10 @@ set -uo pipefail
 
 CMD="${1:-detect}"
 TARGET="${2:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+# Resolved from this script's own location, never from the target repo or an env var: the
+# target is the untrusted side, and a repo that can point this at its own copy of a gate
+# can point it at one that always passes.
+KIT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 # A timeout here is a HANG detector, not a speed limit. A `full`-tier suite legitimately
 # running for minutes is ordinary; treating that as a hang rejects exactly the gates most
 # worth arming. The first version shipped 120s against this repository's own 123s suite and
@@ -137,6 +141,14 @@ candidates() { # dir
   fi
   # This kit's own detector. Present once the kit is installed; probed like everything else.
   [ -x "$d/.claude/hooks/scan-diff-cheats.sh" ] && emit full cheat-scan '.claude/hooks/scan-diff-cheats.sh'
+  # The deliverable contract, proposed ONLY when the project has declared one. Without a
+  # contract acceptance.py reports "no contract" and exits 0, and arming that would add a
+  # gate that passes without looking at anything — a placeholder by another name. With a
+  # contract it is binding, which is the whole point: the project opts in by writing down
+  # what was asked for, and the gate ladder starts enforcing it from the next run.
+  local accept="$KIT_ROOT/benchmark/gates/acceptance.py"
+  [ -f "$d/.claude/acceptance.json" ] && [ -f "$accept" ] \
+    && emit full acceptance "python3 '$accept' ."
   return 0
 }
 
@@ -225,7 +237,7 @@ do_write() {
 }
 
 # ---------------------------------------------------------------- controls
-EXPECTED_CONTROLS=8
+EXPECTED_CONTROLS=9
 selftest() {
   local tmp="${TMPDIR:-/tmp}/arm-selftest.$$" ok=0 ran=0
   mkdir -p "$tmp"
@@ -315,6 +327,21 @@ PY
     && ! printf '%s' "$slow_out" | grep -q 'REJECTED (exit' \
     && [ ! -f "$tmp/slow/.claude/gates.json" ]
   chk "a probe that outlives the budget is NO VERDICT, not REJECTED, and arms nothing" $?
+
+  # 9 — the deliverable contract is armed when one exists, and NOT proposed when none does.
+  # Both directions matter: arming it unconditionally adds a gate that exits 0 without
+  # looking at anything, which is a placeholder wearing a different name.
+  mkdir -p "$tmp/contract/.claude"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$tmp/contract/selftest.sh"
+  chmod +x "$tmp/contract/selftest.sh"
+  printf '%s\n' '{"outcomes":[{"name":"o","expect":"e","check":"exit 0","control":"exit 1"}]}' \
+    > "$tmp/contract/.claude/acceptance.json"
+  local with_out without_out
+  with_out="$(bash "$self" detect "$tmp/contract" 2>&1)"
+  without_out="$(bash "$self" detect "$tmp/script" 2>&1)"
+  printf '%s' "$with_out" | grep -q 'acceptance' \
+    && ! printf '%s' "$without_out" | grep -q 'acceptance'
+  chk "the acceptance gate is armed only where a contract exists" $?
 
   rm -rf "$tmp"
   [ "$ran" -eq "$EXPECTED_CONTROLS" ] || { printf '  FAIL  ran %s controls, expected %s\n' "$ran" "$EXPECTED_CONTROLS"; ok=-1; }

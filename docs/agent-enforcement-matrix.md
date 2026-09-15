@@ -276,7 +276,7 @@ wrong property.
 
 **Done when:** the grocery list is refused and a real gate-run receipt is accepted.
 
-### T6 — Deliverable-scoped acceptance gate, as generic machinery. Evidence: the product gap
+### T6 — Deliverable-scoped acceptance gate. BUILT 2026-09-15. Evidence: the product gap
 
 Every gate here is process-facing. `bin/mutate-changed` says so in its own header: *"it assesses
 whether an algorithm is implemented correctly, not whether it is the CORRECT algorithm — the
@@ -300,9 +300,68 @@ repository has now hit six times.
 Fails closed: a missing artifact, an unreadable contract, or a control that did not discriminate
 is never a pass.
 
-**Done when:** a project with an `.claude/acceptance.json` is refused on a deliberately broken
-artifact and passes on a whole one, and a project without one is reported as having no
-deliverable contract rather than silently passing.
+**Shipped as two pieces.** `benchmark/gates/acceptance.py` reads the contract and judges exit
+codes, which keeps it language-agnostic and product-agnostic. `benchmark/gates/drive.mjs` opens
+the artifact in a real browser, because the deliverable people actually complain about is a
+page and no unit suite has ever caught a submit button that never enables.
+
+**Binding where a contract exists, reporting where none does.** With outcomes declared, a
+failed or unproven one exits non-zero. With no contract it says so and exits 0 — it does not
+claim a pass. Blocking every repository on a file none of them have is how a gate gets deleted
+in week one; silently passing one that *has* declared outcomes is how a gate becomes theatre.
+
+**The driver is a command, not an agent capability.** A gate that says "the agent should look
+at the page" is persuasion, and persuasion is exactly what produced a green run beside a broken
+login form. Codex inherits it for the same reason — it is a shell command, not an MCP tool.
+
+**A standing memory nearly killed this.** The note read "Playwright cannot load its config on
+this machine, so e2e is not available". True of the *runner*, which loads `playwright.config.ts`
+through Node's module customization hooks. The *library* launches Chromium and drives a page
+fine — verified 2026-09-15 on node v24.1.0 / playwright 1.61.0. The memory has been corrected
+in place. Designing around the broader reading would have thrown away the only mechanical route
+to seeing the deliverable.
+
+**The assertion vocabulary is the manual QA pass, written down once**: visible, hidden, text,
+enabled, disabled, count, focusable, console-clean, no-overflow-at-viewport, plus `fill` and
+`click` so the ordered list is a short script. Most hand-found defects live on the far side of
+an interaction. Nothing in the vocabulary names a product; a project declares which assertions
+apply to which selector in its own contract.
+
+**Worked example, and the evidence that static gates cannot do this.**
+`benchmark/gates/fixtures/acceptance-demo/` holds a login page and the same page with one
+defect: nothing re-enables submit after the fields are filled. The two are *identical on first
+paint*, and a static render assertion confirms it:
+
+```
+  login.html            exit=0
+  login-regressed.html  exit=0     # the same check cannot tell them apart
+```
+
+The acceptance gate can:
+
+```
+  holds   submit enables once both fields are filled       check exit 0, control exit 1
+  holds   a rejected sign-in shows an error and logs nothing
+→ exit 0
+
+  # ship the regression as the deliverable instead:
+  FAILS   submit enables once both fields are filled       check exited 1; control discriminates
+  FAILS   a rejected sign-in shows an error and logs nothing
+→ exit 1
+```
+
+**Controls:** 8 on `acceptance.py`, 9 on `drive.mjs`, 1 added to `bin/arm`. The load-bearing
+ones are `acceptance.py` control 3 — a control that *passes* yields `NOT PROVEN`, never a pass,
+because a check that cannot fail is not evidence — and `drive.mjs` control 8, which drives two
+pages that paint identically and requires opposite verdicts.
+
+**Arming is automatic.** `bin/arm` proposes the acceptance gate only where
+`.claude/acceptance.json` exists, then probes it like any other candidate. Arming it
+unconditionally would add a gate that exits 0 without looking at anything — a placeholder
+wearing a different name.
+
+**Not done:** `kit/install.sh` copies `bin/` and `hooks/` but not `benchmark/`, so an installed
+kit has no `acceptance.py` to arm. Distribution is the remaining gap, not capability.
 
 ### T7 — Carry-over from the companion audit
 

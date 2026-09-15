@@ -1,0 +1,13 @@
+<!doctype html><title>Sign in</title>
+<h1 id="heading">Sign in</h1>
+<form id="login">
+  <input id="email" type="email" placeholder="Email">
+  <input id="password" type="password" placeholder="Password">
+  <button id="submit" type="submit" disabled>Sign in</button>
+  <p id="error" hidden>Email and password do not match.</p>
+</form>
+<script>
+  const gate = () => {};
+  email.oninput = gate; password.oninput = gate;
+  login.onsubmit = (e) => { e.preventDefault(); error.hidden = false; };
+</script>

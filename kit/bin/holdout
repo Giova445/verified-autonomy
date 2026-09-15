@@ -189,9 +189,20 @@ root, srcs = sys.argv[1], sys.argv[2].split()
 class Poison(ast.NodeTransformer):
     def _kill(self, node):
         self.generic_visit(node)
-        node.body = [ast.Raise(exc=ast.Call(
-            func=ast.Name(id="AssertionError", ctx=ast.Load()),
-            args=[ast.Constant(value="sabotage-control")], keywords=[]), cause=None)]
+        # RETURN A WRONG VALUE, do not raise.
+        #
+        # The first version raised AssertionError. A Node/Jest pilot showed why that is the
+        # weaker choice: an attack that neuters only the ASSERTION (Jest
+        # `setupFilesAfterEnv` wrapping `expect` in a no-op proxy) is invisible to
+        # throw-sabotage, because a thrown exception fails the test through a different
+        # channel that the neutered assertion never touches. Measured, correct impl +
+        # attack active:
+        #     throw-sabotage  exit 1  -> gate concludes "suite works", certifies a
+        #                                COMPROMISED harness. MISS.
+        #     value-sabotage  exit 0  -> force-pass correctly detected.
+        # Sabotage has to fail through the same channel the tests assert through. A wrong
+        # value only surfaces if the assertion is actually evaluated.
+        node.body = [ast.Return(value=ast.Constant(value="__SABOTAGE_CONTROL__"))]
         return node
     visit_FunctionDef = _kill
     visit_AsyncFunctionDef = _kill
@@ -206,9 +217,13 @@ for sp in srcs:
                 tree = ast.parse(open(fp).read())
             except Exception:
                 continue
-            # __init__.py is left INTACT on purpose: if the force-pass hook lives there,
-            # poisoning it would disable the very attack this control exists to detect.
-            if f == "__init__.py": continue
+            # Files that can host a force-pass hook are left INTACT on purpose. Poisoning
+            # one disables the very attack this control exists to detect, and the run then
+            # fails for an ordinary reason and reads as "suite works". Found by the
+            # selftest immediately after switching to value-sabotage: rewriting the body of
+            # a conftest.py hook silently neutralised the attack and the gate certified.
+            if f in ("__init__.py", "conftest.py", "sitecustomize.py", "usercustomize.py"):
+                continue
             new = ast.fix_missing_locations(Poison().visit(tree))
             try:
                 open(fp, "w").write(ast.unparse(new)); n += 1

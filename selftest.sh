@@ -157,6 +157,7 @@ suite "agent portability matrix" bash    "$PLUGIN/benchmark/gates/agent-matrix.s
 suite "gate auto-arming"         bash    "$PLUGIN/bin/arm"                                    selftest
 suite "deliverable acceptance"   python3 "$PLUGIN/benchmark/gates/acceptance.py"             --self-test
 suite "runtime driver"           node    "$PLUGIN/benchmark/gates/drive.mjs"                 --self-test
+suite "kit ships what it tests"  python3 "$PLUGIN/benchmark/gates/kit-sync.py"               --self-test
 
 echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0

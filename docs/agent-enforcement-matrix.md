@@ -380,3 +380,56 @@ succeeds, since a Codex `SessionStart` hook is the natural place to inject recal
 - **No claim that armed gates would have prevented the corrections.** That would need the
   counterfactual, and nobody has it. The claim is narrower and sufficient: the mechanism was
   built, it demonstrably fires, and it was switched on in none of the places the work happened.
+
+### T8 — The kit must ship what this repository tests. BUILT 2026-09-15. Evidence: measured drift
+
+T6 exposed something worse than the gap it closed. Everything proved here is proved about
+`bin/` and `hooks/`. Every project that installs the kit runs `kit/bin/` and `kit/hooks/`.
+Measured on 2026-09-15, before this gate existed:
+
+| | |
+|---|---|
+| `kit/bin/verify` vs `bin/verify` | **25 lines behind** |
+| `kit/bin/holdout` vs `bin/holdout` | **27 lines behind** |
+| `kit/bin/arm`, `kit/gates/acceptance.py`, `kit/gates/drive.mjs` | **absent** |
+
+The `verify` drift is the serious one. The root copy carries the `attempts` hoist, whose
+absence — in the comment's own words — made the runner *"certify GREEN on exactly the
+unreadable configs the branch exists to refuse."* Every project installed from this kit had
+that. This repository had recorded the pattern once, for one file, as an accident:
+
+> *"the recall fix landed in `hooks/` and never reached `kit/hooks/`, so every number
+> published about the detector described a file nobody installed."* — `evals/evals_suites.py`
+
+`benchmark/gates/kit-sync.py` checks four directions, with the pair list declared as a
+literal so a file vanishing from the kit is a finding rather than a shorter list: a declared
+pair that **differs**; one whose kit copy is **missing**; a file shipped in a mirrored
+directory that is **undeclared**, so nothing compares it to anything; and a tool the shipped
+config **names** but the kit does not ship. 7 controls, including equal-size files with
+different bytes — a shallow comparison passes those and would miss a one-character sabotage.
+
+**Two installation defects it surfaced, both fixed in `kit/install.sh`:**
+
+`install.sh` installed a hardcoded four of the kit's tools while `kit/gates.json` named four
+others, so an agent promoting a deferred gate got command-not-found from instructions the kit
+itself had given it. The install lists are now derived from what the kit ships.
+
+**And the Stop hook could never run in the shipped layout.** It resolves its runner as
+`<its own dir>/../bin/verify` and deliberately refuses to fall back to `$ROOT/bin/verify`,
+because a 17-byte repo-committed stub once became the gate runner. In a kit install the hook
+lands in `.claude/hooks/`, so that resolves to `.claude/bin/verify`, which nothing created —
+and `CLAUDE_PLUGIN_ROOT` is a plugin concept a kit install never sets. The hook therefore
+exited 2 on **every turn, whatever the gates said**. Fail-closed, but unconditionally, which
+is a hook anyone switches off within the hour. `selftest.sh:30` had this recorded as KNOWN
+FAILING. The runner is now installed beside the hook, in the hook's own trust domain, rather
+than at a path the hook merely discovers.
+
+**End-to-end, in a project created from scratch:**
+
+```
+A  deliverable whole                          stop-gate exit=0   turn allowed
+B  submit never re-enables; unit suite green   stop-gate exit=2   turn refused
+```
+
+That is the complaint this work started from — green gates beside a broken page — with both
+arms measured.

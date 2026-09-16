@@ -26,7 +26,7 @@
         "bash",
         "selftest.sh"
       ],
-      "checks": 50
+      "checks": 51
     },
     "tests/orchestration-test.sh": {
       "cmd": [

@@ -208,6 +208,7 @@ suite "runtime driver"           node    "$PLUGIN/benchmark/gates/drive.mjs"    
 suite "kit ships what it tests"  python3 "$PLUGIN/benchmark/gates/kit-sync.py"               --self-test
 suite "gate scope planner"       python3 "$PLUGIN/bin/scope"                                  selftest
 suite "operator feedback audit"  python3 "$PLUGIN/benchmark/gates/feedback-audit.py"        --self-test
+suite "surface proposer"         python3 "$PLUGIN/bin/arm-surface.py"                        --self-test
 
 echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0

@@ -476,3 +476,40 @@ inert-literal logic covers quoted strings and print sinks; it does not cover her
 so prose about a dangerous command reads as the command. Filed, not fixed here: the row now
 describes the example instead of spelling it, and the hook keeps failing closed, which is the
 right direction for a detector that is unsure.
+
+**Superseded by section 6.** The fix implied above — treat heredoc bodies as inert — was
+measured and is wrong. It would open a real hole.
+
+## 6. What the deny list is, and is not — measured 2026-09-16
+
+Five times in one session, `deny-dangerous.sh` blocked a command of mine whose destructive
+text was **data**: a test fixture listing the patterns it wanted the hook to judge, and then
+the documentation of that very behaviour. That looked like a false-positive class worth
+fixing. The obvious fix was wrong: a heredoc fed to `python3 -` is a PROGRAM, and blanking
+its body would wave through the real thing.
+
+Measured, five spellings of one destructive command:
+
+| form | verdict |
+|---|---|
+| direct | BLOCK |
+| `bash -c` carrying the payload | BLOCK |
+| a heredoc program calling `os.system` on it | BLOCK |
+| the literal split across a concatenation, direct | BLOCK |
+| the literal split across a concatenation, inside a heredoc | **ALLOW** |
+
+The single gap is string concatenation inside a program, and it is not closable by this
+mechanism. A pattern list cannot follow `'rm ' + '-rf /'`, and it equally cannot follow
+base64, `chr()`, an environment variable, or a path the program reads at run time. Adding a
+rule for one spelling would imply coverage of a class that stays open — worse than the honest
+boundary, because someone would then trust it.
+
+**So, plainly: this is a guardrail against accident and drift, not a control against an
+adversary.** It stops the force push, the self-merge, the exit-code suppression, the
+`rm -rf` on an unset variable — things that happen because an agent is moving fast, not
+because it is trying to get past a check. An agent that wants to defeat it can. What
+constrains a determined actor is the sandbox and the permission set, not a pattern list.
+
+Its own false positives are the price of pointing that way, and the direction is right. The
+header of `hooks/inert-mask.py` already records this argument being had once before, when
+"strip quoted regions" was proposed and rejected for the same reason. Unknown means live.

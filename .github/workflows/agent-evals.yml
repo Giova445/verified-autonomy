@@ -85,6 +85,16 @@ jobs:
         # Pinned: benchmark/gates/pin-check.py fails an unpinned install.
         run: python3 -m pip install --quiet pytest==8.3.5 PyYAML==6.0.2
 
+      - name: Install the runtime driver
+        # This workflow runs selftest.sh through the suite-integrity eval, which includes
+        # the drive.mjs controls. drive.mjs exits 2 rather than report on a page it cannot
+        # open, so without Playwright the suite reports NOTRUN and the eval fails on a
+        # dependency, not on the configuration it exists to gate. verify.yml needs the same
+        # step for the same reason — adding it to one workflow and not the other is how
+        # this failed the first time.
+        # Pinned: benchmark/gates/pin-check.py fails an unpinned install.
+        run: npm install --no-save --silent playwright@1.61.0 && npx playwright install --with-deps chromium
+
       - name: Eval positive controls — CONTROLS FIRST
         # Every eval is shown FAILING against a deliberately broken fixture, and where a
         # passing control is declared, PASSING against a correct one. An eval that cannot

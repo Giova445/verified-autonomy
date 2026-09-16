@@ -96,9 +96,16 @@ HARNESS_OUTPUTS = (
     ".claude/proven-config.json",
     ".claude/.proven-config-version",
     ".quality-baseline/**",
+    # PROPOSALS written beside the live config by `arm write` and `arm surface`. They are
+    # suggestions awaiting a human, never the thing the runner reads. Left in the change set
+    # they match no gate's surface and force the full ladder forever — the same defect the
+    # block above fixes, reintroduced by the sibling tool that writes them.
+    ".claude/gates.json.new",
+    ".claude/gates.json.surfaced",
+    ".claude/gates.json.unverified",
 )
 
-EXPECTED_CONTROLS = 14
+EXPECTED_CONTROLS = 15
 
 
 def sh(args, cwd):
@@ -357,6 +364,15 @@ def selftest():
         and any_match(".claude-flow/cache.json", HARNESS_OUTPUTS)
         and not any_match(".claude/gates.json", HARNESS_OUTPUTS)
         and not any_match("src/app.py", HARNESS_OUTPUTS))
+
+    # 15 — a proposal file beside the config is not a change. `arm surface` writes
+    # gates.json.surfaced; leaving it counted meant every run after proposing one forced the
+    # whole ladder. The LIVE config is still counted, which is the half that matters.
+    chk("a gates.json proposal is excluded, the live config is not",
+        any_match(".claude/gates.json.surfaced", HARNESS_OUTPUTS)
+        and any_match(".claude/gates.json.new", HARNESS_OUTPUTS)
+        and not any_match(".claude/gates.json", HARNESS_OUTPUTS)
+        and any_match(".claude/gates.json", FORCE_ALL))
 
     if ran != EXPECTED_CONTROLS:
         print("  FAIL  ran %d controls, expected %d" % (ran, EXPECTED_CONTROLS))

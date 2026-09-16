@@ -31,11 +31,15 @@ import os
 import re
 import sys
 
-# `cd <path>` with a plain path. Deliberately narrow: no globs, no variables, no command
-# substitution. A path this cannot read literally is a path it declines to claim.
-CD = re.compile(r"\bcd\s+([A-Za-z0-9._/-]+)")
+# A `cd` in COMMAND POSITION, not one appearing inside quoted data. The first version
+# matched `cd` anywhere, so `grep -r "cd fixtures" .` proposed fixtures/** — and a wrong
+# surface is the one failure this tool must not have: that gate would then run ONLY when
+# fixtures/** changed, silently skipping every other change. Requiring a separator or end
+# of string after the path rejects the data cases and still accepts a directory named
+# inside a wrapper (`bash -c 'cd web && tsc'`), which real configs use.
+CD = re.compile(r"\bcd\s+([A-Za-z0-9._/-]+)\s*(?:&&|;|$)")
 
-EXPECTED_CONTROLS = 7
+EXPECTED_CONTROLS = 9
 
 
 def plan(root, gates):
@@ -158,6 +162,20 @@ def selftest():
     original = [{"name": "fe", "cmd": "cd web && npm test"}]
     plan(tmp, original)
     chk("planning does not mutate the input", "surface" not in original[0])
+
+    # 8 — a `cd` inside quoted DATA is not a declaration. Measured before the fix:
+    # `grep -r "cd fixtures" .` proposed fixtures/**, which would have made that gate run
+    # only when fixtures/** changed and skip silently for everything else.
+    os.makedirs(os.path.join(tmp, "fixtures"), exist_ok=True)
+    bad = ['grep -r "cd fixtures" .', "pytest -k 'not cd fixtures'"]
+    ok = all(plan(tmp, [{"name": "t", "cmd": c}])[2] == 0 for c in bad)
+    chk("a cd inside quoted data is not read as a declaration", ok)
+
+    # 9 — and the real forms still are, so control 8 did not simply break detection.
+    good = ["cd fixtures && pytest", "./bin/ratchet t bash -c 'cd fixtures && tsc'",
+            "cd fixtures"]
+    ok = all(plan(tmp, [{"name": "t", "cmd": c}])[2] == 1 for c in good)
+    chk("command-position cd, bare or wrapped, is still read", ok)
 
     shutil.rmtree(tmp, ignore_errors=True)
     if ran != EXPECTED_CONTROLS:

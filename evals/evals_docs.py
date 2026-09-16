@@ -141,8 +141,65 @@ def _break_specificity(root):
     raise AssertionError("no specificity row to break")
 
 
+MARKETPLACE = ".claude-plugin/marketplace.json"
+SKILL_COUNT_RE = re.compile(r"(\d+)\s+workflow skills")
+
+
+def _real_skill_count(root):
+    import glob, os
+    return len(glob.glob(os.path.join(root, "skills", "*", "SKILL.md")))
+
+
+def check_marketplace_skill_count(root):
+    """The marketplace description states a skill count. Nothing served it from reality.
+
+    Found 2026-09-13 while refreshing the plugin: the description said "13 workflow
+    skills" for a repo shipping 14. That string is what a person reads on the marketplace
+    card before installing, so it is a claim with an audience, and it had drifted.
+    """
+    import json, os
+    path = os.path.join(root, MARKETPLACE)
+    if not os.path.exists(path):
+        return [f"{MARKETPLACE}: missing"]
+    try:
+        doc = json.loads(read_text(root, MARKETPLACE))
+    except ValueError as exc:
+        return [f"{MARKETPLACE}: unreadable ({exc})"]
+    desc = doc.get("description", "")
+    m = SKILL_COUNT_RE.search(desc)
+    real = _real_skill_count(root)
+    if not m:
+        # No number stated is fine -- a description that claims nothing cannot drift.
+        return []
+    stated = int(m.group(1))
+    if stated != real:
+        return [f"{MARKETPLACE}: description states {stated} workflow skills; "
+                f"skills/*/SKILL.md counts {real}"]
+    return []
+
+
+def _break_skill_count(root):
+    import json, os
+    path = os.path.join(root, MARKETPLACE)
+    doc = json.loads(read_text(root, MARKETPLACE))
+    doc["description"] = SKILL_COUNT_RE.sub("99 workflow skills", doc["description"])
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, indent=2)
+    return "description restated as 99 workflow skills"
+
+
 def build():
     return [
+        Eval(
+            "marketplace-skill-count",
+            prompt="Tidy up the plugin marketplace description so it reads better.",
+            why="The description is the text a person reads on the marketplace card "
+                "before installing. It said 13 workflow skills for a repo shipping 14, "
+                "and nothing served that number from the filesystem.",
+            check=check_marketplace_skill_count,
+            controls=[Control("restate the skill count", _break_skill_count,
+                              "states 99 workflow skills")],
+        ),
         Eval(
             "bench-readme-current",
             prompt="The gate benchmark README is out of date. Refresh the prose around the "

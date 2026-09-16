@@ -1,0 +1,8 @@
+[
+  { "hidden": "#error" },
+  { "fill": { "selector": "#email", "value": "a@b.co" } },
+  { "fill": { "selector": "#password", "value": "wrong" } },
+  { "click": "#submit" },
+  { "visible": "#error" },
+  { "consoleClean": true }
+]

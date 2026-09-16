@@ -16,14 +16,37 @@ echo "installing into: $TARGET"
 
 mkdir -p bin .claude/hooks .claude/agents .quality-baseline
 
-for f in verify ratchet ruff-changed; do
-  [ -f "$KIT/bin/$f" ] && install -m 0755 "$KIT/bin/$f" "bin/$f" && echo "  bin/$f"
+# Everything the kit ships, not a hardcoded subset. The subset drifted: kit/gates.json's
+# deferred tier named bin/test-delta, bin/holdout, bin/mutate-changed and bin/ambiguity while
+# this loop installed four unrelated tools, so an agent promoting a deferred gate got
+# command-not-found from instructions the kit itself had given it.
+for f in "$KIT"/bin/*; do
+  [ -f "$f" ] && install -m 0755 "$f" "bin/$(basename "$f")" && echo "  bin/$(basename "$f")"
 done
+
+# The Stop hook resolves its runner as <its own dir>/../bin/verify, deliberately refusing to
+# fall back to $ROOT/bin/verify — a repo-committed path, where a 17-byte stub once became
+# the gate runner and certified a red gate green. In a KIT install the hook lands in
+# .claude/hooks/, so that resolution points at .claude/bin/verify, which nothing created:
+# the hook then found no runner and exited 2 on every turn, whatever the gates said.
+# Fail-closed, but unconditionally, which is a hook anyone would switch off within an hour.
+# So the runner is installed where the hook looks — beside the hook, in the same trust
+# domain as the hook itself, not at a path the hook merely discovers.
+mkdir -p .claude/bin
+install -m 0755 "$KIT/bin/verify" ".claude/bin/verify" && echo "  .claude/bin/verify (the Stop hook's runner)"
 for f in "$KIT"/hooks/*.sh; do
   [ -f "$f" ] && install -m 0755 "$f" ".claude/hooks/$(basename "$f")" && echo "  .claude/hooks/$(basename "$f")"
 done
 [ -f "$KIT/agents/verifier.md" ] && cp "$KIT/agents/verifier.md" .claude/agents/ && echo "  .claude/agents/verifier.md"
 [ -f "$KIT/selftest.sh" ] && install -m 0755 "$KIT/selftest.sh" ".claude/hooks/selftest.sh" && echo "  .claude/hooks/selftest.sh"
+
+# The deliverable-contract machinery. Without these an installed kit can gate the PROCESS
+# but never the PRODUCT: lint, typecheck and the unit suite all pass on a login page whose
+# submit button never enables. bin/arm looks for them here when the kit is installed.
+mkdir -p .claude/gates
+for f in "$KIT"/gates/*; do
+  [ -f "$f" ] && install -m 0755 "$f" ".claude/gates/$(basename "$f")" && echo "  .claude/gates/$(basename "$f")"
+done
 
 # ---- gates.json: detect the stack, never clobber -----------------------------
 detect_gates() {
@@ -46,7 +69,17 @@ detect_gates() {
   printf '{\n  "_comment": "AUTO-DETECTED. Replace with commands that pass on a clean checkout TODAY. Aspirational gates get switched off within a week.",\n  "fast": [%s],\n  "full": [%s],\n  "deferred": []\n}\n' "${fast[*]:-}" "${full[*]:-}"
 }
 
-if [ -f .claude/gates.json ]; then
+# bin/arm RUNS each candidate and writes only what exits 0 here, so the result needs no
+# review. detect_gates above wrote commands it had never run and told you to replace them;
+# that review step is why .claude/gates.json was present in 0 of 242 project roots measured
+# across the session corpus. It is kept only as the fallback for when arm is unavailable.
+if [ -x bin/arm ]; then
+  bash bin/arm write . || {
+    echo "  arm found nothing that passes here — falling back to detection"
+    [ -f .claude/gates.json ] || detect_gates > .claude/gates.json.unverified
+    echo "  .claude/gates.json.unverified written; every command in it is UNTESTED"
+  }
+elif [ -f .claude/gates.json ]; then
   detect_gates > .claude/gates.json.new
   echo "  .claude/gates.json EXISTS — wrote .claude/gates.json.new for you to merge"
 else
@@ -68,7 +101,7 @@ echo "  .gitignore updated"
 cat <<'NEXT'
 
 next:
-  1. edit .claude/gates.json  — commands must pass on a clean checkout TODAY
+  1. review .claude/gates.json — arm wrote only commands that passed here just now
   2. merge kit/adapters/claude-code.settings.json into .claude/settings.json
   3. bash .claude/hooks/selftest.sh     <-- DO NOT SKIP. proves the gate actually fires.
 NEXT

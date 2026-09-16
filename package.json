@@ -1,0 +1,8 @@
+{
+  "name": "verified-autonomy",
+  "private": true,
+  "description": "Dependency declaration only. benchmark/gates/drive.mjs opens a deliverable in a real browser and refuses to report without one; declaring it here is what lets this repository verify its own driver instead of relying on a browser that happens to be on the machine.",
+  "devDependencies": {
+    "playwright": "1.61.0"
+  }
+}

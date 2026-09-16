@@ -1,0 +1,306 @@
+#!/usr/bin/env python3
+"""scope — which gates can this diff possibly have broken?
+
+    scope plan [dir]     print a RUN/SKIP decision per gate, with the reason
+    scope selftest       run the positive controls
+
+WHY THIS EXISTS
+
+`verify done` runs every gate in the `full` tier for every change. Measured on a real
+ladder: be-test-unit 61s + fe-test 9s (63s under load) + lint/typecheck ≈ 78s quiet and
+135s loaded — paid in full for a one-line documentation edit. A gate ladder that costs two
+minutes per turn gets switched off, and a switched-off gate catches nothing.
+
+The machinery to avoid this already exists in bin/verify: `tests_for_diff()` unions the
+working tree with the committed diff and forces the whole suite on any lockfile, manifest,
+migration, CI or rename. It is reachable only through `verify tests`, which nothing in the
+ladder calls. `run_tier` ignores scope entirely.
+
+THE DANGER, STATED PLAINLY
+
+Skipping gates to go faster is the thing this whole project exists to prevent. The contract
+an agent works under says: do not weaken, skip, or delete a test. So the only defensible
+version of this is one where a skip is PROVABLE and VISIBLE:
+
+  - provable: the gate's surface is declared by the project, and nothing in the diff
+    touches it. Not inferred, not guessed from file extensions.
+  - visible: a skipped gate is printed with its reason and recorded, never silently
+    dropped. A run that skipped gates must not be reported the same way as one that ran
+    everything.
+
+THE RULE THAT MAKES IT SAFE
+
+A file that matches NO gate's declared surface FORCES THE FULL LADDER. That inversion is
+the whole design. The naive version asks "does this gate's surface match?" and skips when
+it does not — which means a file nobody declared a surface for silently skips everything.
+Here an undeclared file is treated as a coverage hole and escalates, so narrowing a surface
+makes the ladder run MORE, never less.
+
+Everything else is conservative in the same direction: no declared surface means always
+run, an empty change set runs everything, and a rename runs everything.
+
+WHAT THIS DOES NOT DO
+
+It does not edit bin/verify and it does not decide anything on its own. It prints a plan.
+Wiring that plan into the runner is a change to the gate runner itself, which is the one
+file an agent must not touch, and the decision belongs to whoever owns the repository.
+"""
+import fnmatch
+import json
+import os
+import subprocess
+import sys
+
+# Touching any of these means the blast radius is not locally decidable: a lockfile changes
+# what every gate runs against, a migration changes the database every test shares, a CI
+# change alters the adjudication layer itself. Declared as a literal, conservative on
+# purpose. Adding a pattern here makes the ladder run more often, never less.
+FORCE_ALL = (
+    "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "requirements*.txt", "pyproject.toml", "uv.lock", "poetry.lock",
+    "Dockerfile*", "docker-compose*.y*ml",
+    ".github/**", "**/migrations/**", "**/alembic/**",
+    ".claude/gates.json", ".claude/acceptance.json",
+)
+
+EXPECTED_CONTROLS = 10
+
+
+def sh(args, cwd):
+    try:
+        p = subprocess.run(args, cwd=cwd, stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL, text=True, timeout=60)
+        return p.stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def changed_files(root):
+    """Union of committed, staged, unstaged and untracked. (files, renamed)
+
+    Scoping to BASE...HEAD alone gives an agent editing uncommitted files an empty change
+    set, which would skip every gate — the worst possible failure for this tool. bin/verify
+    learned that already; the same union is used here deliberately.
+    """
+    base = os.environ.get("VERIFY_BASE", "origin/main")
+    out = set()
+    for args in (
+        ["git", "diff", "--name-only", "--diff-filter=ACM", "%s...HEAD" % base],
+        ["git", "diff", "--name-only", "--diff-filter=ACM", "HEAD"],
+        ["git", "diff", "--name-only", "--diff-filter=ACM", "--cached"],
+        ["git", "ls-files", "--others", "--exclude-standard"],
+    ):
+        out.update(x for x in sh(args, root).splitlines() if x.strip())
+    renamed = bool(sh(["git", "diff", "--diff-filter=R", "--name-only",
+                       "%s...HEAD" % base], root).strip())
+    return sorted(out), renamed
+
+
+def matches(path, pattern):
+    """Glob match where '**' spans directory separators, including zero of them."""
+    if fnmatch.fnmatch(path, pattern):
+        return True
+    # A leading '**/' means "at any depth, INCLUDING the root". fnmatch renders it as a
+    # pattern that still requires a '/', so '**/*.md' missed 'README.md' entirely — every
+    # root-level file looked unclaimed and escalated the whole ladder forever. Safe
+    # direction, but it made the tool useless for the case it was built for.
+    if pattern.startswith("**/") and fnmatch.fnmatch(path, pattern[3:]):
+        return True
+    # fnmatch treats '*' as crossing '/', so 'a/**' already matches 'a/b/c'. The case it
+    # misses is a bare directory prefix written without a wildcard.
+    if pattern.endswith("/**") and path.startswith(pattern[:-3] + "/"):
+        return True
+    return False
+
+
+def any_match(path, patterns):
+    return any(matches(path, p) for p in patterns)
+
+
+def plan(root, gates=None, files=None, renamed=None):
+    """Return (decisions, force_reason). decisions is [(name, run?, reason)]."""
+    if gates is None:
+        cfg = os.path.join(root, ".claude", "gates.json")
+        try:
+            with open(cfg, encoding="utf-8") as fh:
+                gates = (json.load(fh).get("full") or [])
+        except (OSError, ValueError):
+            # Unreadable config is never an excuse to run less.
+            return [], "the gate config could not be read"
+    if files is None:
+        files, renamed = changed_files(root)
+
+    if not files:
+        return [(g.get("name", "?"), True, "no change set — cannot prove anything is safe")
+                for g in gates], "the change set is empty"
+    if renamed:
+        return [(g.get("name", "?"), True, "rename detected") for g in gates], \
+               "a rename makes path-based selection unreliable"
+
+    hit = [f for f in files if any_match(f, FORCE_ALL)]
+    if hit:
+        return [(g.get("name", "?"), True, "shared surface touched") for g in gates], \
+               "%s changes what every gate runs against" % hit[0]
+
+    # THE INVERSION. A file no gate claims is a coverage hole, and a coverage hole must
+    # make the ladder run MORE, not less. Without this, narrowing a surface — or adding a
+    # directory nobody declared — silently skips everything.
+    declared = [p for g in gates for p in (g.get("surface") or [])]
+    orphans = [f for f in files if not any_match(f, declared)]
+    if orphans:
+        return [(g.get("name", "?"), True, "unclaimed file in the diff") for g in gates], \
+               "%s matches no gate's declared surface" % orphans[0]
+
+    decisions = []
+    for g in gates:
+        name = g.get("name", "?")
+        surface = g.get("surface") or []
+        if not surface:
+            decisions.append((name, True, "no declared surface — always runs"))
+            continue
+        touched = [f for f in files if any_match(f, surface)]
+        if touched:
+            decisions.append((name, True, "touched: %s" % touched[0]))
+        else:
+            decisions.append((name, False, "nothing in the diff matches %s" % ", ".join(surface)))
+    return decisions, None
+
+
+def report(root):
+    files, renamed = changed_files(root)
+    decisions, forced = plan(root, files=files, renamed=renamed)
+    if not decisions:
+        print("no gates to plan for%s" % (" — %s" % forced if forced else ""))
+        return 1 if forced else 0
+
+    print("changed files: %d" % len(files))
+    if forced:
+        print("FULL LADDER FORCED: %s" % forced)
+    print()
+    skipped = 0
+    for name, run, reason in decisions:
+        if run:
+            print("  RUN   %-20s %s" % (name, reason))
+        else:
+            skipped += 1
+            print("  SKIP  %-20s %s" % (name, reason))
+    print()
+    if skipped:
+        # Said explicitly, every time. A run that skipped gates is not the same claim as a
+        # run that executed all of them, and printing it the same way is how a scoped
+        # ladder quietly becomes no ladder.
+        print("%d of %d gate(s) would not run. This is a narrower claim than a full pass: "
+              "those gates are unexecuted, not green." % (skipped, len(decisions)))
+    else:
+        print("All %d gate(s) would run." % len(decisions))
+    return 0
+
+
+# ----------------------------------------------------------------- controls
+def selftest():
+    passed = ran = 0
+
+    def chk(label, cond):
+        nonlocal passed, ran
+        ran += 1
+        if cond:
+            passed += 1
+            print("  ok    %s" % label)
+        else:
+            print("  FAIL  %s" % label)
+
+    G = [
+        {"name": "fe-test", "surface": ["web/**"]},
+        {"name": "be-test", "surface": ["api/**"]},
+        {"name": "cheat-scan"},
+    ]
+
+    def run(files, renamed=False, gates=None):
+        return plan("/nonexistent", gates=gates if gates is not None else G,
+                    files=files, renamed=renamed)
+
+    # 1 — the whole point: a backend-only change does not pay for the frontend suite.
+    d, f = run(["api/users.py"])
+    by = dict((n, r) for n, r, _ in d)
+    chk("a backend-only change skips the frontend gate",
+        f is None and by["be-test"] and not by["fe-test"])
+
+    # 2 — and the reverse, so the rule is not accidentally one-directional.
+    d, f = run(["web/login.tsx"])
+    by = dict((n, r) for n, r, _ in d)
+    chk("a frontend-only change skips the backend gate",
+        f is None and by["fe-test"] and not by["be-test"])
+
+    # 3 — a gate with no declared surface is never skipped. Default is conservative.
+    d, f = run(["api/users.py"])
+    by = dict((n, r) for n, r, _ in d)
+    chk("a gate with no surface always runs", by["cheat-scan"])
+
+    # 4 — THE INVERSION, and the control that matters most. A file no gate claims must
+    # escalate to the full ladder. A naive implementation skips both suites here.
+    d, f = run(["docs/readme.md"])
+    chk("a file matching no surface forces the full ladder",
+        f is not None and all(r for _, r, _ in d))
+
+    # 5 — a lockfile changes what every gate runs against.
+    d, f = run(["api/users.py", "package-lock.json"])
+    chk("a lockfile change forces the full ladder",
+        f is not None and all(r for _, r, _ in d))
+
+    # 6 — migrations touch the database every test shares.
+    d, f = run(["api/db/migrations/003_add_col.py"])
+    chk("a migration forces the full ladder",
+        f is not None and all(r for _, r, _ in d))
+
+    # 7 — an empty change set proves nothing, so it cannot license skipping anything. This
+    # is the failure bin/verify already recorded: scoping to the committed diff alone gave
+    # an agent with uncommitted edits an empty set and a silently-passing gate.
+    d, f = run([])
+    chk("an empty change set runs everything",
+        f is not None and all(r for _, r, _ in d))
+
+    # 8 — renames make path selection unreliable.
+    d, f = run(["web/login.tsx"], renamed=True)
+    chk("a rename forces the full ladder",
+        f is not None and all(r for _, r, _ in d))
+
+    # 9 — editing the gate config itself must never be scoped out.
+    d, f = run([".claude/gates.json"])
+    chk("a change to the gate config forces the full ladder",
+        f is not None and all(r for _, r, _ in d))
+
+    # 10 — '**/' must include the root. fnmatch renders '**/*.md' as a pattern needing a
+    # '/', so README.md matched nothing, every root-level file looked unclaimed, and the
+    # ladder escalated on every docs edit — the exact case this tool exists to make cheap.
+    d, f = run(["README.md"], gates=[
+        {"name": "docs", "surface": ["**/*.md"]},
+        {"name": "be-test", "surface": ["api/**"]}])
+    by = dict((n, r) for n, r, _ in d)
+    chk("'**/' matches a root-level file, so a docs edit does not escalate",
+        f is None and by["docs"] and not by["be-test"])
+
+    if ran != EXPECTED_CONTROLS:
+        print("  FAIL  ran %d controls, expected %d" % (ran, EXPECTED_CONTROLS))
+        passed = -1
+    print()
+    if passed == EXPECTED_CONTROLS:
+        print("SELF-TEST PASSED  (%d checks)" % EXPECTED_CONTROLS)
+        return 0
+    print("SELF-TEST FAILED  (%d of %d checks)" % (passed, EXPECTED_CONTROLS))
+    return 1
+
+
+def main():
+    args = sys.argv[1:]
+    cmd = args[0] if args else "plan"
+    if cmd in ("selftest", "--self-test"):
+        return selftest()
+    if cmd == "plan":
+        root = args[1] if len(args) > 1 else os.getcwd()
+        return report(root)
+    print("usage: scope {plan [dir]|selftest}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

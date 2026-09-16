@@ -114,6 +114,16 @@ suite() {
   n="$(printf '%s' "$out" | grep -oE '\([0-9]+ checks' | tail -1 | tr -dc '0-9')"
   if [ "$rc" -eq 0 ] && [ -n "$n" ]; then
     printf '  ok    %-46s (%s checks)\n' "$label" "$n"; pass=$((pass+1))
+  elif [ "$rc" -eq 2 ]; then
+    # Exit 2 is this kit's convention for "the harness could not do its job" — a missing
+    # runtime dependency, not a failing control. Still counted as a failure, because nothing
+    # was verified and a suite that cannot run is not a suite that passed. But it is LABELLED
+    # differently on purpose: "FAIL runtime driver" and "NOT RUN, playwright is unresolvable"
+    # send a reader to two different places, and only one of them is the dependency they
+    # could install. Collapsing them is how a gate gets deleted instead of fixed.
+    printf '  NOTRUN %-45s exit=2 — the suite could not run; nothing was verified\n' "$label"
+    fail=$((fail+1))
+    printf '%s\n' "$out" | head -2 | sed 's/^/          /'
   else
     # A sub-suite that exits 0 having verified nothing is the fabricated receipt this whole
     # project exists to stop, so an unparseable count is a failure too, not a pass.
@@ -151,6 +161,14 @@ suite "control-band detector"    python3 "$PLUGIN/monitoring/selftest.py"
 suite "intent chain"             bash    "$PLUGIN/intent/check-chain.sh"                     selftest
 suite "playbook coverage"        python3 "$PLUGIN/benchmark/gates/playbook-coverage.py"      --self-test
 suite "observation digest"       python3 "$PLUGIN/monitoring/digest.py"                      --self-test
+suite "commit-trailer gate"      python3 "$PLUGIN/benchmark/gates/trailer-check.py"          --self-test
+suite "identity preflight"       python3 "$PLUGIN/benchmark/gates/identity-preflight.py"     --self-test
+suite "agent portability matrix" bash    "$PLUGIN/benchmark/gates/agent-matrix.sh"           --self-test
+suite "gate auto-arming"         bash    "$PLUGIN/bin/arm"                                    selftest
+suite "deliverable acceptance"   python3 "$PLUGIN/benchmark/gates/acceptance.py"             --self-test
+suite "runtime driver"           node    "$PLUGIN/benchmark/gates/drive.mjs"                 --self-test
+suite "kit ships what it tests"  python3 "$PLUGIN/benchmark/gates/kit-sync.py"               --self-test
+suite "gate scope planner"       python3 "$PLUGIN/bin/scope"                                  selftest
 
 echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0

@@ -255,7 +255,7 @@ translating the exit-2 convention to `{"decision":"block"}` on the wire.
 `|| true`, `rm -rf` on an unresolved variable — are blocked in a Codex turn, and an ordinary
 command in the same shape is not. Both arms, or it is a hook that blocks everything.
 
-### T4 — `ledger open` as a gate. Evidence: the loop gap
+### T4 — `ledger open` as a gate. BUILT 2026-09-16. Evidence: the loop gap
 
 `grep -n "ledger" bin/verify hooks/` returns nothing: no gate consults the task ledger, so a
 turn can end with every gate green and every task pending. One entry in `gates.json` wires the
@@ -264,7 +264,7 @@ durable task list into the layer that can actually refuse.
 **Done when:** a turn with a pending ledger task is refused, and the same turn with the task
 closed is not.
 
-### T5 — Evidence relevance in `ledger done`. Evidence: measured
+### T5 — Evidence relevance in `ledger done`. BUILT 2026-09-16. Evidence: measured
 
 `ledger done` validates that the evidence file exists, is non-empty, and hashes it. It does not
 check that it is about the task. Demonstrated live: a file reading `grocery list / milk / eggs`
@@ -433,3 +433,46 @@ B  submit never re-enables; unit suite green   stop-gate exit=2   turn refused
 
 That is the complaint this work started from — green gates beside a broken page — with both
 arms measured.
+
+## 5. Is the feedback still applied? — `benchmark/gates/feedback-audit.py`
+
+Feedback gets applied in a commit and un-applied in a refactor six weeks later, and nobody
+notices, because the test was attached to the code that implemented the instruction and never
+to the instruction itself. This repository has already watched exactly that happen to a
+detector fix that reached `hooks/` and never `kit/hooks/`.
+
+So each item pairs the operator's own words with two probes: one that passes only while the
+instruction is honoured, and a **control that must fail**, proving the first can tell the
+difference. An item whose control passes is `NOT PROVEN` and never credited — the same rule
+every other gate here follows, applied to the one claim nobody usually audits.
+
+| | feedback | how it is enforced now |
+|---|---|---|
+| F1 | quoted-literal false positives, without the bypass | a quoted destructive literal is allowed (0), the bare command blocked (2) |
+| F2 | let a tool modify the hooks | editing a hook allowed (0), force-push still blocked (2) |
+| F3 | nothing product-specific | the plan section names no product; the scanner detects a planted one |
+| F4 | a gate that attacks the deliverable | acceptance controls pass; a non-discriminating contract is refused |
+| F5 | pursue the goal until everything is done | an open ledger exits 1; a grocery list cannot close an OAuth task |
+| F6 | a red flag must not be noisy or wrong | a harness error reads `CANNOT RUN`, never `FAILS` |
+| F7 | stop running the whole suite for every request | scope controls pass **and** `bin/verify` consults it |
+| F8 | fix the two items blocked on the operator | both workflows install the runtime driver |
+
+**All 8 established**, each by a probe shown able to fail. Six controls of its own, including
+the two that matter most: a probe pointed at a missing artifact yields `CANNOT RUN` rather
+than a pass, and an empty tree **fails** the audit instead of reporting everything applied.
+
+F7's check is deliberately two-part. `bin/scope` passing its own controls proves the planner
+works; it does not prove anything consumes it. A perfect planner nothing calls is prose, so
+the probe also asserts `bin/verify` consults it.
+
+**What it cannot do:** it cannot tell you the feedback was applied *well*, or that the
+operator would agree the implementation matches what they meant. It checks that the mechanism
+named in each row is present and still discriminates. Where an item is prose rather than
+mechanism, it says so rather than inventing a check.
+
+**One finding surfaced by writing this section.** `deny-dangerous.sh` blocked the commit of
+this very document, because the F1 row quoted a destructive command as an example. The
+inert-literal logic covers quoted strings and print sinks; it does not cover heredoc bodies,
+so prose about a dangerous command reads as the command. Filed, not fixed here: the row now
+describes the example instead of spelling it, and the hook keeps failing closed, which is the
+right direction for a detector that is unsure.

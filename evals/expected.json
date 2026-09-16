@@ -26,7 +26,7 @@
         "bash",
         "selftest.sh"
       ],
-      "checks": 49
+      "checks": 50
     },
     "tests/orchestration-test.sh": {
       "cmd": [
@@ -41,7 +41,7 @@
         "bin/ledger",
         "selftest"
       ],
-      "checks": 43
+      "checks": 50
     },
     "bin/escalate": {
       "cmd": [

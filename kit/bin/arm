@@ -167,6 +167,19 @@ candidates() { # dir
   case "$accept" in "$d"/*) accept_ref=".${accept#"$d"}" ;; esac
   [ -f "$d/.claude/acceptance.json" ] && [ -n "$accept" ] \
     && emit full acceptance "python3 '$accept_ref' ."
+  # The task ledger, proposed only where one is actually in use. Without this the gate
+  # ladder answers "are the gates green" and never "is the work finished", so a turn ends
+  # green with every task still pending. Probed like any other candidate: a project whose
+  # ledger still has open tasks will see this REJECTED right now, which is the correct
+  # answer and not something to arm around.
+  local ledger=""
+  for p in "$KIT_ROOT/bin/ledger" "$d/bin/ledger"; do
+    [ -x "$p" ] && { ledger="$p"; break; }
+  done
+  local ledger_ref="$ledger"
+  case "$ledger" in "$d"/*) ledger_ref=".${ledger#"$d"}" ;; esac
+  [ -d "$d/.claude/work" ] && [ -n "$ledger" ] \
+    && emit full ledger-open "'$ledger_ref' open"
   return 0
 }
 
@@ -255,7 +268,7 @@ do_write() {
 }
 
 # ---------------------------------------------------------------- controls
-EXPECTED_CONTROLS=9
+EXPECTED_CONTROLS=10
 selftest() {
   local tmp="${TMPDIR:-/tmp}/arm-selftest.$$" ok=0 ran=0
   mkdir -p "$tmp"
@@ -345,6 +358,19 @@ PY
     && ! printf '%s' "$slow_out" | grep -q 'REJECTED (exit' \
     && [ ! -f "$tmp/slow/.claude/gates.json" ]
   chk "a probe that outlives the budget is NO VERDICT, not REJECTED, and arms nothing" $?
+
+  # 10 — the task ledger is armed only where one is in use, and only when its tasks are
+  # closed (an open ledger makes the probe fail, which is the correct answer, not a reason
+  # to arm around it). Both directions: a project with no ledger must not get the gate.
+  mkdir -p "$tmp/ledger/.claude/work"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$tmp/ledger/selftest.sh"
+  chmod +x "$tmp/ledger/selftest.sh"
+  local with_led without_led
+  with_led="$(bash "$self" detect "$tmp/ledger" 2>&1)"
+  without_led="$(bash "$self" detect "$tmp/script" 2>&1)"
+  printf '%s' "$with_led" | grep -q 'ledger-open' \
+    && ! printf '%s' "$without_led" | grep -q 'ledger-open'
+  chk "the ledger gate is armed only where a ledger is in use" $?
 
   # 9 — the deliverable contract is armed when one exists, and NOT proposed when none does.
   # Both directions matter: arming it unconditionally adds a gate that exits 0 without

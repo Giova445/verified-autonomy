@@ -83,6 +83,44 @@ CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/nul
 chk "stubbed bin/verify ignored" "$?" "2"
 rm -rf "$tmp/bin"
 
+# --- scope selection: a narrower claim, never a quieter one ------------------------------
+# run_tier now consults bin/scope when the project DECLARES a `surface` on any gate. These
+# check both directions and, most importantly, that a scoped pass is not reported as a full
+# one. "ALL GATES GREEN" after skipping gates is the fabricated receipt this project exists
+# to stop, arriving through the feature meant to make the ladder affordable.
+sc="$(mktemp -d)"; mkdir -p "$sc/.claude" "$sc/web" "$sc/api"
+( cd "$sc" && git init -q . && git config user.email t@t && git config user.name t )
+printf '%s' '{"full":[{"name":"fe","cmd":"true","surface":["web/**"]},{"name":"be","cmd":"true","surface":["api/**"]},{"name":"always","cmd":"true"}]}' > "$sc/.claude/gates.json"
+echo x > "$sc/web/a.txt"; echo y > "$sc/api/b.txt"
+( cd "$sc" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t commit -qm init >/dev/null 2>&1 )
+
+echo c >> "$sc/web/a.txt"
+rm -f "$sc/.claude/.gate-attempts"
+o="$(CLAUDE_PROJECT_DIR="$sc" bash "$PLUGIN/bin/verify" done 2>&1)"
+printf '%s' "$o" | grep -q "scoped out" && r=yes || r=no
+chk "web-only change scopes out the api gate" "$r" "yes"
+printf '%s' "$o" | grep -q "fe (" && r=yes || r=no
+chk "web-only change still runs the web gate" "$r" "yes"
+# The anti-overclaim check. A scoped run must NOT print the unqualified full-pass line.
+printf '%s' "$o" | grep -q "ALL GATES GREEN" && r=yes || r=no
+chk "a scoped pass is NOT reported as ALL GATES GREEN" "$r" "no"
+
+# The escape hatch must execute everything.
+rm -f "$sc/.claude/.gate-attempts"
+o="$(VERIFY_SCOPE=0 CLAUDE_PROJECT_DIR="$sc" bash "$PLUGIN/bin/verify" done 2>&1)"
+printf '%s' "$o" | grep -q "scoped out" && r=yes || r=no
+chk "VERIFY_SCOPE=0 skips nothing" "$r" "no"
+
+# BACKWARD COMPATIBILITY. A config that declares no surface must behave exactly as it did
+# before scoping existed. Scoping is opt-in by declaration; a project that never heard of it
+# must not silently start running fewer gates.
+printf '%s' '{"full":[{"name":"fe","cmd":"true"},{"name":"be","cmd":"true"}]}' > "$sc/.claude/gates.json"
+rm -f "$sc/.claude/.gate-attempts"
+o="$(CLAUDE_PROJECT_DIR="$sc" bash "$PLUGIN/bin/verify" done 2>&1)"
+printf '%s' "$o" | grep -q "scoped out" && r=yes || r=no
+chk "no declared surface -> nothing is scoped out" "$r" "no"
+find "$sc" -maxdepth 0 -exec rm -rf {} +
+
 # 5. deny-list
 echo '{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}' \
   | bash "$PLUGIN/hooks/deny-dangerous.sh" >/dev/null 2>&1
@@ -169,6 +207,7 @@ suite "deliverable acceptance"   python3 "$PLUGIN/benchmark/gates/acceptance.py"
 suite "runtime driver"           node    "$PLUGIN/benchmark/gates/drive.mjs"                 --self-test
 suite "kit ships what it tests"  python3 "$PLUGIN/benchmark/gates/kit-sync.py"               --self-test
 suite "gate scope planner"       python3 "$PLUGIN/bin/scope"                                  selftest
+suite "operator feedback audit"  python3 "$PLUGIN/benchmark/gates/feedback-audit.py"        --self-test
 
 echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0

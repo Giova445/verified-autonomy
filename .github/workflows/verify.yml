@@ -112,6 +112,13 @@ jobs:
         # selftest.sh reports as counted=none rather than crediting a silent pass.
         # Pinned: benchmark/gates/pin-check.py fails an unpinned install.
         run: python3 -m pip install --quiet pytest==8.3.5 PyYAML==6.0.2
+      - name: Install the runtime driver
+        # Same reason as the pytest step above. benchmark/gates/drive.mjs opens a
+        # deliverable in a real browser and exits 2 -- refusing to report -- when Playwright
+        # is unresolvable, so without this the suite reports NOTRUN and nothing about the
+        # driver is verified. A gate that cannot run is not a gate that passed.
+        # Pinned: benchmark/gates/pin-check.py fails an unpinned install.
+        run: npm install --no-save --silent playwright@1.61.0 && npx playwright install --with-deps chromium
       - name: Enforcement wiring
         run: bash selftest.sh
 

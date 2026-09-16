@@ -146,6 +146,32 @@ print(json.dumps(json.load(open(sys.argv[1])).get(sys.argv[2],[])))' "$CONFIG" "
     return 0
   fi
 
+  # ---- scope selection ------------------------------------------------------------
+  # Only the `full` tier, and only when the project has DECLARED a `surface` on some gate.
+  # A config with no surfaces behaves exactly as it always has — scoping is opt-in by
+  # declaration, the same way the deliverable contract is.
+  #
+  # bin/scope is resolved from THIS SCRIPT'S directory, never from the repo and never from
+  # an env var, for the same reason stop-gate refuses $ROOT/bin/verify: the repo is the
+  # untrusted side, and a scope tool it controls could skip every gate.
+  #
+  # Every failure path here runs MORE, not less: scope missing, scope non-zero, scope
+  # unreadable — all leave SKIP empty. A selection bug must cost time, never coverage.
+  SCOPE_SKIPPED=""
+  if [ "$tier" = full ] && [ "${VERIFY_SCOPE:-1}" != "0" ]; then
+    local self_dir scope_bin has_surface
+    self_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+    scope_bin="$self_dir/scope"
+    has_surface="$(python3 -c '
+import json,sys
+try: g=json.load(open(sys.argv[1])).get("full") or []
+except Exception: print("no"); raise SystemExit
+print("yes" if any(x.get("surface") for x in g) else "no")' "$CONFIG" 2>/dev/null || echo no)"
+    if [ "$has_surface" = yes ] && [ -x "$scope_bin" ]; then
+      SCOPE_SKIPPED="$(python3 "$scope_bin" skip "$ROOT" 2>/dev/null || true)"
+    fi
+  fi
+
   RESULTS="[]"
   for i in $(seq 0 $((n-1))); do
     local name cmd out code start dur
@@ -161,6 +187,22 @@ print(json.dumps(json.load(open(sys.argv[1])).get(sys.argv[2],[])))' "$CONFIG" "
         CONFIG_ERROR="gate '$name' is a placeholder"
         continue ;;
     esac
+
+    # A scoped-out gate is UNEXECUTED, not green. It is printed, it is recorded with
+    # "skipped": true and no exit code, and it never contributes to a pass. Reporting it the
+    # same way as a passing gate is how a scoped ladder quietly becomes no ladder.
+    if [ -n "$SCOPE_SKIPPED" ] && printf '%s\n' "$SCOPE_SKIPPED" | grep -qxF "$name"; then
+      say "  ⊘ $name — scoped out: nothing in the diff touches its declared surface"
+      RESULTS="$(python3 -c '
+import json,sys
+r=json.loads(sys.argv[1])
+r.append({"gate":sys.argv[2],"command":sys.argv[3],"skipped":True,
+          "reason":"no changed file matches the declared surface of this gate",
+          "executed_by":"harness"})
+print(json.dumps(r))' "$RESULTS" "$name" "$cmd")"
+      SKIPPED_N=$((${SKIPPED_N:-0} + 1))
+      continue
+    fi
 
     start=$(date +%s)
     out="$(cd "$ROOT" && eval "$cmd" 2>&1)"; code=$?
@@ -233,7 +275,9 @@ case "${1:-done}" in
         die_code
       fi
       [ -n "$FAILED" ] && { say "$FAILED"; die_code; }
-      say "full: GREEN" ;;
+      if [ "${SKIPPED_N:-0}" -gt 0 ]; then
+        say "full: GREEN for what ran — ${SKIPPED_N} gate(s) scoped out and UNEXECUTED"
+      else say "full: GREEN"; fi ;;
   done|--hook)
       if [ "$attempts" -ge "$MAX_BLOCKS" ]; then
         rm -f "$STATE"
@@ -262,6 +306,15 @@ case "${1:-done}" in
         die_code
       fi
       rm -f "$STATE"
-      say "ALL GATES GREEN — evidence: .claude/evidence/latest.json" ;;
+      # A scoped run is a NARROWER CLAIM than a full pass and is never printed as one.
+      # "ALL GATES GREEN" after skipping three gates is the fabricated receipt this project
+      # exists to stop, arriving through the feature meant to make the ladder affordable.
+      if [ "${SKIPPED_N:-0}" -gt 0 ]; then
+        say "GATES GREEN for what ran — ${SKIPPED_N} gate(s) scoped out, unexecuted not green."
+        say "   Those gates are unproven for this change. Run VERIFY_SCOPE=0 bin/verify done to execute every one."
+        say "   evidence: .claude/evidence/latest.json"
+      else
+        say "ALL GATES GREEN — evidence: .claude/evidence/latest.json"
+      fi ;;
   *) say "usage: verify {preflight|fast|full|done [--hook]|blast <symbol>|tests}"; exit 1 ;;
 esac

@@ -14,6 +14,7 @@
 #   ledger done   <task-id> <n> --evidence <path>  mark n done; REFUSES without evidence
 #   ledger fail   <task-id> <n> --reason <s>       record a failed attempt
 #   ledger rule   <task-id> --text <s>             append a ruling (ambiguity resolved)
+#   ledger open   [task-id]                       exit 1 if any task is still open (gate form)
 #   ledger status <task-id>                        human-readable table
 #   ledger json   <task-id>                        raw state
 #   ledger selftest                                full lifecycle in a temp dir
@@ -261,6 +262,54 @@ cmd_done() {
   [ -f "$ev" ] || { say "REFUSED: evidence file does not exist: $ev"; exit 2; }
   [ -s "$ev" ] || { say "REFUSED: evidence file is empty: $ev. A zero-byte file is not evidence."; exit 2; }
 
+  # RELEVANCE. The three checks above establish that a file exists and has bytes in it.
+  # They do not establish that it is about the task. Demonstrated: a file reading
+  # "grocery list / milk / eggs" closed the task "Implement OAuth token refresh", exit 0.
+  #
+  # Two ways to pass, and a task needs only one:
+  #   a receipt — the evidence looks like the output of something that ran and reported an
+  #               exit status, which is what most real evidence is; or
+  #   an overlap — the evidence mentions at least one significant word from the task text.
+  #
+  # WHAT THIS CANNOT DO, stated plainly: it cannot tell you the evidence is TRUE, or
+  # sufficient, or that the work was done well. A determined agent defeats it by pasting the
+  # task title into a file. It is aimed at the accidental case — the wrong file, the stale
+  # file, the placeholder — which is the one that actually happens, and it makes the honest
+  # path no harder than before.
+  if ! python3 - "$ev" "$(py '
+st = load(sys.argv[1]); t = pick(st, sys.argv[2]); print(t["text"])' "$f" "$n" 2>/dev/null)" <<'PYEOF'
+import re, sys
+blob = open(sys.argv[1], encoding="utf-8", errors="replace").read().lower()
+task = (sys.argv[2] if len(sys.argv) > 2 else "").lower()
+
+# A receipt: something ran and said how it went.
+RECEIPT = re.compile(r"(exit(ed)?[ _-]?(code[ :]*)?\d|all_green|\bpassed\b|\bfailed\b|"
+                     r"\bok\b|✓|selftest|test(s)? run|assert)")
+if RECEIPT.search(blob):
+    sys.exit(0)
+
+STOP = {"the", "and", "for", "with", "that", "this", "from", "into", "when", "then",
+        "make", "made", "add", "added", "use", "using", "task", "work", "code", "fix",
+        "implement", "update", "create", "build", "ensure", "should", "must", "page"}
+words = {w for w in re.findall(r"[a-z][a-z0-9_-]{3,}", task) if w not in STOP}
+if not words:
+    # Nothing distinctive to match on. Fall back to demanding a receipt rather than
+    # accepting anything — a task whose title is all stopwords must not become the one
+    # task any file can close.
+    print("REFUSED: the task text has no distinctive words to match, so the evidence must "
+          "be a verification receipt (a command's output with an exit status).",
+          file=sys.stderr)
+    sys.exit(1)
+if any(w in blob for w in words):
+    sys.exit(0)
+print("REFUSED: this evidence is not about this task. It mentions none of: %s"
+      % ", ".join(sorted(words)[:8]), file=sys.stderr)
+print("        A file with bytes in it is not evidence of THIS task. Attach the run output, "
+      "the diff, or the gate receipt.", file=sys.stderr)
+sys.exit(1)
+PYEOF
+  then exit 2; fi
+
   py '
 path, ev = sys.argv[1], sys.argv[3]
 lk = lock(path)
@@ -337,6 +386,49 @@ say("ruling %d recorded." % len(st["rulings"]))
 ' "$f" "$text"
 }
 
+# ---------------------------------------------------------------- the gate form
+# `ledger open` answers the one question the gate ladder never asked: is the WORK finished?
+#
+# `grep -n "ledger" bin/verify hooks/` returned nothing. The Stop hook enforced that the
+# gates are green; nothing enforced that the plan is done. So a turn could end with every
+# gate passing and seven tasks pending, and the layer that CAN refuse never knew.
+#
+# Shaped to be a gate command, so it takes no required argument and sweeps every ledger:
+#   0  nothing open (or no ledger in use — the project has not opted in)
+#   1  open tasks, named
+#   3  a ledger exists and cannot be read — never a pass
+#
+# The no-ledger case exits 0 deliberately. Blocking every repo on a file none of them have
+# is how a gate gets deleted in week one; a project opts in by running `ledger init`.
+cmd_open() {
+  local id="${1:-}"
+  if [ -n "$id" ]; then
+    local f; f="$(id_path "$id")" || exit 2
+    LEDGER_FILES="$f"
+  else
+    LEDGER_FILES="$(find "$WORK" -maxdepth 1 -name '*.json' 2>/dev/null | sort)"
+  fi
+  if [ -z "$LEDGER_FILES" ]; then
+    say "no ledger in use — nothing is claimed about whether the work is finished."
+    return 0
+  fi
+  local rc=0 f2
+  for f2 in $LEDGER_FILES; do
+    py '
+st = load(sys.argv[1])
+open_tasks = [t for t in st["tasks"] if t["status"] in ("pending", "in_progress", "blocked")]
+if not open_tasks:
+    print("%s: all %d task(s) closed." % (st["task_id"], len(st["tasks"])))
+    sys.exit(0)
+print("%s: %d of %d task(s) still open:" % (st["task_id"], len(open_tasks), len(st["tasks"])))
+for t in open_tasks:
+    print("  #%d  %-12s %s" % (t["n"], t["status"], t["text"]))
+sys.exit(1)
+' "$f2" || rc=$?
+  done
+  return $rc
+}
+
 cmd_status() {
   local f; f="$(id_path "${1:-}")" || exit 2
   py '
@@ -380,7 +472,11 @@ selftest() {
 - [ ] parse the token
 - [ ] wire the middleware
 PLAN
-  printf 'gate output\n' > "$tmp/ev.txt"
+  # Realistic evidence, deliberately. This used to be the literal string "gate output",
+  # which names nothing about "parse the token" and contains no exit status — exactly what
+  # the relevance check below exists to reject. The fixture was the unrealistic part, not
+  # the requirement: a file that could close any task was never evidence of this one.
+  printf 'pytest -q tests/test_token.py\n3 passed\n' > "$tmp/ev.txt"
   : > "$tmp/empty.txt"
 
   L init t1 --plan "$tmp/plan.md" >/dev/null 2>&1
@@ -419,6 +515,40 @@ PLAN
   chk "done with a zero-byte evidence file REFUSED" "$?" "2"
   s="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["tasks"][0]["status"])' "$tmp/.claude/work/t1.json")"
   chk "refused done left the task untouched" "$s" "pending"
+
+  # RELEVANCE, on an isolated id so the assertions above keep their own state.
+  # Existence and non-emptiness were already checked; neither says the file is about the
+  # task. A file reading "grocery list / milk / eggs" closed "Implement OAuth token
+  # refresh" with exit 0 until this existed.
+  # THE GATE FORM. Nothing in the gate ladder ever asked whether the WORK was finished:
+  # `grep -n "ledger" bin/verify hooks/` returned no matches, so a turn could end with every
+  # gate green and every task pending. All four arms, because a gate that only ever answers
+  # one way is not a gate.
+  L open t9 >/dev/null 2>&1
+  chk "open on a project with no such ledger" "$?" "3"
+  L init t8 --plan "$tmp/plan.md" >/dev/null 2>&1
+  L open t8 >/dev/null 2>&1
+  chk "open tasks -> exit 1" "$?" "1"
+  printf 'pytest tests/test_token.py\n2 passed\n' > "$tmp/ev8.txt"
+  L done t8 1 --evidence "$tmp/ev8.txt" >/dev/null 2>&1
+  L done t8 2 --evidence "$tmp/ev8.txt" >/dev/null 2>&1
+  L open t8 >/dev/null 2>&1
+  chk "all tasks closed -> exit 0" "$?" "0"
+  printf '%s' '{not json' > "$tmp/.claude/work/t8.json"
+  L open t8 >/dev/null 2>&1
+  chk "a corrupt ledger is never a pass" "$?" "3"
+
+  L init t5 --plan "$tmp/plan.md" >/dev/null 2>&1
+  printf 'grocery list\nmilk\neggs\n' > "$tmp/unrelated.txt"
+  L done t5 1 --evidence "$tmp/unrelated.txt" >/dev/null 2>&1
+  chk "evidence about something else REFUSED" "$?" "2"
+  s5="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["tasks"][1]["status"])' "$tmp/.claude/work/t5.json")"
+  chk "a relevance refusal left the task untouched" "$s5" "pending"
+  # The other direction, so this is not simply "refuse everything": a verification receipt
+  # is accepted even when it shares no vocabulary with the task text.
+  printf 'npm test --silent\nexit 0\n' > "$tmp/receipt.txt"
+  L done t5 1 --evidence "$tmp/receipt.txt" >/dev/null 2>&1
+  chk "a receipt with no shared vocabulary is accepted" "$?" "0"
 
   L done t1 1 --evidence "$tmp/ev.txt" >/dev/null 2>&1
   chk "done with real evidence exits 0" "$?" "0"
@@ -543,6 +673,7 @@ case "$cmd" in
   done)     cmd_done   "$@" ;;
   fail)     cmd_fail   "$@" ;;
   rule)     cmd_rule   "$@" ;;
+  open)     cmd_open   "$@" ;;
   status)   cmd_status "$@" ;;
   json)     cmd_json   "$@" ;;
   selftest) selftest ;;

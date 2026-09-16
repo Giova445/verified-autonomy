@@ -90,7 +90,7 @@ that would be someone's taste dressed as a measurement.
 | **Mechanism** | `bin/ledger init <id> --plan <plan.md>` parses `- [ ]` checkboxes into numbered tasks and **refuses a plan with none** — an empty ledger would report "nothing to do" and certify completion. `ledger done` refuses a task with no evidence artifact. Corrupt state is exit 3, never a silent re-init. |
 | **Mechanism** | `bin/worktree-guard claim <id> --scope '<glob>'` — exit 2 if another writer holds the path. One writer per worktree, enforced rather than asked. |
 | **Mechanism** | `bin/escalate advise <id> <n>` — fix-loop budget; stops early when a failure *signature* repeats. |
-| **Verify** | `bash bin/ledger selftest` (43), `bash bin/worktree-guard selftest` (39), `bash bin/escalate selftest` (25), `bash tests/orchestration-test.sh` (80) |
+| **Verify** | `bash bin/ledger selftest` (50), `bash bin/worktree-guard selftest` (39), `bash bin/escalate selftest` (25), `bash tests/orchestration-test.sh` (80) |
 | **FSM** | `PLAN → RED` requires the impact set computed from the code graph, and file scope recorded |
 
 This is the hop where the chain stops being paperwork: the plan's work order is **parsed**,

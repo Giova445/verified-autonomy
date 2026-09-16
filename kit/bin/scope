@@ -74,9 +74,31 @@ HARNESS_OUTPUTS = (
     ".claude/evidence/**",
     ".claude/evidence",
     ".claude/work/**",
+    # Agent TOOLING that lives in the repo without being its source. Measured in a real
+    # worktree: 1 tracked modification, and 413 "changed files" — the rest were installed
+    # skills, agent definitions, flow caches and ratchet state, none of which any gate
+    # claims. The inversion then treats every one as a coverage hole and forces the full
+    # ladder, permanently. Scope would have stayed inert in the one project it was turned
+    # on in, while looking installed.
+    #
+    # NOT excluded by "is it untracked", which the change set deliberately includes so that
+    # a NEW SOURCE FILE still triggers its gates. Declared by path, and deliberately narrow:
+    # .claude/gates.json and .claude/acceptance.json are absent from this list and remain in
+    # FORCE_ALL, because changing what the gates ARE must never be scoped.
+    ".agents/**",
+    ".claude-flow/**",
+    ".claude/agents/**",
+    ".claude/commands/**",
+    ".claude/helpers/**",
+    ".claude/skills/**",
+    ".claude/plugins/**",
+    ".claude/memory.db",
+    ".claude/proven-config.json",
+    ".claude/.proven-config-version",
+    ".quality-baseline/**",
 )
 
-EXPECTED_CONTROLS = 13
+EXPECTED_CONTROLS = 14
 
 
 def sh(args, cwd):
@@ -325,6 +347,16 @@ def selftest():
         any_match(".claude/.gate-attempts", HARNESS_OUTPUTS)
         and any_match(".claude/evidence/latest.json", HARNESS_OUTPUTS)
         and not any_match("api/users.py", HARNESS_OUTPUTS))
+
+    # 14 — agent tooling in the repo is not a project change. Measured: a real worktree
+    # reported 413 changed files against 1 tracked modification, and the rest forced the
+    # ladder forever. The gate CONFIG is deliberately still counted.
+    chk("agent tooling is excluded, gate config is not",
+        any_match(".agents/skills/x/SKILL.md", HARNESS_OUTPUTS)
+        and any_match(".claude/skills/y/SKILL.md", HARNESS_OUTPUTS)
+        and any_match(".claude-flow/cache.json", HARNESS_OUTPUTS)
+        and not any_match(".claude/gates.json", HARNESS_OUTPUTS)
+        and not any_match("src/app.py", HARNESS_OUTPUTS))
 
     if ran != EXPECTED_CONTROLS:
         print("  FAIL  ran %d controls, expected %d" % (ran, EXPECTED_CONTROLS))

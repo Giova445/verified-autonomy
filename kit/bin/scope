@@ -63,7 +63,20 @@ FORCE_ALL = (
     ".claude/gates.json", ".claude/acceptance.json",
 )
 
-EXPECTED_CONTROLS = 10
+# Files the gate runner itself writes. They are outputs of a verification run, never inputs
+# to any gate, and they are untracked — so `git ls-files --others` returns them and the
+# inversion above treats each one as an unclaimed file and escalates. The runner writing
+# .claude/.gate-attempts was enough to force the full ladder on every scoped run, which
+# would have made this tool silently do nothing. Declared literally, and deliberately not
+# read from .gitignore: a repo without one must behave the same.
+HARNESS_OUTPUTS = (
+    ".claude/.gate-attempts",
+    ".claude/evidence/**",
+    ".claude/evidence",
+    ".claude/work/**",
+)
+
+EXPECTED_CONTROLS = 13
 
 
 def sh(args, cwd):
@@ -91,6 +104,7 @@ def changed_files(root):
         ["git", "ls-files", "--others", "--exclude-standard"],
     ):
         out.update(x for x in sh(args, root).splitlines() if x.strip())
+    out = {f for f in out if not any_match(f, HARNESS_OUTPUTS)}
     renamed = bool(sh(["git", "diff", "--diff-filter=R", "--name-only",
                        "%s...HEAD" % base], root).strip())
     return sorted(out), renamed
@@ -279,6 +293,39 @@ def selftest():
     chk("'**/' matches a root-level file, so a docs edit does not escalate",
         f is None and by["docs"] and not by["be-test"])
 
+    # 11 — `skip` prints nothing whenever the full ladder is forced. A caller reads silence
+    # as "skip nothing", so any leakage here turns an escalation into a reduction.
+    import io, tempfile
+    from contextlib import redirect_stdout
+    d = tempfile.mkdtemp(prefix="scope-skip-")
+    os.makedirs(os.path.join(d, ".claude"), exist_ok=True)
+    with open(os.path.join(d, ".claude", "gates.json"), "w") as fh:
+        json.dump({"full": [{"name": "fe", "surface": ["web/**"]},
+                            {"name": "be", "surface": ["api/**"]}]}, fh)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = skip_list("/nonexistent/no/repo/here")
+    chk("`skip` prints nothing and exits 0 when it cannot decide",
+        rc == 0 and buf.getvalue().strip() == "")
+
+    # 12 — an unreadable gate config must not produce a skip list. The caller would read it
+    # as permission to run less, on a config nobody could parse.
+    with open(os.path.join(d, ".claude", "gates.json"), "w") as fh:
+        fh.write("{not json")
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = skip_list(d)
+    chk("an unreadable config yields no skips", buf.getvalue().strip() == "")
+    import shutil as _sh; _sh.rmtree(d, ignore_errors=True)
+
+    # 13 — the runner's own scratch files must not be treated as a change. .gate-attempts
+    # is untracked, so ls-files returns it, and the inversion then escalated every scoped
+    # run: the act of running the gates forced the full ladder next time.
+    chk("harness output files are not counted as changes",
+        any_match(".claude/.gate-attempts", HARNESS_OUTPUTS)
+        and any_match(".claude/evidence/latest.json", HARNESS_OUTPUTS)
+        and not any_match("api/users.py", HARNESS_OUTPUTS))
+
     if ran != EXPECTED_CONTROLS:
         print("  FAIL  ran %d controls, expected %d" % (ran, EXPECTED_CONTROLS))
         passed = -1
@@ -290,6 +337,26 @@ def selftest():
     return 1
 
 
+def skip_list(root):
+    """Machine-readable half of `plan`: the gate names that need not run.
+
+    Prints one name per line, nothing when everything must run. Exit 0 means the answer is
+    trustworthy; ANY non-zero means the caller must run the full ladder. That direction is
+    deliberate — a selection bug has to cost time, never coverage.
+    """
+    try:
+        decisions, forced = plan(root)
+    except Exception as exc:                      # noqa: BLE001 - see the comment above
+        print("scope: could not decide (%s)" % exc, file=sys.stderr)
+        return 2
+    if forced or not decisions:
+        return 0                                  # nothing skippable; silence is the answer
+    for name, run, _reason in decisions:
+        if not run:
+            print(name)
+    return 0
+
+
 def main():
     args = sys.argv[1:]
     cmd = args[0] if args else "plan"
@@ -298,7 +365,10 @@ def main():
     if cmd == "plan":
         root = args[1] if len(args) > 1 else os.getcwd()
         return report(root)
-    print("usage: scope {plan [dir]|selftest}", file=sys.stderr)
+    if cmd == "skip":
+        root = args[1] if len(args) > 1 else os.getcwd()
+        return skip_list(root)
+    print("usage: scope {plan [dir]|skip [dir]|selftest}", file=sys.stderr)
     return 2
 
 

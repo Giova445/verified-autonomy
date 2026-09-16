@@ -228,6 +228,25 @@ emit_config() {
   printf '  "deferred": []\n}\n'
 }
 
+# ---------------------------------------------------------------- surfaces
+# `arm surface` proposes a `surface` for each gate that already NAMES its own directory.
+#
+# Scope selection is opt-in by declaration and, measured across this machine, no gate
+# anywhere declares one — so bin/scope is installed, wired into the runner, and inert. The
+# missing step was never the planner; it was that somebody had to hand-edit a config.
+#
+# Nothing here is inferred. A gate whose command starts `cd griffin-chatbot-frontend &&`
+# has told you its directory; this reads that back. A gate with no `cd` gets NO surface,
+# which means it always runs. Safe in both directions: scope treats a file matching no
+# declared surface as a coverage hole and escalates the whole ladder, so under-declaring
+# costs time and never coverage.
+#
+# Writes .claude/gates.json.surfaced beside the original, never over it — same rule as
+# `arm write`. Applying it is a decision, not a side effect of looking.
+surface_plan() { # dir
+  python3 "$KIT_ROOT/bin/arm-surface.py" "$1"
+}
+
 # ---------------------------------------------------------------- commands
 do_detect() {
   say "candidates in: $TARGET"
@@ -395,8 +414,9 @@ PY
 }
 
 case "$CMD" in
+  surface)  surface_plan "$TARGET" ;;
   detect)   do_detect ;;
   write)    do_write ;;
   selftest) selftest ;;
-  *) say "usage: arm {detect|write} [dir] | arm selftest"; exit 2 ;;
+  *) say "usage: arm {detect|write|surface} [dir] | arm selftest"; exit 2 ;;
 esac

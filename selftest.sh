@@ -168,6 +168,7 @@ suite "gate auto-arming"         bash    "$PLUGIN/bin/arm"                      
 suite "deliverable acceptance"   python3 "$PLUGIN/benchmark/gates/acceptance.py"             --self-test
 suite "runtime driver"           node    "$PLUGIN/benchmark/gates/drive.mjs"                 --self-test
 suite "kit ships what it tests"  python3 "$PLUGIN/benchmark/gates/kit-sync.py"               --self-test
+suite "gate scope planner"       python3 "$PLUGIN/bin/scope"                                  selftest
 
 echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0

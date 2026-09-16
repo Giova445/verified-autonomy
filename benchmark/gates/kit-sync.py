@@ -55,6 +55,7 @@ PAIRS = [
     ("bin/test-delta", "bin/test-delta"),
     ("bin/verify", "bin/verify"),
     ("bin/arm", "bin/arm"),
+    ("bin/scope", "bin/scope"),
     ("hooks/deny-dangerous.sh", "hooks/deny-dangerous.sh"),
     ("hooks/inert-mask.py", "hooks/inert-mask.py"),
     ("hooks/scan-diff-cheats.sh", "hooks/scan-diff-cheats.sh"),
@@ -73,7 +74,7 @@ KIT_ONLY = {
 # Directories whose contents are mirrored. Used only for direction 3.
 MIRRORED = ("bin", "hooks", "gates")
 
-EXPECTED_PAIRS = 16
+EXPECTED_PAIRS = 17
 EXPECTED_CONTROLS = 7
 
 

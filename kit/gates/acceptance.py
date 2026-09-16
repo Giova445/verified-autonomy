@@ -66,9 +66,14 @@ CONTRACT = ".claude/acceptance.json"
 REQUIRED = ("name", "expect", "check", "control")
 TIMEOUT = int(os.environ.get("ACCEPT_TIMEOUT", "300"))
 
+# The kit-wide convention for "the harness could not do its job", distinct from "the thing
+# under test is wrong". drive.mjs, verify and ledger all use it. Kept as a named constant so
+# the distinction is a decision rather than a magic number somebody normalises away.
+HARNESS_ERROR = 2
+
 # Declared independently of the control bodies below. Deriving this from the list of
 # controls would mean deleting a control also deletes the expectation that it ran.
-EXPECTED_CONTROLS = 8
+EXPECTED_CONTROLS = 11
 
 
 def run(cmd, cwd):
@@ -111,6 +116,25 @@ def judge(outcome, root):
     if rc_control is None:
         return "NO VERDICT", "control still running at %ss" % TIMEOUT
 
+    # CANNOT RUN comes before every other verdict, because saying "FAILS" about a deliverable
+    # nobody looked at is a false statement about the product, and it is the one that gets a
+    # gate deleted. Exit 2 is the convention across this kit for "the harness could not do its
+    # job" — drive.mjs uses it for an unresolvable browser or an unreadable checks file, verify
+    # uses it to refuse to certify, ledger uses it for a refused request. An earlier version
+    # collapsed it into FAILS and reported "check exited 2; control discriminates (exit 2)"
+    # about a login page that was perfectly fine. Both halves of that sentence were untrue.
+    if rc_check == HARNESS_ERROR or rc_control == HARNESS_ERROR:
+        which = "check" if rc_check == HARNESS_ERROR else "control"
+        return "CANNOT RUN", ("the %s exited %d — the harness could not do its job, so nothing "
+                              "was learned about the deliverable. Fix the environment, not the "
+                              "code." % (which, HARNESS_ERROR))
+
+    # NOT a rule here: "check and control exited the same code, so nothing was discriminated".
+    # That was added and removed in the same sitting, because control 2 below refutes it.
+    # check=1 with control=1 is a legitimate FAILS — the control demonstrated the check CAN
+    # fail, and the real artifact failed too. The only same-code case that means nothing is a
+    # harness error, and the branch above already owns it.
+    #
     # The control runs regardless of how the check went. A failing check with a
     # non-discriminating control is two problems, and reporting only the first sends
     # someone to fix code when the check itself cannot see anything.
@@ -143,16 +167,25 @@ def report(root):
     print("deliverable contract: %d outcome(s)" % len(outcomes))
     print()
     bad = 0
+    unrunnable = 0
     for o in outcomes:
         verdict, detail = judge(o, root)
         if verdict != "holds":
             bad += 1
+        if verdict == "CANNOT RUN":
+            unrunnable += 1
         print("  %-11s %s" % (verdict, o.get("name") or "(unnamed)"))
         print("              expected: %s" % (o.get("expect") or "(not stated)"))
         print("              %s" % detail)
     print()
     if bad:
         print("%d of %d outcome(s) not established." % (bad, len(outcomes)))
+        if unrunnable:
+            # Said plainly and separately, because "your deliverable is broken" and "this
+            # machine cannot open a browser" call for completely different actions, and a
+            # reader who cannot tell them apart stops trusting the gate.
+            print("%d of those could not be checked at all — the deliverable may be perfectly "
+                  "fine. That is an environment problem, not a code problem." % unrunnable)
         return 1
     print("All %d declared outcome(s) hold, each proven by a check that can fail."
           % len(outcomes))
@@ -229,6 +262,28 @@ def selftest():
     # 7 — an empty outcome list certifies everything, so it is a finding.
     rc, out = rc_of(repo("empty", {"outcomes": []}))
     chk("an empty contract is a finding, not a green run", rc == 1 and "zero outcomes" in out)
+
+    # 9 — the verdict that started all this. A harness that cannot run must never produce a
+    # sentence about the product. Saying "FAILS: submit enables once both fields are filled"
+    # when no browser was available is a false claim, and it is the one that makes someone
+    # delete the gate rather than install the dependency.
+    rc, out = rc_of(repo("cannotrun", {"outcomes": [
+        {"name": "o", "expect": "e", "check": "exit 2", "control": "exit 1"}]}))
+    chk("a check that could not run is CANNOT RUN, never FAILS",
+        rc == 1 and "CANNOT RUN" in out and "FAILS" not in out)
+
+    # 10 — same when it is the CONTROL that could not run. The check may have exited 0, but
+    # with no working control there is no evidence it could have failed, so crediting the
+    # outcome would be the vacuous green this gate exists to prevent.
+    rc, out = rc_of(repo("ctlcannotrun", {"outcomes": [
+        {"name": "o", "expect": "e", "check": "exit 0", "control": "exit 2"}]}))
+    chk("a control that could not run is CANNOT RUN, never a pass",
+        rc == 1 and "CANNOT RUN" in out and "holds" not in out)
+
+    # 11 — and it stays distinct in the summary. A reader who cannot tell "your page is
+    # broken" from "this machine has no browser" takes the wrong action either way.
+    chk("the summary separates unrunnable outcomes from failing ones",
+        "environment problem, not a code problem" in out)
 
     # 8 — the three-field rule is enforced on `control` specifically. Control 4 removed
     # `expect`; an outcome can just as easily ship with no control at all, which would be

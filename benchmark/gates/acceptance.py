@@ -74,7 +74,7 @@ HARNESS_ERROR = 2
 
 # Declared independently of the control bodies below. Deriving this from the list of
 # controls would mean deleting a control also deletes the expectation that it ran.
-EXPECTED_CONTROLS = 18
+EXPECTED_CONTROLS = 21
 
 
 def run(cmd, cwd):
@@ -143,6 +143,13 @@ def load(root):
 # environment whose provenance does not match is never credited.
 REVISION = re.compile(r"\b([0-9a-f]{7,40})\b")
 
+# The floor on a revision this will accept, whatever produced it. The default regex
+# above already requires 7, but a DECLARED `pattern` bypasses it entirely: a contract
+# capturing one character made provenance accept any build whose sha began with that
+# character, and report "running a, the revision under test". Provenance reduced to a
+# one-in-sixteen coin flip, stated as confirmation. Git's own short-sha floor is 7.
+MIN_REVISION = 7
+
 
 def substitute(cmd, env_vars):
     for k, v in (env_vars or {}).items():
@@ -175,6 +182,9 @@ def provenance(env, root):
     if not m:
         return False, "no revision found in the probe output"
     sha = m.group(1) if m.groups() else m.group(0)
+    if len(sha) < MIN_REVISION:
+        return False, ("the probe yielded %r, too short to identify a build (need %d+ "
+                       "characters) — check the declared `pattern`" % (sha, MIN_REVISION))
     n = min(len(sha), len(head))
     if sha[:n].lower() != head[:n].lower():
         return False, ("it is running %s, not the %s under test — anything that passed here "
@@ -182,9 +192,16 @@ def provenance(env, root):
     return True, "running %s, the revision under test" % sha[:12]
 
 
-def judge(outcome, root, environments=None):
-    """(verdict, detail) for one declared outcome."""
+def judge(outcome, root, environments=None, resolved=None):
+    """(verdict, detail) for one declared outcome.
+
+    `resolved` caches each environment's provenance verdict. Without it the probe ran once
+    per OUTCOME: five outcomes in one environment meant five network calls, and — worse —
+    five separate answers to "which build is this", so a deploy landing mid-run could have
+    outcome 1 and outcome 5 verifying different builds and neither saying so.
+    """
     environments = environments or {}
+    resolved = {} if resolved is None else resolved
     missing = [f for f in REQUIRED if not outcome.get(f)]
     if missing:
         return "REFUSED", "missing required field(s): %s" % ", ".join(missing)
@@ -196,7 +213,9 @@ def judge(outcome, root, environments=None):
             return "REFUSED", ("names environment '%s', which the contract does not declare"
                                % name)
         env = environments[name]
-        ok, detail = provenance(env, root)
+        if name not in resolved:
+            resolved[name] = provenance(env, root)
+        ok, detail = resolved[name]
         if not ok:
             # NOT "FAILS". The product may be perfectly fine; what is wrong is that this
             # environment is not the thing under test. Those send a reader to opposite places.
@@ -264,8 +283,9 @@ def report(root):
           % (len(outcomes), len(set(where(o) for o in outcomes))))
     print()
     bad = unrunnable = wrong_build = 0
+    resolved = {}                       # one provenance answer per environment, per run
     for o in outcomes:
-        verdict, detail = judge(o, root, environments)
+        verdict, detail = judge(o, root, environments, resolved)
         if verdict != "holds":
             bad += 1
         if verdict == "CANNOT RUN":
@@ -314,8 +334,17 @@ def selftest():
             print("  FAIL  %s" % label)
 
     def repo(name, contract):
+        # A REAL git repo, because provenance compares against `git rev-parse HEAD`. Without
+        # one, HEAD is unreadable and provenance refuses on THAT — so the WRONG BUILD
+        # controls below passed without ever exercising the sha comparison they exist to
+        # assert. A control that reaches the right verdict down the wrong path is the
+        # vacuous green this gate is built to refuse, arriving inside the gate's own suite.
         d = os.path.join(tmp, name)
         os.makedirs(os.path.join(d, ".claude"), exist_ok=True)
+        run("git init -q . && git config user.email h@h && git config user.name h", d)
+        with open(os.path.join(d, "seed.txt"), "w") as fh:
+            fh.write(name)
+        run("git add -A && git commit -qm seed", d)
         if contract is not None:
             with open(os.path.join(d, CONTRACT), "w", encoding="utf-8") as fh:
                 fh.write(contract if isinstance(contract, str) else json.dumps(contract))
@@ -426,7 +455,12 @@ def selftest():
                       "check": "exit 0", "control": "exit 1"}]})
     rc, out = rc_of(d)
     chk("an environment on a different build is refused though the check passes",
-        rc == 1 and "WRONG BUILD" in out and "holds" not in out)
+        rc == 1 and "WRONG BUILD" in out and "holds" not in out
+        # "it is running " is emitted ONLY by the sha comparison. An earlier version asserted
+        # "not the", which also appears in this gate's own summary line — so the control
+        # matched its own boilerplate and passed against a fixture with no git repo at all,
+        # where provenance had refused for an entirely different reason.
+        and "it is running " in out)
 
     # 16 — and it is NOT reported as a product failure. "Your feature is broken" and "you are
     # looking at a different build" send a reader to opposite places.
@@ -448,6 +482,37 @@ def selftest():
         "outcomes": [{"name": "o", "expect": "e", "env": "e1",
                       "check": "exit 0", "control": "exit 1"}]}))
     chk("an environment claiming no provenance still runs", rc == 0 and "holds" in out)
+
+    # 19 — a declared `pattern` cannot weaken provenance below a real revision. Measured
+    # before the fix: a pattern capturing one character accepted any build sharing that
+    # character and announced "running a, the revision under test".
+    d = repo("shortcap", None)
+    _rc, head = run_out("git rev-parse HEAD", d)
+    head = head.strip()
+    assert head, "control setup: the scratch repo has no HEAD"
+    ok, detail = provenance({"provenance": {"cmd": "echo " + head, "pattern": r"(\w)"}}, d)
+    chk("a one-character capture cannot establish provenance",
+        ok is False and "too short" in detail)
+
+    # 20 — and a real short sha still works, so control 19 did not pass by refusing
+    # everything. Seven is git's own floor and what the default regex already required.
+    ok, _d = provenance({"provenance": {"cmd": "echo " + head[:7]}}, d)
+    chk("a 7-character short sha is still accepted", ok is True)
+
+    # 21 — the probe runs ONCE per environment, not once per outcome. Five outcomes used to
+    # mean five network calls and five separate answers to "which build is this", so a
+    # deploy landing mid-run could have two outcomes verifying different builds silently.
+    probe = os.path.join(d, "count.sh")
+    with open(probe, "w") as fh:
+        fh.write("#!/bin/sh\necho run >> %s/hits\necho %s\n" % (d, head))
+    os.chmod(probe, 0o755)
+    with open(os.path.join(d, CONTRACT), "w") as fh:
+        json.dump({"environments": {"e1": {"provenance": {"cmd": probe}}},
+                   "outcomes": [{"name": "o%d" % i, "expect": "e", "env": "e1",
+                                 "check": "exit 0", "control": "exit 1"} for i in range(5)]}, fh)
+    rc_of(d)
+    hits = open(os.path.join(d, "hits")).read().count("run")
+    chk("provenance is probed once per environment, not per outcome", hits == 1)
 
     shutil.rmtree(tmp, ignore_errors=True)
     if ran != EXPECTED_CONTROLS:

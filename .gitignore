@@ -6,3 +6,23 @@ node_modules/
 __pycache__/
 *.pyc
 .DS_Store
+# Agent tooling that installs itself into a working repo. None of it is this project's
+# source, and bin/scope already declares the same paths as harness outputs so a scoped gate
+# run does not escalate on them. Ignoring them here makes git agree with that judgement —
+# without it `claude plugin tag` refuses to cut a release, correctly, because the tag would
+# not describe a clean tree.
+.claude-flow/
+.swarm/
+.agents/
+.claude/agents/
+.claude/commands/
+.claude/helpers/
+.claude/skills/
+.claude/memory.db
+.claude/proven-config.json
+.claude/.proven-config-version
+.claude/work/
+*.rvf
+*.rvf.lock
+ruvector.db
+agentdb.rvf

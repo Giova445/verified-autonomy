@@ -59,6 +59,7 @@ the artifact afterwards, and that each such claim was made by a check able to fa
 """
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -73,7 +74,7 @@ HARNESS_ERROR = 2
 
 # Declared independently of the control bodies below. Deriving this from the list of
 # controls would mean deleting a control also deletes the expectation that it ran.
-EXPECTED_CONTROLS = 11
+EXPECTED_CONTROLS = 18
 
 
 def run(cmd, cwd):
@@ -84,6 +85,18 @@ def run(cmd, cwd):
         return p.returncode
     except subprocess.TimeoutExpired:
         return None
+
+
+def run_out(cmd, cwd):
+    """(exit_code, output). Used where the output itself is the evidence."""
+    try:
+        p = subprocess.run(cmd, shell=True, cwd=cwd, timeout=TIMEOUT,
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        return p.returncode, p.stdout
+    except subprocess.TimeoutExpired:
+        return None, ""
+    except OSError as exc:
+        return HARNESS_ERROR, str(exc)
 
 
 def load(root):
@@ -103,16 +116,97 @@ def load(root):
     return data, []
 
 
-def judge(outcome, root):
+# ------------------------------------------------------------------ environments
+#
+# An outcome is a product expectation, and a product expectation is only meaningful WHERE
+# the user meets it. That place is not always a staging URL: it is a running server, a built
+# binary, a published package, a rendered asset, a CLI's real output. So the contract names
+# ENVIRONMENTS and an outcome says which one it belongs to. Nothing here knows what staging
+# is, and that is the point — an earlier version of this gate hard-coded it and could only
+# express one shape of product.
+#
+#   "environments": {
+#     "built":   {"vars": {"bin": "./dist/app"}},
+#     "staging": {"vars": {"base": "https://app-staging.example.com"},
+#                 "provenance": {"cmd": "curl -fsS https://.../version", "pattern": "..."}}
+#   }
+#
+# `vars` are substituted into check and control as {{name}}, so one outcome declaration can
+# read against a fixture locally and the real thing elsewhere.
+#
+# PROVENANCE is the half worth keeping from that earlier version, and it generalises cleanly.
+# Verifying an artifact proves nothing unless the artifact is the one you just built. Point a
+# browser at a deployment still serving last week's build, assert the button enables, go
+# green — you verified somebody else's code and filed it as your own evidence. Same for a
+# stale binary, a cached package, an asset regenerated from an older prompt. So an
+# environment may declare a probe for the revision it is running, and an outcome in an
+# environment whose provenance does not match is never credited.
+REVISION = re.compile(r"\b([0-9a-f]{7,40})\b")
+
+
+def substitute(cmd, env_vars):
+    for k, v in (env_vars or {}).items():
+        cmd = cmd.replace("{{%s}}" % k, str(v).rstrip("/"))
+    return cmd
+
+
+def provenance(env, root):
+    """(ok, detail). True means this environment runs the revision under test."""
+    spec = env.get("provenance")
+    if not spec:
+        return True, ""                       # not claimed, so nothing to contradict
+    rc, out = run_out("git rev-parse HEAD", root)
+    head = out.strip() if rc == 0 else ""
+    if not head:
+        return False, "cannot read the local HEAD, so there is nothing to compare against"
+    cmd = spec.get("cmd")
+    if not cmd:
+        return False, "provenance is declared with no `cmd` to establish it"
+    rc, out = run_out(cmd, root)
+    if rc is None:
+        return False, "the provenance probe never finished (%ss)" % TIMEOUT
+    if rc != 0:
+        return False, "the provenance probe exited %d" % rc
+    pattern = spec.get("pattern")
+    try:
+        m = re.search(pattern, out) if pattern else REVISION.search(out)
+    except re.error as exc:
+        return False, "the declared `pattern` is not a valid regex (%s)" % exc
+    if not m:
+        return False, "no revision found in the probe output"
+    sha = m.group(1) if m.groups() else m.group(0)
+    n = min(len(sha), len(head))
+    if sha[:n].lower() != head[:n].lower():
+        return False, ("it is running %s, not the %s under test — anything that passed here "
+                       "would be evidence about a different build" % (sha[:12], head[:12]))
+    return True, "running %s, the revision under test" % sha[:12]
+
+
+def judge(outcome, root, environments=None):
     """(verdict, detail) for one declared outcome."""
+    environments = environments or {}
     missing = [f for f in REQUIRED if not outcome.get(f)]
     if missing:
         return "REFUSED", "missing required field(s): %s" % ", ".join(missing)
 
-    rc_check = run(outcome["check"], root)
+    name = outcome.get("env")
+    env = {}
+    if name:
+        if name not in environments:
+            return "REFUSED", ("names environment '%s', which the contract does not declare"
+                               % name)
+        env = environments[name]
+        ok, detail = provenance(env, root)
+        if not ok:
+            # NOT "FAILS". The product may be perfectly fine; what is wrong is that this
+            # environment is not the thing under test. Those send a reader to opposite places.
+            return "WRONG BUILD", "environment '%s': %s" % (name, detail)
+
+    env_vars = env.get("vars") or {}
+    rc_check = run(substitute(outcome["check"], env_vars), root)
     if rc_check is None:
         return "NO VERDICT", "check still running at %ss" % TIMEOUT
-    rc_control = run(outcome["control"], root)
+    rc_control = run(substitute(outcome["control"], env_vars), root)
     if rc_control is None:
         return "NO VERDICT", "control still running at %ss" % TIMEOUT
 
@@ -163,18 +257,22 @@ def report(root):
         print("FINDING: %s declares zero outcomes — an empty contract certifies everything"
               % CONTRACT)
         return 1
+    environments = contract.get("environments") or {}
 
-    print("deliverable contract: %d outcome(s)" % len(outcomes))
+    where = lambda o: o.get("env") or "here"
+    print("deliverable contract: %d outcome(s) across %d environment(s)"
+          % (len(outcomes), len(set(where(o) for o in outcomes))))
     print()
-    bad = 0
-    unrunnable = 0
+    bad = unrunnable = wrong_build = 0
     for o in outcomes:
-        verdict, detail = judge(o, root)
+        verdict, detail = judge(o, root, environments)
         if verdict != "holds":
             bad += 1
         if verdict == "CANNOT RUN":
             unrunnable += 1
-        print("  %-11s %s" % (verdict, o.get("name") or "(unnamed)"))
+        if verdict == "WRONG BUILD":
+            wrong_build += 1
+        print("  %-11s [%s] %s" % (verdict, where(o), o.get("name") or "(unnamed)"))
         print("              expected: %s" % (o.get("expect") or "(not stated)"))
         print("              %s" % detail)
     print()
@@ -184,8 +282,14 @@ def report(root):
             # Said plainly and separately, because "your deliverable is broken" and "this
             # machine cannot open a browser" call for completely different actions, and a
             # reader who cannot tell them apart stops trusting the gate.
-            print("%d of those could not be checked at all — the deliverable may be perfectly "
-                  "fine. That is an environment problem, not a code problem." % unrunnable)
+            print("%d could not be checked at all — the deliverable may be perfectly fine. "
+                  "That is an environment problem, not a code problem." % unrunnable)
+        if wrong_build:
+            # The third population, and the one that looks most like success. Everything may
+            # work in that environment; it is simply not running what you built.
+            print("%d ran against an environment that is not the build under test. Nothing is "
+                  "claimed about them either way — deploy this revision there first."
+                  % wrong_build)
         return 1
     print("All %d declared outcome(s) hold, each proven by a check that can fail."
           % len(outcomes))
@@ -291,6 +395,59 @@ def selftest():
     rc, out = rc_of(repo("nocontrol", {"outcomes": [
         {"name": "o", "expect": "e", "check": "exit 0"}]}))
     chk("an outcome with no control is REFUSED", rc == 1 and "REFUSED" in out)
+
+    # 12 — BACKWARD COMPATIBILITY. A contract with no `environments` and no `env` on its
+    # outcomes must behave exactly as it did before environments existed. Asserted, not
+    # assumed: a project that never heard of this must not change behaviour under it.
+    rc, out = rc_of(repo("plain", {"outcomes": [ok_outcome]}))
+    chk("a contract with no environments behaves as before", rc == 0 and "holds" in out)
+
+    # 13 — an outcome naming an environment the contract never declared is REFUSED, not run
+    # against nothing. A typo in `env` would otherwise silently run the check unsubstituted.
+    rc, out = rc_of(repo("unknownenv", {"outcomes": [
+        {"name": "o", "expect": "e", "check": "exit 0", "control": "exit 1", "env": "ghost"}]}))
+    chk("an undeclared environment is REFUSED", rc == 1 and "REFUSED" in out)
+
+    # 14 — {{vars}} are substituted, so ONE outcome declaration can read against a fixture
+    # here and against the real thing wherever the user meets it.
+    rc, out = rc_of(repo("vars", {
+        "environments": {"e1": {"vars": {"base": "https://x.test/"}}},
+        "outcomes": [{"name": "o", "expect": "e", "env": "e1",
+                      "check": "test '{{base}}' = 'https://x.test'", "control": "exit 1"}]}))
+    chk("environment vars are substituted, trailing slash trimmed",
+        rc == 0 and "holds" in out)
+
+    # 15 — THE LOAD-BEARING ONE. The environment is not running the build under test, and the
+    # outcome WOULD pass there. It must not be credited: a green check about somebody else's
+    # build is worse than a red one, because it gets filed as evidence.
+    d = repo("wrongbuild", {
+        "environments": {"e1": {"provenance": {"cmd": "echo 0000000000000000"}}},
+        "outcomes": [{"name": "o", "expect": "e", "env": "e1",
+                      "check": "exit 0", "control": "exit 1"}]})
+    rc, out = rc_of(d)
+    chk("an environment on a different build is refused though the check passes",
+        rc == 1 and "WRONG BUILD" in out and "holds" not in out)
+
+    # 16 — and it is NOT reported as a product failure. "Your feature is broken" and "you are
+    # looking at a different build" send a reader to opposite places.
+    chk("a different build is not reported as FAILS", "FAILS" not in out)
+
+    # 17 — provenance that cannot be established is refused, never assumed good. An
+    # unreachable probe must not read as "probably fine".
+    rc, out = rc_of(repo("noprov", {
+        "environments": {"e1": {"provenance": {"cmd": "exit 7"}}},
+        "outcomes": [{"name": "o", "expect": "e", "env": "e1",
+                      "check": "exit 0", "control": "exit 1"}]}))
+    chk("unestablishable provenance is refused", rc == 1 and "WRONG BUILD" in out)
+
+    # 18 — an environment that declares no provenance is NOT blocked. Not every product has a
+    # revision to report, and demanding one would make the whole idea unusable for a built
+    # binary or a rendered asset.
+    rc, out = rc_of(repo("noclaim", {
+        "environments": {"e1": {"vars": {"x": "1"}}},
+        "outcomes": [{"name": "o", "expect": "e", "env": "e1",
+                      "check": "exit 0", "control": "exit 1"}]}))
+    chk("an environment claiming no provenance still runs", rc == 0 and "holds" in out)
 
     shutil.rmtree(tmp, ignore_errors=True)
     if ran != EXPECTED_CONTROLS:

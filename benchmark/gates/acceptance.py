@@ -6,12 +6,12 @@ import subprocess
 import sys
 
 CONTRACT = ".claude/acceptance.json"
-REQUIRED = ("name", "expect", "check", "control")
+REQUIRED = ("name", "expect", "check")
 TIMEOUT = int(os.environ.get("ACCEPT_TIMEOUT", "300"))
 
 HARNESS_ERROR = 2
 
-EXPECTED_CONTROLS = 13
+EXPECTED_CONTROLS = 14
 
 def run(cmd, cwd):
     try:
@@ -110,6 +110,13 @@ def judge(outcome, root, environments=None, resolved=None):
     rc_check = run(substitute(outcome["check"], env_vars), root)
     if rc_check is None:
         return "NO VERDICT", "check still running at %ss" % TIMEOUT
+    if not outcome.get("control"):
+        if rc_check == HARNESS_ERROR:
+            return "CANNOT RUN", ("the check exited %d — the harness could not do its job, so "
+                                  "nothing was learned about the deliverable" % HARNESS_ERROR)
+        if rc_check != 0:
+            return "FAILS", "check exited %d" % rc_check
+        return "holds", "check exit 0 (no control declared)"
     rc_control = run(substitute(outcome["control"], env_vars), root)
     if rc_control is None:
         return "NO VERDICT", "control still running at %ss" % TIMEOUT
@@ -174,8 +181,11 @@ def report(root):
                   "claimed about them either way — deploy this revision there first."
                   % wrong_build)
         return 1
-    print("All %d declared outcome(s) hold, each proven by a check that can fail."
-          % len(outcomes))
+    uncontrolled = sum(1 for o in outcomes if not o.get("control"))
+    print("All %d declared outcome(s) hold." % len(outcomes))
+    if uncontrolled:
+        print("%d have no control, so they are not shown able to fail — add one where a "
+              "silent pass would be costly." % uncontrolled)
     return 0
 
 def selftest():
@@ -228,10 +238,13 @@ def selftest():
     rc, out = rc_of(repo("vacuous", {"outcomes": [outcome("exit 0", "exit 0")]}))
     chk("a control that passes yields NOT PROVEN", rc == 1 and "NOT PROVEN" in out)
 
-    a = rc_of(repo("noexpect", {"outcomes": [{"name": "o", "check": "exit 0", "control": "exit 1"}]}))
-    b = rc_of(repo("nocontrol", {"outcomes": [{"name": "o", "expect": "e", "check": "exit 0"}]}))
-    chk("an outcome missing a required field is REFUSED",
-        all(rc == 1 and "REFUSED" in out for rc, out in (a, b)))
+    rc, out = rc_of(repo("noexpect", {"outcomes": [{"name": "o", "check": "exit 0", "control": "exit 1"}]}))
+    chk("an outcome with no stated expectation is REFUSED", rc == 1 and "REFUSED" in out)
+
+    a = rc_of(repo("nocontrol", {"outcomes": [{"name": "o", "expect": "e", "check": "exit 0"}]}))
+    b = rc_of(repo("nocontrolred", {"outcomes": [{"name": "o", "expect": "e", "check": "exit 1"}]}))
+    chk("without a control a check still decides, and the pass is reported uncontrolled",
+        a[0] == 0 and "no control" in a[1] and b[0] == 1 and "FAILS" in b[1])
 
     rc, out = rc_of(repo("none", None))
     chk("no contract reports and does not block", rc == 0 and "no deliverable contract" in out)

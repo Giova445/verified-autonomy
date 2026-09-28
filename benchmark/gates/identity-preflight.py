@@ -187,7 +187,7 @@ def self_test():
     with tempfile.TemporaryDirectory() as td:
         proj = _proj(os.path.join(td, "a"), {"render": {"workspace_name": "Orchid"}})
         good = _home(os.path.join(td, "a"), render="Orchid")
-        bad = _home(os.path.join(td, "b"), render="Cadre AI")
+        bad = _home(os.path.join(td, "b"), render="Other Org")
         check("render-match", judge_tool("render", read_policy(proj), good)[0], "ok")
         check("render-mismatch", judge_tool("render", read_policy(proj), bad)[0], "mismatch")
 
@@ -195,9 +195,9 @@ def self_test():
         check("render-expired-is-unresolved",
               judge_tool("render", read_policy(proj), old)[0], "unresolved")
 
-        p2 = _proj(os.path.join(td, "d"), {"gh": {"user": "Giova445"}})
+        p2 = _proj(os.path.join(td, "d"), {"gh": {"user": "octocat"}})
         check("gh-match", judge_tool("gh", read_policy(p2),
-                                     _home(os.path.join(td, "d"), gh="Giova445"))[0], "ok")
+                                     _home(os.path.join(td, "d"), gh="octocat"))[0], "ok")
         check("gh-mismatch", judge_tool("gh", read_policy(p2),
                                         _home(os.path.join(td, "e"), gh="someone-else"))[0], "mismatch")
 

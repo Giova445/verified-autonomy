@@ -332,16 +332,16 @@ tests and a 40-minute suite.
 Run a **test deletion audit** every N sessions: mutation-test the existing suite and
 flag tests that kill nothing a sibling doesn't already kill.
 
-## 6. Worked example — this repository
+## 6. Worked example — a typical web app
 
-Griffin's CI already implements the tiering. Mapping:
+A web app with a backend and a frontend usually has most of the ladder already:
 
-| Ladder | Griffin |
+| Ladder | Typical existing job |
 |---|---|
-| 1–2 fast | backend `make lint` / `make typecheck` / `make test-unit`; frontend `next lint`, `jest` |
-| 4 full suite | `commit-tests.yml` (push, non-main) + `integration-tests.yml` |
-| 10 E2E | `e2e-tests.yml` — live FastAPI + Celery + Redis + Playwright, PR-to-main only, 40-min cap |
-| Release | `release-tests.yml` on main |
+| 1–2 fast | backend lint, typecheck and unit targets; frontend lint and unit runner |
+| 4 full suite | a push workflow on non-main branches plus an integration workflow |
+| 10 E2E | a PR-only workflow that boots the live stack and drives a browser, with a time cap |
+| Release | a workflow on main |
 
 Gaps to close: diff coverage (5), cheat scan (6), architecture fitness (7), mutation (9),
 and the local `Stop` gate that makes any of it binding before CI.

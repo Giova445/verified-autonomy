@@ -149,7 +149,7 @@ where a Claude Code session stopped.
 
 ```json
 {
-  "id": "GRF-142",
+  "id": "TASK-142",
   "state": "PLAN",
   "spec": {
     "description": "Reject null email at registration",
@@ -159,7 +159,7 @@ where a Claude Code session stopped.
   "blast_radius": {
     "queried": "register_user",
     "callers": ["routers/auth.py:88", "services/onboarding.py:23"],
-    "note": "106 Depends() sites repo-wide; DI edges under-reported by callers alone"
+    "note": "DI edges are under-reported by callers alone"
   },
   "ownership": { "worktree": "../wt-auth", "branch": "feat/reject-null-email",
                  "file_scope": ["src/api/routers/auth.py", "tests/auth/**"] },
@@ -186,26 +186,24 @@ Do not install everything at once.
 | **4** | CI runs the same `verify`; branch protection; CODEOWNERS | CI-after-local-green failure rate < 2% |
 | **5+** | Verifier on a different model family; mutation testing; metrics | First-pass gate rate > 70% |
 
-## 7. First three things, for this repo specifically
+## 7. First three things in any repo
 
-1. **Fix `AGENTS.md`.** It says *"Flask backend"*; the backend is FastAPI
-   (`fastapi>=0.115`). A wrong rule actively misleads every agent in both harnesses. This
-   is the cheapest fix on the list and it is currently costing you on every run.
-2. **Cut the always-on instruction budget.** ~4,200 tokens and 28 imperatives across
-   `CLAUDE.md` + `~/.claude/rules/common/` puts `0.95^28 ≈ 24%`, above the ~3,000-token
-   dilution threshold. Move enforceable items into `bin/verify` and the deny hook; scope the
-   rest with `paths:` at **project** level (user-level scoping is unreliable).
-3. **Wire `bin/verify` to the real Make targets.** The backend already has
-   `make lint` / `make typecheck` / `make test-unit`; the frontend has `next lint`, `jest`,
-   `playwright`. The four CI workflows already implement the tiering. `gates.json` mostly
-   just needs to name what exists.
+1. **Check `AGENTS.md` for wrong facts.** A rule that names the wrong framework or the
+   wrong command misleads every agent in every harness, on every run. It is the cheapest
+   fix available.
+2. **Cut the always-on instruction budget.** At 28 imperatives, `0.95^28 ≈ 24%`, and past
+   ~3,000 tokens instructions dilute. Move enforceable items into `bin/verify` and the deny
+   hook; scope the rest with `paths:` at **project** level (user-level scoping is unreliable).
+3. **Wire `bin/verify` to the targets that already exist.** Most repos already have lint,
+   typecheck and test targets, and CI often already tiers them. `bin/arm` writes
+   `gates.json` from the ones that pass.
 
 ## 8. What stays hard
 
 - **Codex compliance is advisory.** No hook. CI is the real gate for its output.
 - **Test selection can silently under-run.** Fail open on renames, config, and migrations —
   already implemented in `verify tests`, but re-check it whenever the repo layout changes.
-- **The graph misses DI and reflection.** 106 `Depends()` sites here. Union callers with
-  references before trusting a blast radius on FastAPI routes.
+- **The graph misses DI and reflection.** Frameworks that inject dependencies pass functions
+  by reference. Union callers with references before trusting a blast radius.
 - **Two harnesses, two rule files.** `AGENTS.md` is the shared one. Anything in
   `CLAUDE.md` that Codex also needs is a portability bug.

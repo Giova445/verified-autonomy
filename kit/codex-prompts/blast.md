@@ -8,8 +8,8 @@ codegraph context "callers of $1"
 Then state:
 - Direct callers, with file:line.
 - Whether this crosses a module or language boundary.
-- Whether DI/reflection could hide callers. This repo has 106 `Depends()` sites — FastAPI
-  passes functions by reference, so `calls` edges under-report. Union with references.
+- Whether DI/reflection could hide callers. Injection frameworks pass functions by
+  reference, so `calls` edges under-report. Union with references.
 - Which tests cover those call sites (`./bin/verify tests`).
 
 Zero callers is a HYPOTHESIS, not permission to delete. Confirm with grep before acting on it.

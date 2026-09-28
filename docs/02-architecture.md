@@ -251,16 +251,16 @@ credential — see 5.1.
 
 ## 7. Applying this to a real repo
 
-Reference implementation from a real adoption: the repo already had the
-adjudication layer largely built, which is the hard part.
+A typical adoption finds the adjudication layer largely built already, which is the hard
+part.
 
-| Architecture element | Existing equivalent |
+| Architecture element | Usual existing equivalent |
 |---|---|
-| Gate ladder, tiered by cost | `.github/workflows/`: `commit-tests` → `integration-tests` → `e2e-tests` (PR only) → `release-tests` (main) |
-| Fast gates | backend `make lint`, `make typecheck`, `make test-unit`; frontend `next lint`, `jest` |
-| E2E with real stack | `e2e-tests.yml` — live FastAPI + Celery + Redis + Playwright, 40-min timeout, concurrency-grouped |
-| Deny-list | `.claude/settings.json` `permissions.deny` already blocks `git push --force`, `git reset --hard`, pushes to main |
-| Branch protection | `.github/BRANCH_PROTECTION.md` |
+| Gate ladder, tiered by cost | CI workflows tiered commit → integration → end-to-end (PR only) → release (main) |
+| Fast gates | the repo's own lint, typecheck and unit-test targets |
+| E2E with real stack | a workflow that boots the backend, its workers and a browser suite against a live stack |
+| Deny-list | `permissions.deny` in `.claude/settings.json` blocking destructive git commands |
+| Branch protection | the host's branch protection rules |
 
 What is missing is **layer 2** — nothing currently stops the agent from declaring
 success locally before any of that runs. That gap is exactly what `hooks/stop-gate.sh`

@@ -51,9 +51,13 @@ echo "$SCAN" | grep -Eq 'git[[:space:]]+reset[[:space:]]+--hard' \
 echo "$SCAN" | grep -Eq 'git[[:space:]]+clean[[:space:]]+-[a-z]*f' \
   && deny "git clean -f destroys untracked files"
 
-echo "$SCAN" | grep -Eq 'git[[:space:]]+commit([[:space:]]|$)' \
-  && printf '%s' "$CMD" | grep -Eiq '(^|[^a-z])co-authored-by:' \
-  && deny "Co-Authored-By trailers are not allowed on any commit"
+if echo "$SCAN" | grep -Eq 'git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?commit([[:space:]]|$)'; then
+  if [ -f "$HERE/commit-message.py" ]; then
+    python3 "$HERE/commit-message.py" "$CMD" && deny "Co-Authored-By trailers are not allowed on any commit"
+  else
+    printf '%s' "$CMD" | grep -Eiq '(^|[^a-z])co-authored-by:' && deny "Co-Authored-By trailers are not allowed on any commit"
+  fi
+fi
 
 if echo "$SCAN" | grep -Eq 'git[[:space:]]+push([[:space:]]|$)'; then
   [ -f "$HERE/push-targets.py" ] || deny "push-targets.py is missing beside this hook, so protected branches cannot be checked"

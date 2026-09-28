@@ -149,6 +149,7 @@ chk "deny: reset --hard blocked"           "$(deny 'git reset --hard HEAD')" "2"
 chk "deny: ordinary command allowed"       "$(deny 'npm test')" "0"
 chk "deny: commit with a co-author blocked"  "$(deny 'git commit -m x -m Co-Authored-By: a <a@b>')" "2"
 chk "deny: plain commit allowed"            "$(deny 'git commit -m fix')" "0"
+chk "deny: grepping for the trailer beside a commit allowed" "$(deny "git commit -m fix && git log --format=%B | grep -i co-authored-by:")" "0"
 ( cd "$tmp" && git commit -q --allow-empty -m init )
 o="$(bash "$PLUGIN/bin/arm" detect "$tmp" 2>&1)"
 printf '%s' "$o" | grep -q 'co-author .*passes' && r=yes || r=no
@@ -202,6 +203,7 @@ suite "arm"             bash    "$PLUGIN/bin/arm"             selftest
 suite "discover"        python3 "$PLUGIN/bin/discover"        selftest
 suite "arm-surface"     python3 "$PLUGIN/bin/arm-surface.py"  --self-test
 suite "scope"           python3 "$PLUGIN/bin/scope"           selftest
+suite "commit-message"  python3 "$PLUGIN/hooks/commit-message.py" --self-test
 suite "inert-mask"      python3 "$PLUGIN/hooks/inert-mask.py" --self-test
 suite "pin-check"       python3 "$PLUGIN/benchmark/gates/pin-check.py"          --self-test
 suite "trailer-check"   python3 "$PLUGIN/benchmark/gates/trailer-check.py"      --self-test

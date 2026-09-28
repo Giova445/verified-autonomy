@@ -22,12 +22,13 @@ results are facts, and per the docs an exit-2 hook wins even over a JSON `allow`
    `|| true`, raise a timeout, or add a retry to force green. A cheat scanner diffs for
    exactly these.
 2. **Never edit your own guardrails** — `bin/verify`, `.claude/gates.json`,
-   `.claude/hooks/**`, `.github/workflows/**`. A `PreToolUse` hook blocks it. If a gate is
+   `.claude/hooks/**`, `.github/workflows/**`. If a gate is
    wrong, say so and stop.
 3. **Resolve unknowns, never infer them.** Read the code or ask.
 4. **Know the blast radius first** — `./bin/verify blast <symbol>`. Zero callers is a
    hypothesis: DI and reflection are invisible to a static graph.
 5. **Branch and PR only.** Never push to main, never merge or approve your own PR.
+6. **No `Co-Authored-By` trailer on any commit.** The `co-author` gate refuses the branch.
 
 ## The workflow
 

@@ -15,6 +15,7 @@ completion — a Stop hook enforces this and will refuse to let the turn end whi
   If a gate is wrong, say so and stop.
 - Before editing a symbol, run `./bin/verify blast <symbol>`. Zero callers is a hypothesis,
   not permission to delete.
+- No commit may carry a `Co-Authored-By` trailer.
 - Retry budget is 3 per failing gate. On exhaustion write a blocked report: failing gate +
   command + exit code, what you tried and why each attempt failed, the decision needing a
   human, and a recommendation.

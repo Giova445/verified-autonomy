@@ -11,7 +11,7 @@ tokens of always-on context. Everything longer belongs in a scoped rule or a ski
 Not "tests look right". Not "should work". The command, exit 0. If you cannot run it, say
 so and stop — do not claim completion.
 
-## The five rules
+## The six rules
 
 1. **Fix the code, never the gate.** Do not weaken, skip, or delete a test; do not add
    `|| true`, raise a timeout, or add a retry to force green.
@@ -22,6 +22,7 @@ so and stop — do not claim completion.
 4. **Know the blast radius before editing.** `./bin/verify blast <symbol>`. Zero callers is
    a hypothesis, not permission to delete — DI and reflection are invisible to the graph.
 5. **Deliver by branch and PR.** Never push to main, never merge or approve your own PR.
+6. **No `Co-Authored-By` trailer on any commit.** The `co-author` gate refuses the branch.
 
 ## Before you start
 

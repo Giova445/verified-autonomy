@@ -71,6 +71,12 @@ chk "deny: pytest || true blocked"         "$(deny 'pytest -q || true')" "2"
 chk "deny: grep || true allowed"           "$(deny 'grep -c x f || true')" "0"
 chk "deny: reset --hard blocked"           "$(deny 'git reset --hard HEAD')" "2"
 chk "deny: ordinary command allowed"       "$(deny 'npm test')" "0"
+chk "deny: commit with a co-author blocked"  "$(deny 'git commit -m x -m Co-Authored-By: a <a@b>')" "2"
+chk "deny: plain commit allowed"            "$(deny 'git commit -m fix')" "0"
+( cd "$tmp" && git commit -q --allow-empty -m init )
+o="$(bash "$PLUGIN/bin/arm" detect "$tmp" 2>&1)"
+printf '%s' "$o" | grep -q 'co-author .*passes' && r=yes || r=no
+chk "arm: co-author gate armed in a git repo"  "$r" "yes"
 
 find "$tmp" -maxdepth 0 -exec rm -rf {} +
 

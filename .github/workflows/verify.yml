@@ -36,7 +36,13 @@ jobs:
         with:
           python-version: "3.12"
       - name: Commit trailers
-        run: python3 benchmark/gates/trailer-check.py --since-policy
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            git fetch --no-tags origin "${{ github.base_ref }}"
+            python3 benchmark/gates/trailer-check.py --base "origin/${{ github.base_ref }}"
+          elif [ "${{ github.event_name }}" = push ] && git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
+            python3 benchmark/gates/trailer-check.py --base "${{ github.event.before }}"
+          fi
       - name: Unpinned dependencies in this PR
         if: github.event_name == 'pull_request'
         run: |

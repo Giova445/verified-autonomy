@@ -17,7 +17,7 @@ install -m 0755 "$SRC/bin/verify" .claude/bin/verify && echo "  .claude/bin/veri
 for f in "$SRC"/hooks/*.sh "$SRC"/hooks/*.py; do
   [ -f "$f" ] && install -m 0755 "$f" ".claude/hooks/$(basename "$f")" && echo "  .claude/hooks/$(basename "$f")"
 done
-for f in acceptance.py drive.mjs; do
+for f in acceptance.py drive.mjs trailer-check.py; do
   install -m 0755 "$SRC/benchmark/gates/$f" ".claude/gates/$f" && echo "  .claude/gates/$f"
 done
 cp "$KIT/agents/verifier.md" .claude/agents/ && echo "  .claude/agents/verifier.md"

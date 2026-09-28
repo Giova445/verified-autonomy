@@ -36,4 +36,4 @@ docs/             architecture brief and gate ladder
 - Expected sets are declared literally, never derived from the thing under test.
 - Unreadable or missing config is never a pass.
 - Protected branches live in `.claude/protected-branches` (default `main`, `master`).
-- `Co-Authored-By` is required here (`attribution.commit: true`).
+- No commit carries a `Co-Authored-By` trailer, here or in any project the kit installs into.

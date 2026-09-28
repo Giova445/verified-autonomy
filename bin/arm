@@ -89,6 +89,14 @@ candidates() {
   case "$accept" in "$d"/*) accept_ref=".${accept#"$d"}" ;; esac
   [ -f "$d/.claude/acceptance.json" ] && [ -n "$accept" ] \
     && emit full acceptance "python3 '$accept_ref' ."
+  local trailer=""
+  for p in "$KIT_ROOT/benchmark/gates/trailer-check.py" "$KIT_ROOT/.claude/gates/trailer-check.py"; do
+    [ -f "$p" ] && { trailer="$p"; break; }
+  done
+  local trailer_ref="$trailer"
+  case "$trailer" in "$d"/*) trailer_ref=".${trailer#"$d"}" ;; esac
+  git -C "$d" rev-parse --verify --quiet HEAD >/dev/null 2>&1 && [ -n "$trailer" ] \
+    && emit full co-author "python3 '$trailer_ref'"
   local ledger=""
   for p in "$KIT_ROOT/bin/ledger" "$d/bin/ledger"; do
     [ -x "$p" ] && { ledger="$p"; break; }

@@ -6,7 +6,7 @@ CONFIG="$ROOT/.claude/gates.json"
 EVIDENCE="$ROOT/.claude/evidence"
 STATE="$ROOT/.claude/.gate-attempts"
 BASE="${VERIFY_BASE:-origin/main}"
-MAX_BLOCKS="${GATE_MAX_BLOCKS:-6}"
+MAX_BLOCKS="${GATE_MAX_BLOCKS:-3}"
 HOOK=0
 FAILED=""
 
@@ -166,13 +166,36 @@ $(printf '%s' "$out" | tail -30 | sed 's/^/   │ /')
   done
 }
 
+accept_py() {
+  local here p
+  here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+  for p in "$here/../benchmark/gates/acceptance.py" "$ROOT/.claude/gates/acceptance.py"; do
+    [ -f "$p" ] && { printf '%s' "$p"; return 0; }
+  done
+  return 1
+}
+
+product() {
+  PRODUCT_STATUS="open"; PRODUCT_MSG=""
+  if [ -n "$FAILED$CONFIG_ERROR" ] && [ -f "$ROOT/.claude/acceptance.json" ]; then
+    PRODUCT_STATUS="not run"; return
+  fi
+  local py out
+  py="$(accept_py)" || { PRODUCT_MSG="product : CANNOT RUN - acceptance.py is neither beside bin/verify nor in .claude/gates/"; return; }
+  (cd "$ROOT" && python3 "$py" . --results "$EVIDENCE/product.json") > "$EVIDENCE/product.txt" 2>&1
+  out="$(python3 "$py" --summarize "$EVIDENCE/product.json")"
+  PRODUCT_STATUS="$(printf '%s\n' "$out" | head -1)"
+  PRODUCT_MSG="$(printf '%s\n' "$out" | tail -n +2)"
+}
+
 write_bundle() {
   local sha; sha="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
   python3 -c '
 import json,sys,datetime
 g=json.loads(sys.argv[1]); err=sys.argv[3] if len(sys.argv)>3 else ""
-ok = bool(g) and all(x["exit_code"]==0 for x in g) and not err
-out={"commit_sha":sys.argv[2],
+product=sys.argv[4]
+ok = bool(g) and all(x.get("exit_code")==0 for x in g if not x.get("skipped")) and not err and product in ("held","not run")
+out={"commit_sha":sys.argv[2],"product":product,
   "generated_at":datetime.datetime.now(datetime.timezone.utc).isoformat(),
   "gates":g,"all_green":ok,
   "trust":"self-reported by the process under test; not a receipt",
@@ -180,7 +203,7 @@ out={"commit_sha":sys.argv[2],
 if err: out["error"]=err
 elif not g: out["error"]="no gates executed"
 print(json.dumps(out,indent=2))' \
-  "${RESULTS:-[]}" "$sha" "${CONFIG_ERROR:-}" > "$EVIDENCE/latest.json"
+  "${RESULTS:-[]}" "$sha" "${CONFIG_ERROR:-}" "${PRODUCT_STATUS:-not run}" > "$EVIDENCE/latest.json"
 }
 
 attempts=0; [ -f "$STATE" ] && attempts="$(cat "$STATE" 2>/dev/null || echo 0)"
@@ -212,7 +235,7 @@ case "${1:-done}" in
         die_code
       fi
       say "preflight:"; preflight || { echo $((attempts+1)) > "$STATE"; die_code; }
-      say "full gates:"; run_tier full; write_bundle
+      say "full gates:"; CONFIG_ERROR=""; run_tier full; product; write_bundle
       if [ -n "${CONFIG_ERROR:-}" ]; then
         echo $((attempts + 1)) > "$STATE"
         say "REFUSING TO CERTIFY: ${CONFIG_ERROR}."
@@ -226,6 +249,14 @@ case "${1:-done}" in
         say "  - Do not weaken, skip, or delete a test."
         say "  - Do not add '|| true', raise a timeout, or add a retry."
         say "  - Do not edit gates, hooks, or CI config."
+        [ -n "$PRODUCT_MSG" ] && say "" && say "$PRODUCT_MSG"
+        say "Attempt $((attempts+1))/${MAX_BLOCKS} before escalation is required."
+        die_code
+      fi
+      if [ "$PRODUCT_STATUS" != "held" ]; then
+        echo $((attempts+1)) > "$STATE"
+        say "$PRODUCT_MSG"
+        say "Engineering gates are green; the product is not established, so this is not done."
         say "Attempt $((attempts+1))/${MAX_BLOCKS} before escalation is required."
         die_code
       fi
@@ -236,6 +267,8 @@ case "${1:-done}" in
         say "   evidence: .claude/evidence/latest.json"
       else
         say "ALL GATES GREEN — evidence: .claude/evidence/latest.json"
-      fi ;;
-  *) say "usage: verify {preflight|fast|full|done [--hook]|blast <symbol>|tests}"; exit 1 ;;
+      fi
+      say "DONE — $PRODUCT_MSG; engineering gates green. Screenshots: .claude/evidence/shots/" ;;
+  product)   FAILED=""; CONFIG_ERROR=""; product; say "$PRODUCT_MSG"; [ "$PRODUCT_STATUS" = held ] || exit 1 ;;
+  *) say "usage: verify {preflight|fast|full|done [--hook]|product|blast <symbol>|tests}"; exit 1 ;;
 esac

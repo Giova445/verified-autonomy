@@ -7,7 +7,6 @@ import sys
 import tempfile
 
 CO_AUTHOR = re.compile(r"^co-authored-by:\s*\S", re.M | re.I)
-BASES = ("origin/HEAD", "origin/main", "origin/master", "main", "master")
 REC, FIELD = "\x1e", "\x1f"
 
 
@@ -19,19 +18,16 @@ def git(root, *args):
     return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
 
 
-def resolve_base(root, explicit=None):
-    for ref in ([explicit] if explicit else BASES):
-        if git(root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").returncode == 0:
-            return ref
-    if explicit:
-        raise GitError(f"base ref '{explicit}' does not exist")
-    return None
+def resolve_base(root, ref):
+    if git(root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").returncode != 0:
+        raise GitError(f"base ref '{ref}' does not exist")
+    return ref
 
 
 def commits(root, rev_range):
-    p = git(root, "log", f"--format=%H{FIELD}%s{FIELD}%B{REC}", rev_range)
+    p = git(root, "log", f"--format=%H{FIELD}%s{FIELD}%B{REC}", *rev_range)
     if p.returncode != 0:
-        raise GitError(f"git log {rev_range} failed: {p.stderr.strip()[:160]}")
+        raise GitError(f"git log {' '.join(rev_range)} failed: {p.stderr.strip()[:160]}")
     out = []
     for rec in p.stdout.split(REC):
         parts = rec.lstrip("\n").split(FIELD)
@@ -41,9 +37,12 @@ def commits(root, rev_range):
 
 
 def audit(root, base=None):
-    ref = resolve_base(root, base)
-    rev_range = f"{ref}..HEAD" if ref else "HEAD"
+    if base:
+        rev_range = [f"{resolve_base(root, base)}..HEAD"]
+    else:
+        rev_range = ["HEAD", "--not", "--remotes"]
     rows = commits(root, rev_range)
+    rev_range = " ".join(rev_range)
     return rev_range, [(sha, subj) for sha, subj, body in rows if CO_AUTHOR.search(body)], len(rows)
 
 
@@ -54,7 +53,8 @@ def message_has_co_author(path):
 
 EXPECTED_CONTROLS = {
     "branch-commit-with-trailer-flagged", "lowercase-trailer-flagged", "clean-branch-passes",
-    "base-history-not-judged", "prose-mention-not-flagged", "no-base-judges-all-history",
+    "base-history-not-judged", "prose-mention-not-flagged", "no-remote-judges-all-history",
+    "pushed-commits-not-judged",
     "missing-explicit-base-refuses", "message-mode-both-ways",
 }
 
@@ -114,8 +114,19 @@ def self_test():
 
         r = _repo(os.path.join(td, "c"), "trunk")
         _commit(r, "x", f"only\n\n{TRAILER}")
-        rng, bad, _ = audit(r)
-        check("no-base-judges-all-history", (rng, len(bad)), ("HEAD", 1))
+        _, bad, _ = audit(r)
+        check("no-remote-judges-all-history", len(bad), 1)
+
+        origin = os.path.join(td, "origin.git")
+        git(td, "init", "-q", "--bare", origin)
+        r = _repo(os.path.join(td, "d"))
+        _commit(r, "pushed", f"pushed\n\n{TRAILER}")
+        git(r, "remote", "add", "origin", origin)
+        git(r, "push", "-q", "origin", "main")
+        _commit(r, "local", f"local\n\n{TRAILER}")
+        _, bad, total = audit(r)
+        check("pushed-commits-not-judged", (total, [s for _, s in bad]), (1, ["local"]))
+        r = os.path.join(td, "c")
         try:
             audit(r, "nope")
             got = "returned a verdict"
@@ -142,7 +153,7 @@ def self_test():
 def main():
     ap = argparse.ArgumentParser(description="refuse any commit carrying a Co-Authored-By trailer")
     ap.add_argument("--root", default=".")
-    ap.add_argument("--base", help="judge BASE..HEAD (default: first of origin/HEAD, origin/main, main)")
+    ap.add_argument("--base", help="judge BASE..HEAD (default: commits on no remote, the ones still fixable)")
     ap.add_argument("--message", help="commit-msg hook: judge a prepared message file")
     ap.add_argument("--self-test", action="store_true")
     a = ap.parse_args()

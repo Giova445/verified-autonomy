@@ -30,6 +30,13 @@ For the architectural path, write `docs/specs/YYYY-MM-DD-<topic>-design.md` usin
 `templates/spec.md`. Then **stop and get sign-off.** A spec nobody approved is a guess with
 formatting.
 
+## Gather before you write
+
+Expectations often live where the request does not point: the linked issue or PR, the
+existing `.claude/acceptance.json`, earlier product decisions, project memory, the page as it
+behaves today. Read them first. Then state each expectation as something a user observes
+("choosing Blockers shows only blocker rows"), never as "works correctly".
+
 ## What a real spec contains
 
 - The problem in the user's terms, not the solution.
@@ -37,7 +44,9 @@ formatting.
   rejected alternatives did not make a decision.
 - Blast radius from the graph (`./bin/verify blast <symbol>`), not from reading.
 - Acceptance criteria that are **observable and falsifiable** — each with the check that
-  would prove it false.
+  would prove it false. Each one becomes an outcome in `.claude/acceptance.json`: `expect` in
+  the user's words, `check` against the running product. A criterion that lives only in this
+  document is not checked by anything.
 - Explicit out-of-scope. This is what stops scope creep at review time.
 
 ## Mechanically backed

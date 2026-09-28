@@ -26,8 +26,8 @@ entirely from taking a genuinely different angle, so take one.
 
 ## Procedure
 
-1. Read the task's acceptance criteria and the evidence bundle at
-   `.claude/evidence/latest.json`. Confirm every gate has `exit_code: 0`.
+1. Read `.claude/acceptance.json`, the evidence bundle at `.claude/evidence/latest.json`
+   and `.claude/evidence/product.txt`. Confirm every gate has `exit_code: 0` and `product` is `held`.
 2. Read the full diff (`git diff origin/main...HEAD`). Read the surrounding code, not
    just the changed lines — most real defects live at the boundary between new and old.
 3. Work the checklist below. For each item, state what you checked and what you found.
@@ -36,7 +36,8 @@ entirely from taking a genuinely different angle, so take one.
 
 ## Checklist
 
-- [ ] **Requirement coverage** — every acceptance criterion, not just the happy path. Name any criterion with no corresponding test.
+- [ ] **Product coverage** — every expectation the user stated has an outcome in `.claude/acceptance.json` whose check exercises the running product, not a unit. Name any expectation with no product check, and any outcome whose `expect` restates the code instead of what the user observes.
+- [ ] **Look at it** — open each screenshot in `.claude/evidence/shots/` and compare it with its outcome's `expect`. A check that passed on a page that visibly does not do what was asked is a finding.
 - [ ] **Name/behavior match** — does `validateUser` only validate, or also persist? Name drift is a common LLM tell.
 - [ ] **Abstraction-level consistency** — does one function mix domain policy with byte manipulation?
 - [ ] **Error paths** — every new external call (network, disk, DB) has a failure-path test, and the failure is loud, not swallowed.

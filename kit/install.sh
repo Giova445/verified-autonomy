@@ -32,7 +32,7 @@ else
 fi
 
 for line in ".claude/evidence/" ".claude/.gate-attempts" ".claude/gates.json.new" ".claude/gates.json.surfaced" "AGENTS.md.new"; do
-  grep -qxF "$line" .gitignore 2>/dev/null || echo "$line" >> .gitignore
+  git check-ignore -q --no-index "$line" 2>/dev/null || grep -qxF "$line" .gitignore 2>/dev/null || echo "$line" >> .gitignore
 done
 
 cat <<'NEXT'

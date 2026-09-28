@@ -66,6 +66,21 @@ stops(){ local n="$1" change="$2" seq="" i; for i in $(seq 1 "$n"); do
 chk "unchanged repo: the loop ends at the first identical refusal" "$(stops 6 no)" "200000"
 rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-stalled"
 chk "a repo changed before every stop still ends at the breaker" "$(stops 5 yes)" "22220"
+rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-stalled"
+mkdir -p "$lp/.claude-flow"; seq=""
+for i in 1 2; do echo "$i" >> "$lp/.claude-flow/log"; echo "$i" > "$lp/agentdb.rvf"
+  CLAUDE_PROJECT_DIR="$lp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; seq="$seq$?"; done
+chk "agent-tooling writes between stops are not progress" "$seq" "20"
+rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-stalled"
+printf 'printf "run\\n" >> .claude/runs\n' > "$lp/.claude/count.sh"
+printf '{"full":[{"name":"count","cmd":"sh .claude/count.sh"}]}' > "$lp/.claude/gates.json"
+printf '{"outcomes":[{"name":"o","expect":"e","check":"exit 0","control":"exit 1"}]}' > "$lp/.claude/acceptance.json"
+rm -f "$lp/.claude/runs"
+for i in 1 2 3; do CLAUDE_PROJECT_DIR="$lp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; done
+a="$(grep -c run "$lp/.claude/runs")"
+echo more >> "$lp/a"
+CLAUDE_PROJECT_DIR="$lp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; rc=$?
+chk "green once, unchanged stops reuse it; a change runs the gates again" "$a $(grep -c run "$lp/.claude/runs") $rc" "1 2 0"
 find "$lp" -maxdepth 0 -exec rm -rf {} +
 rm -f "$tmp/.claude/.gate-attempts"
 printf '{"full":[{"name":"probe","cmd":"true"}]}' > "$tmp/.claude/gates.json"
@@ -134,6 +149,7 @@ chk "deny: reset --hard blocked"           "$(deny 'git reset --hard HEAD')" "2"
 chk "deny: ordinary command allowed"       "$(deny 'npm test')" "0"
 chk "deny: commit with a co-author blocked"  "$(deny 'git commit -m x -m Co-Authored-By: a <a@b>')" "2"
 chk "deny: plain commit allowed"            "$(deny 'git commit -m fix')" "0"
+chk "deny: grepping for the trailer beside a commit allowed" "$(deny "git commit -m fix && git log --format=%B | grep -i co-authored-by:")" "0"
 ( cd "$tmp" && git commit -q --allow-empty -m init )
 o="$(bash "$PLUGIN/bin/arm" detect "$tmp" 2>&1)"
 printf '%s' "$o" | grep -q 'co-author .*passes' && r=yes || r=no
@@ -187,6 +203,7 @@ suite "arm"             bash    "$PLUGIN/bin/arm"             selftest
 suite "discover"        python3 "$PLUGIN/bin/discover"        selftest
 suite "arm-surface"     python3 "$PLUGIN/bin/arm-surface.py"  --self-test
 suite "scope"           python3 "$PLUGIN/bin/scope"           selftest
+suite "commit-message"  python3 "$PLUGIN/hooks/commit-message.py" --self-test
 suite "inert-mask"      python3 "$PLUGIN/hooks/inert-mask.py" --self-test
 suite "pin-check"       python3 "$PLUGIN/benchmark/gates/pin-check.py"          --self-test
 suite "trailer-check"   python3 "$PLUGIN/benchmark/gates/trailer-check.py"      --self-test

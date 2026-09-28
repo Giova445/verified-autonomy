@@ -6,6 +6,7 @@ CONFIG="$ROOT/.claude/gates.json"
 EVIDENCE="$ROOT/.claude/evidence"
 STATE="$ROOT/.claude/.gate-attempts"
 STALL="$ROOT/.claude/.gate-stalled"
+GREEN="$ROOT/.claude/.gate-green"
 BASE="${VERIFY_BASE:-origin/main}"
 MAX_BLOCKS="${GATE_MAX_BLOCKS:-3}"
 HOOK=0
@@ -168,12 +169,13 @@ $(printf '%s' "$out" | tail -30 | sed 's/^/   │ /')
 }
 
 fingerprint() {
-  local ex=(-- . ':(exclude).claude' ':(exclude).quality-baseline')
+  local ex=(-- . ':(exclude).claude' ':(exclude).quality-baseline' ':(exclude).agents' ':(exclude).claude-flow' ':(exclude).swarm' ':(exclude).hive-mind' ':(exclude)agentdb.rvf' ':(exclude)agentdb.rvf.lock' ':(exclude)ruvector.db')
   {
     git -C "$ROOT" rev-parse HEAD 2>/dev/null
     git -C "$ROOT" diff HEAD "${ex[@]}" 2>/dev/null
     (cd "$ROOT" && git ls-files --others --exclude-standard -z "${ex[@]}" 2>/dev/null | xargs -0 shasum 2>/dev/null)
     (cd "$ROOT" && shasum .claude/gates.json .claude/acceptance.json 2>/dev/null)
+    shasum "${BASH_SOURCE[0]:-$0}" 2>/dev/null | cut -d' ' -f1
   } | shasum -a 256 | cut -d' ' -f1
 }
 
@@ -245,6 +247,12 @@ case "${1:-done}" in
       else say "full: GREEN"; fi ;;
   done|--hook)
       fp="$(fingerprint)"
+      if [ "${VERIFY_CACHE:-1}" != 0 ] && [ -f "$GREEN" ] && [ "$(cat "$GREEN")" = "$fp" ]; then
+        say "UNCHANGED since the last green run (same commit, diff and gate config): not re-running."
+        say "   evidence: .claude/evidence/latest.json. VERIFY_CACHE=0 forces a full run."
+        exit 0
+      fi
+      rm -f "$GREEN"
       if [ -f "$STALL" ] && [ "$(cat "$STALL")" = "$fp" ]; then
         say "STALLED: nothing in this repo has changed since a refusal that retrying could not clear."
         say "Not done. Stopping is allowed; the gates run again once the repo changes."
@@ -310,6 +318,7 @@ case "${1:-done}" in
       else
         say "ALL GATES GREEN — evidence: .claude/evidence/latest.json"
       fi
+      echo "$fp" > "$GREEN"
       say "DONE — $PRODUCT_MSG; engineering gates green. Screenshots: .claude/evidence/shots/" ;;
   fingerprint) fingerprint ;;
   product)   FAILED=""; CONFIG_ERROR=""; product; say "$PRODUCT_MSG"; [ "$PRODUCT_STATUS" = held ] || exit 1 ;;

@@ -64,11 +64,10 @@ codegraph_callers(symbol="get_settings", limit=50)  # ← THE blast-radius query
 ```
 
 **Measured correction — do not use `codegraph_impact` for blast radius.** Tested against
-this repo's live index: `codegraph_impact` returns *contained* symbols (class members, file
+a production Python service's live index: `codegraph_impact` returns *contained* symbols (class members, file
 children), not the reverse-dependency closure. `get_current_user` at depth=2 returned 2
 same-file symbols. `codegraph_callers` on `get_settings` returned **17 real callers across
-8 files** — app.py, jwt.py, session.py, sync_session.py, rag/service.py, share_service.py,
-telemetry.py, product_ranking.py. Callers is the reverse-dep query; impact is a containment
+8 files**. Callers is the reverse-dep query; impact is a containment
 walk. Iterate `callers` yourself for depth > 1.
 
 The Bazel analogue at build-target granularity:
@@ -216,11 +215,11 @@ runtime-computed string shows **zero static callers** while real callers exist. 
 dangerous case: the graph looks authoritative and is wrong, which is arguably worse than no
 graph. Treat "zero callers" as a hypothesis to verify, never as license to delete.
 
-*Measured here:* this repo has **106 `Depends()` sites** — FastAPI dependency injection
+*Measured on a production FastAPI service:* **106 `Depends()` sites** — dependency injection
 passes a function as a reference, not a call. Those land on `references` edges (395 total)
 rather than `calls` (4998). A blast-radius query using `callers` alone **under-reports DI
 wiring**. For a FastAPI/NestJS/Spring-style codebase, union callers with references before
-trusting an impact set. Confirming the flip side: `PricingService` and `run_pricing`
+trusting an impact set. Confirming the flip side: two service symbols
 returned zero callers and grep agreed — one definition, no uses. Genuine dead code, found
 in a single query.
 

@@ -347,8 +347,8 @@ def selftest():
     rc_of(d)
     chk("provenance is probed once per environment", open(os.path.join(d, "hits")).read().count("run") == 1)
 
-    d = repo("results", {"outcomes": [ok_outcome, dict(outcome("exit 1", "exit 1"), name="Queue filters",
-                                                             expect="a processor sees only blockers")]})
+    d = repo("results", {"outcomes": [ok_outcome, dict(outcome("exit 1", "exit 1"), name="Search results",
+                                                             expect="searching a name lists only matching items")]})
     rp = os.path.join(d, "r.json")
     import io
     from contextlib import redirect_stdout
@@ -359,7 +359,7 @@ def selftest():
         absent = json.load(open(rp))
     chk("--results names each open outcome with its expectation",
         [(o["name"], o["verdict"], o["expect"]) for o in r["outcomes"] if o["verdict"] != "holds"]
-        == [("Queue filters", "FAILS", "a processor sees only blockers")]
+        == [("Search results", "FAILS", "searching a name lists only matching items")]
         and absent == {"contract": "absent", "outcomes": []})
 
     d = repo("shot", {"outcomes": [outcome('test -n "$ACCEPT_SHOT" && touch "$ACCEPT_SHOT"', "exit 1")]})
@@ -371,14 +371,14 @@ def selftest():
 
     with redirect_stdout(io.StringIO()):
         report(repo("sum-open", {"outcomes": [ok_outcome, dict(outcome("exit 1", "exit 1"),
-                                                                 name="Queue filters", expect="only blockers")]}), rp)
+                                                                 name="Search results", expect="only matches")]}), rp)
     st, lines = summarize(rp)
     held = summarize(os.path.join(d, "missing.json"))
     with redirect_stdout(io.StringIO()):
         report(repo("sum-absent", None), rp)
     ab = summarize(rp)
     chk("the summary names what is open, and absence or no results is never held",
-        st == "open" and any("Queue filters: only blockers" in l for l in lines)
+        st == "open" and any("Search results: only matches" in l for l in lines)
         and "Continue with them" in lines[-1] and held[0] == "open" and ab[0] == "absent")
 
     shutil.rmtree(tmp, ignore_errors=True)

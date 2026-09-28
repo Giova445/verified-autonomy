@@ -26,3 +26,4 @@ __pycache__/
 *.rvf.lock
 ruvector.db
 agentdb.rvf
+.claude/identity.json

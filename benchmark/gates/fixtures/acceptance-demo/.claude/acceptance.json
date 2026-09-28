@@ -7,14 +7,14 @@
     {
       "name": "submit enables once both fields are filled",
       "expect": "On an empty form the submit button is disabled. After a valid email and any password are entered, it is enabled.",
-      "check": "node /Users/gio/verified-autonomy/benchmark/gates/drive.mjs src/login.html checks/submit-enables.json",
-      "control": "node /Users/gio/verified-autonomy/benchmark/gates/drive.mjs src/login-regressed.html checks/submit-enables.json"
+      "check": "node ../../drive.mjs src/login.html checks/submit-enables.json",
+      "control": "node ../../drive.mjs src/login-regressed.html checks/submit-enables.json"
     },
     {
       "name": "a rejected sign-in shows an error and logs nothing",
       "expect": "The error message is hidden initially, becomes visible after a failed submit, and the console stays clean throughout.",
-      "check": "node /Users/gio/verified-autonomy/benchmark/gates/drive.mjs src/login.html checks/error-renders.json",
-      "control": "node /Users/gio/verified-autonomy/benchmark/gates/drive.mjs src/login-regressed.html checks/error-renders.json"
+      "check": "node ../../drive.mjs src/login.html checks/error-renders.json",
+      "control": "node ../../drive.mjs src/login-regressed.html checks/error-renders.json"
     }
   ]
 }

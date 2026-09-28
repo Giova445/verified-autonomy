@@ -357,10 +357,10 @@ on during autofix runs.
 - **Risk tiering is path-based, so it is only as good as your paths.** A sensitive function
   living outside `**/auth/**` is invisible to it.
 
-  *Verified in this repo:* `services/share_service.py` classifies as **standard** — it is
-  not under `auth/`. But it takes `auth_token`, calls `get_supabase_client(auth_token)`, and
-  its module docstring states *"Ownership is enforced via the user-scoped client."* It is an
-  authorization boundary that path-tiering rates as routine.
+  *Verified on a production codebase:* a sharing service module classifies as **standard**,
+  because it is not under `auth/`. But it takes the caller's auth token, builds a
+  user-scoped database client from it, and relies on that client to enforce ownership. It is
+  an authorization boundary that path-tiering rates as routine.
 
   The stronger version, once the graph is trusted: tier by **reachability from a sensitive
   symbol** rather than by directory ([09 §3.5](09-graph-engineering.md)) — anything whose

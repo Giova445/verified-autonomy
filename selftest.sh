@@ -28,13 +28,13 @@ printf '%s' "$out" | grep -q "no product expectations are declared" && r="$rc na
 chk "green gates, no contract -> refuses, says why" "$r" "2 named"
 
 rm -f "$tmp/.claude/.gate-attempts"
-printf '{"outcomes":[{"name":"Queue filters","expect":"a processor sees only blockers","check":"exit 1"}]}' > "$tmp/.claude/acceptance.json"
+printf '{"outcomes":[{"name":"Search results","expect":"searching a name lists only matching items","check":"exit 1"}]}' > "$tmp/.claude/acceptance.json"
 out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null 2>&1)"; rc=$?
-printf '%s' "$out" | grep -q "Queue filters: a processor sees only blockers" && r="$rc named" || r="$rc silent"
+printf '%s' "$out" | grep -q "Search results: searching a name lists only matching items" && r="$rc named" || r="$rc silent"
 chk "green gates, open expectation -> refuses, names it" "$r" "2 named"
 
 rm -f "$tmp/.claude/.gate-attempts"
-printf '{"outcomes":[{"name":"Queue filters","expect":"a processor sees only blockers","check":"exit 0","control":"exit 1"}]}' > "$tmp/.claude/acceptance.json"
+printf '{"outcomes":[{"name":"Search results","expect":"searching a name lists only matching items","check":"exit 0","control":"exit 1"}]}' > "$tmp/.claude/acceptance.json"
 out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null 2>&1)"; rc=$?
 printf '%s' "$out" | grep -q "1 product expectation(s) hold" && r="$rc reported" || r="$rc silent"
 chk "green gates, expectations hold -> allows" "$r" "0 reported"
@@ -129,6 +129,9 @@ suite() {
     printf '%s\n' "$out" | grep -E 'FAIL|NOT RUN' | sed 's/^/          /'
   fi
 }
+
+leak="$(git -C "$PLUGIN" grep -n -I -E '(/Users/|/home/)[A-Za-z0-9_.-]+/' -- . ':!selftest.sh' 2>/dev/null | head -3)"
+chk "no absolute machine paths in tracked files" "${leak:-none}" "none"
 
 echo
 suite "ledger"          bash    "$PLUGIN/bin/ledger"          selftest

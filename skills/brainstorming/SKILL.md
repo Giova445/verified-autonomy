@@ -35,7 +35,7 @@ formatting.
 Expectations often live where the request does not point: the linked issue or PR, the
 existing `.claude/acceptance.json`, earlier product decisions, project memory, the page as it
 behaves today. Read them first. Then state each expectation as something a user observes
-("choosing Blockers shows only blocker rows"), never as "works correctly".
+("choosing Overdue lists only overdue invoices"), never as "works correctly".
 
 ## What a real spec contains
 

@@ -37,3 +37,6 @@ docs/             architecture brief and gate ladder
 - Unreadable or missing config is never a pass.
 - Protected branches live in `.claude/protected-branches` (default `main`, `master`).
 - No commit carries a `Co-Authored-By` trailer, here or in any project the kit installs into.
+- Project-agnostic, because this is headed for open source: no project, company, customer or
+  domain names, no measurements from a specific codebase, no absolute machine paths. Examples
+  use neutral domains (search, invoices, sign-in).

@@ -104,10 +104,10 @@ review. This architecture is a response to that, not immunity from it.
 | **Green CI ≠ correct** | Verifier and human review still carry design quality. Nothing here replaces that. |
 | **Codex enforcement is advisory** | No `Stop` hook. It follows `verify done` because `AGENTS.md` says so. CI is its real gate. |
 | **RED proof can pass for the wrong reason** | A hook proves a test fails, not that it fails for the intended reason. Mutation testing narrows it; nothing closes it. |
-| **Graph is blind to DI and reflection** | 106 `Depends()` sites here. Union callers with references, or under-report impact. |
+| **Graph is blind to DI and reflection** | Injected dependencies are references, not calls. Union callers with references, or under-report impact. |
 | **Test selection can silently under-run** | Fails open on renames/config/migrations — re-check after any layout change. |
 | **Detectors decay per model generation** | False-success detectors transfer at only AUROC 0.68–0.73 across generations. Recalibrate. |
-| **Path-based risk tiering misses relocated sensitivity** | Verified: `share_service.py` handles `auth_token` and rates *standard*. |
+| **Path-based risk tiering misses relocated sensitivity** | Verified: a service outside `auth/` that enforces ownership through a user-scoped client rates *standard*. |
 | **Reward hacking is not eliminable by better tests** | Held-out gap grows ~28 points per 10× LOC. Monitoring helps; it does not close it. |
 | **Costs more per task** | More tokens, more CI minutes, more wall-clock. Track cost per merged item. |
 | **Two harnesses, two rule files** | `AGENTS.md` is shared. Anything Codex needs that lives only in `CLAUDE.md` is a portability bug. |
@@ -189,10 +189,9 @@ because both read:
 
 ## 6. Do this first
 
-1. **Fix `AGENTS.md`** — it says "Flask backend"; it is FastAPI. Wrong rule, both harnesses,
-   every run. Free.
-2. **Point `gates.json` at the real targets** — `make lint`, `make typecheck`,
-   `make test-unit`, `next lint`, `jest`.
+1. **Check `AGENTS.md` for wrong facts** — a rule naming the wrong framework or command
+   misleads every harness on every run. Free.
+2. **Point `gates.json` at the real targets** — `bin/arm write` records the ones that pass.
 3. **Wire the `Stop` hook**, then break a test and confirm both harnesses refuse.
 4. **Install the Codex prompts** and delegate one real task with `--output-schema`.
 5. **Cut the rules budget** from ~4,200 tokens / 28 imperatives to under ten.

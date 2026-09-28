@@ -37,8 +37,7 @@ done
 
 cat <<'NEXT'
 
-next:
-  1. review .claude/gates.json — arm wrote only commands that passed here
-  2. merge kit/adapters/claude-code.settings.json into .claude/settings.json
-  3. bash .claude/hooks/selftest.sh
+next: the verified-autonomy:setup skill finishes this. In Claude Code, say
+  "set up verified-autonomy". It merges the gates, maps the product, writes and proves
+  .claude/acceptance.json, runs the self-test and commits on a branch.
 NEXT

@@ -99,11 +99,31 @@ candidates() {
   return 0
 }
 
+REPO_LEVEL='^(co-author|cheat-scan|ledger-open)$'
+all_candidates() {
+  local d="$1" sub tier name cmd body
+  candidates "$d"
+  for sub in "$d"/*/; do
+    sub="$(basename "$sub")"
+    case "$sub" in node_modules|vendor|dist|build|*" "*|.*) continue ;; esac
+    local m found=""
+    for m in package.json pyproject.toml requirements.txt go.mod Cargo.toml Makefile; do
+      [ -f "$d/$sub/$m" ] && found=1
+    done
+    [ -n "$found" ] || continue
+    while IFS="$SEP" read -r tier name cmd body; do
+      [ -n "${tier:-}" ] || continue
+      printf '%s\n' "$name" | grep -Eq "$REPO_LEVEL" && continue
+      printf '%s%s%s%s%s%s%s%s%s\n' "$tier" "$SEP" "$sub-$name" "$SEP" "cd $sub && $cmd" "$SEP" "${body:-$cmd}" "$SEP" "$sub/**"
+    done < <(candidates "$d/$sub")
+  done
+}
+
 PASS_FAST=(); PASS_FULL=(); N_CAND=0; N_PASS=0; N_UNKNOWN=0
 probe_all() {
   local d="$1" quiet="${2:-}" tier name cmd body rc verdict
   PASS_FAST=(); PASS_FULL=(); N_CAND=0; N_PASS=0; N_UNKNOWN=0
-  while IFS="$SEP" read -r tier name cmd body; do
+  while IFS="$SEP" read -r tier name cmd body surf; do
     [ -n "${tier:-}" ] || continue
     N_CAND=$((N_CAND + 1))
     if is_placeholder "${body:-$cmd}"; then
@@ -115,7 +135,7 @@ probe_all() {
       if [ "$rc" -eq 0 ]; then
         verdict="passes (${secs}s)"
         N_PASS=$((N_PASS + 1))
-        local obj; obj="$(printf '{"name":"%s","cmd":"%s"}' "$name" "$cmd")"
+        local obj; obj="$(printf '{"name":"%s","cmd":"%s"%s}' "$name" "$cmd" "${surf:+,\"surface\":[\"$surf\"]}")"
         if [ "$tier" = fast ]; then PASS_FAST+=("$obj"); else PASS_FULL+=("$obj"); fi
       elif [ "$rc" -eq 137 ]; then
         N_UNKNOWN=$((N_UNKNOWN + 1))
@@ -125,7 +145,7 @@ probe_all() {
       fi
     fi
     [ -n "$quiet" ] || printf '  %-6s %-14s %-46s %s\n' "$tier" "$name" "$cmd" "$verdict"
-  done < <(candidates "$d")
+  done < <(all_candidates "$d")
 }
 
 emit_config() {
@@ -179,7 +199,7 @@ do_write() {
   return 0
 }
 
-EXPECTED_CONTROLS=10
+EXPECTED_CONTROLS=11
 selftest() {
   local tmp="${TMPDIR:-/tmp}/arm-selftest.$$" ok=0 ran=0
   mkdir -p "$tmp"
@@ -271,6 +291,12 @@ PY
   ! printf '%s' "$with_out" | grep -q 'acceptance' \
     && ! printf '%s' "$without_out" | grep -q 'acceptance'
   chk "no acceptance gate is armed: verify done runs the contract itself" $?
+
+  mkdir -p "$tmp/mono/web"
+  printf '%s' '{"scripts":{"test":"node -e 0"}}' > "$tmp/mono/web/package.json"
+  local mono_out; mono_out="$(bash "$self" detect "$tmp/mono" 2>/dev/null)"
+  printf '%s' "$mono_out" | grep -qF '{"name":"web-js-test","cmd":"cd web && npm test --silent","surface":["web/**"]}'
+  chk "an app one level down is armed with cd and its own surface" $?
 
   rm -rf "$tmp"
   [ "$ran" -eq "$EXPECTED_CONTROLS" ] || { printf '  FAIL  ran %s controls, expected %s\n' "$ran" "$EXPECTED_CONTROLS"; ok=-1; }

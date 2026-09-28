@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+import json
+import os
+import re
+import shutil
+import sys
+import tempfile
+
+SKIP = {".git", "node_modules", ".next", "dist", "build", "out", "coverage", "venv", ".venv",
+        "__pycache__", ".claude", ".pytest_cache", ".mypy_cache", ".turbo", "vendor", "target"}
+CAP = 300
+PY_ROUTE = re.compile(r"@\w+\.(get|post|put|patch|delete|route)\(\s*[\"']([^\"']*)")
+JS_ROUTE = re.compile(r"\b(?:app|router|server)\.(get|post|put|patch|delete)\(\s*[\"'`](/[^\"'`]*)")
+PORT = re.compile(r"(?:-p|--port)[ =](\d{2,5})")
+TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|spec|e2e)/|\.(test|spec)\.[jt]sx?$|(^|/)test_[^/]*\.py$")
+PAGE = re.compile(r"(^|/)app/(.*/)?page\.(tsx|jsx|ts|js|mdx)$")
+PAGES_DIR = re.compile(r"(^|/)pages/(.+)\.(tsx|jsx|ts|js)$")
+DEFAULT_PORT = {"next": 3000, "vite": 5173, "react-scripts": 3000, "nuxt": 3000, "astro": 4321,
+                "remix": 3000, "uvicorn": 8000, "flask": 5000, "django": 8000}
+
+
+def files(root):
+    for d, dirs, names in os.walk(root):
+        dirs[:] = sorted(x for x in dirs if x not in SKIP and not x.startswith(".") or x == ".github")
+        for n in sorted(names):
+            yield os.path.relpath(os.path.join(d, n), root)
+
+
+def read(root, rel, limit=400_000):
+    try:
+        with open(os.path.join(root, rel), encoding="utf-8", errors="ignore") as fh:
+            return fh.read(limit)
+    except OSError:
+        return ""
+
+
+def route_of_page(rel):
+    m = PAGE.search(rel)
+    parts = [p for p in (m.group(2) or "").strip("/").split("/") if p and not p.startswith("(")
+             and not p.startswith("@")]
+    return "/" + "/".join(parts)
+
+
+def serve_from_package(root, rel):
+    try:
+        pkg = json.loads(read(root, rel))
+    except ValueError:
+        return None
+    scripts = pkg.get("scripts") or {}
+    for key in ("dev", "start", "serve"):
+        body = scripts.get(key)
+        if not isinstance(body, str):
+            continue
+        kind = next((k for k in DEFAULT_PORT if k in body), None)
+        if not kind:
+            continue
+        m = PORT.search(body)
+        port = int(m.group(1)) if m else DEFAULT_PORT[kind]
+        return {"dir": os.path.dirname(rel) or ".", "cmd": "npm run %s" % key, "kind": kind,
+                "port": port, "ready": "curl -fsS -o /dev/null http://localhost:%d/" % port}
+    return None
+
+
+def serve_from_python(root, rel, text):
+    m = re.search(r"uvicorn\s+([\w.:]+)[^\n]*", text)
+    if not m:
+        return None
+    line = m.group(0).strip()
+    p = PORT.search(line)
+    port = int(p.group(1)) if p else DEFAULT_PORT["uvicorn"]
+    return {"dir": os.path.dirname(rel) or ".", "cmd": line, "kind": "uvicorn", "port": port,
+            "ready": "curl -fsS -o /dev/null http://localhost:%d/docs" % port}
+
+
+def discover(root):
+    out = {"serve": [], "pages": [], "endpoints": [], "cli": [], "e2e": [], "docs": []}
+    for rel in files(root):
+        base = os.path.basename(rel)
+        if base == "package.json":
+            s = serve_from_package(root, rel)
+            if s:
+                out["serve"].append(s)
+            try:
+                bins = json.loads(read(root, rel)).get("bin") or {}
+            except ValueError:
+                bins = {}
+            names = [bins] if isinstance(bins, str) else list(bins)
+            out["cli"] += [{"name": n, "file": rel} for n in names]
+            continue
+        if base in ("Makefile", "Procfile", "pyproject.toml") or base.endswith(".sh"):
+            text = read(root, rel)
+            s = serve_from_python(root, rel, text)
+            if s and s not in out["serve"]:
+                out["serve"].append(s)
+            if base == "pyproject.toml":
+                sec = re.search(r"\[project\.scripts\]\n((?:[^\[\n].*\n?)*)", text)
+                for line in (sec.group(1).splitlines() if sec else []):
+                    if "=" in line:
+                        out["cli"].append({"name": line.split("=")[0].strip(), "file": rel})
+            continue
+        if re.search(r"(^|/)(e2e|playwright|cypress)/", rel) and re.search(r"\.(spec|test|cy)\.[jt]sx?$", rel):
+            out["e2e"].append(rel)
+            continue
+        if base.lower().startswith("readme") or (rel.startswith("docs/") and base.endswith(".md")):
+            out["docs"].append(rel)
+            continue
+        if TEST_FILE.search(rel):
+            continue
+        if PAGE.search(rel):
+            out["pages"].append({"route": route_of_page(rel), "file": rel})
+            continue
+        m = PAGES_DIR.search(rel)
+        if m and not os.path.basename(m.group(2)).startswith("_"):
+            route = "/" + re.sub(r"(^|/)index$", "", m.group(2))
+            key = "endpoints" if route.startswith("/api") else "pages"
+            out[key].append({"route": route, "file": rel} if key == "pages"
+                            else {"method": "ANY", "route": route, "file": rel})
+            continue
+        rx = PY_ROUTE if rel.endswith(".py") else JS_ROUTE if re.search(r"\.[cm]?[jt]s$", rel) else None
+        if rx:
+            for method, route in rx.findall(read(root, rel)):
+                out["endpoints"].append({"method": "ANY" if method == "route" else method.upper(),
+                                         "route": route or "/", "file": rel})
+    return {k: v[:50 if k == "docs" else CAP] for k, v in out.items()} | {
+        "counts": {k: len(v) for k, v in out.items()}}
+
+
+def selftest():
+    tmp = tempfile.mkdtemp(prefix="discover-selftest-")
+    ok = ran = 0
+
+    def chk(label, got, want):
+        nonlocal ok, ran
+        ran += 1
+        good = got == want
+        ok += good
+        print("  %s  %s%s" % ("ok  " if good else "FAIL", label, "" if good else "\n        got %r\n       want %r" % (got, want)))
+
+    def put(rel, body):
+        path = os.path.join(tmp, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(body)
+
+    put("web/package.json", json.dumps({"scripts": {"dev": "next dev -p 3100"}}))
+    put("web/app/page.tsx", "x")
+    put("web/app/(shop)/orders/[id]/page.tsx", "x")
+    put("web/app/orders/page.test.tsx", "x")
+    put("web/node_modules/lib/app/page.tsx", "x")
+    put("api/main.py", '@app.get("/health")\ndef h(): ...\n@router.post("/orders")\ndef o(): ...\n')
+    put("api/tests/test_main.py", '@app.get("/fake")\n')
+    put("api/Makefile", "dev:\n\tuv run uvicorn api.main:app --reload --port 8100\n")
+    put("svc/server.js", "app.get('/items', h)\n")
+    put("web/e2e/orders.spec.ts", "x")
+    put("README.md", "# x")
+    put(".claude/worktrees/w/app/page.tsx", "x")
+    r = discover(tmp)
+
+    chk("app-router pages, route groups dropped, tests and vendored dirs skipped",
+        sorted(p["route"] for p in r["pages"]), ["/", "/orders/[id]"])
+    chk("python and js endpoints found, test files skipped",
+        sorted((e["method"], e["route"]) for e in r["endpoints"]),
+        [("GET", "/health"), ("GET", "/items"), ("POST", "/orders")])
+    chk("how to serve each app, with its port and a readiness probe",
+        sorted((s["dir"], s["kind"], s["port"]) for s in r["serve"]),
+        [("api", "uvicorn", 8100), ("web", "next", 3100)])
+    chk("existing e2e specs and docs are listed for the agent to read",
+        (r["e2e"], r["docs"]), (["web/e2e/orders.spec.ts"], ["README.md"]))
+
+    shutil.rmtree(tmp, ignore_errors=True)
+    print("\ndiscover (%d checks)" % ran)
+    return 0 if ok == ran else 1
+
+
+def main():
+    args = sys.argv[1:]
+    if args[:1] == ["selftest"]:
+        return selftest()
+    root = os.path.abspath(args[0] if args else ".")
+    if not os.path.isdir(root):
+        print("discover: no such directory: %s" % root, file=sys.stderr)
+        return 2
+    print(json.dumps(discover(root), indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

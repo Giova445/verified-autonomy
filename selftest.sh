@@ -14,7 +14,11 @@ tmp="$(mktemp -d)"; ( cd "$tmp" && git init -q . && git config user.email t@t &&
 CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
 chk "no gates.json -> stop hook stays out of the way" "$?" "0"
 out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
-chk "no gates.json -> no context injected" "${out:+nonempty}" ""
+printf '%s' "$out" | grep -q "verified-autonomy:setup" && r=hint || r="${out:+other}"
+chk "unarmed git repo -> one hint pointing at setup" "$r" "hint"
+nongit="$(mktemp -d)"; out="$(CLAUDE_PROJECT_DIR="$nongit" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
+chk "not a git repo -> no context injected" "${out:+nonempty}" ""
+rmdir "$nongit"
 
 mkdir -p "$tmp/.claude"
 printf '{"full":[{"name":"probe","cmd":"exit 1"}]}' > "$tmp/.claude/gates.json"
@@ -148,6 +152,7 @@ suite "holdout"         bash    "$PLUGIN/bin/holdout"         selftest
 suite "mutate-changed"  bash    "$PLUGIN/bin/mutate-changed"  selftest
 suite "ambiguity"       bash    "$PLUGIN/bin/ambiguity"       selftest
 suite "arm"             bash    "$PLUGIN/bin/arm"             selftest
+suite "discover"        python3 "$PLUGIN/bin/discover"        selftest
 suite "arm-surface"     python3 "$PLUGIN/bin/arm-surface.py"  --self-test
 suite "scope"           python3 "$PLUGIN/bin/scope"           selftest
 suite "inert-mask"      python3 "$PLUGIN/hooks/inert-mask.py" --self-test

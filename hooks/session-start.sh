@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-[ -f "$ROOT/.claude/gates.json" ] || exit 0
+if [ ! -f "$ROOT/.claude/gates.json" ]; then
+  git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 || exit 0
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"verified-autonomy is installed but not armed in this repo. When the user asks for work to be done autonomously or verified, or asks to set it up, run the verified-autonomy:setup skill first."}}'
+  exit 0
+fi
 
 python3 - <<'PY'
 import json

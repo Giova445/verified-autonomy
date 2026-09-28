@@ -1,17 +1,21 @@
 import { createRequire } from "node:module";
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, readdirSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, isAbsolute } from "node:path";
 
 const require_ = createRequire(import.meta.url);
 
-const EXPECTED_CONTROLS = 10;
+const EXPECTED_CONTROLS = 11;
 
-function loadPlaywright() {
+function loadPlaywright(cwd = process.cwd()) {
   const roots = [];
   if (process.env.PLAYWRIGHT_PATH) roots.push(process.env.PLAYWRIGHT_PATH);
   roots.push("playwright");
-  roots.push(join(process.cwd(), "node_modules", "playwright"));
+  roots.push(join(cwd, "node_modules", "playwright"));
+  for (const d of readdirSync(cwd, { withFileTypes: true })) {
+    if (d.isDirectory() && d.name !== "node_modules" && !d.name.startsWith("."))
+      roots.push(join(cwd, d.name, "node_modules", "playwright"));
+  }
 
   for (const r of roots) {
     try { return require_(r); } catch { /* try the next */ }
@@ -198,6 +202,17 @@ async function selftest() {
 
   chk("a fill against a missing selector fails",
     await run(live, [{ fill: { selector: "#nope", value: "x" } }]) === 1);
+
+  const mono = join(tmp, "mono", "web", "node_modules", "playwright");
+  mkdirSync(mono, { recursive: true });
+  writeFileSync(join(mono, "package.json"), '{"name":"playwright","main":"index.js"}');
+  writeFileSync(join(mono, "index.js"), "module.exports = { monorepoCopy: true };");
+  const saved = process.env.PLAYWRIGHT_PATH;
+  delete process.env.PLAYWRIGHT_PATH;
+  const found = loadPlaywright(join(tmp, "mono"));
+  if (saved !== undefined) process.env.PLAYWRIGHT_PATH = saved;
+  chk("Playwright installed one directory down is found",
+    found !== null && (found.monorepoCopy === true || typeof found.chromium === "object"));
 
   const shot = join(tmp, "shot.png");
   process.env.ACCEPT_SHOT = shot;

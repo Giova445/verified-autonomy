@@ -20,7 +20,8 @@ tmp="$(mktemp -d)"
 
 stop >/dev/null; chk "no gates.json -> stop hook stays out of the way" "$?" "0"
 out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$HOOKS/session-start.sh" 2>/dev/null)"
-chk "no gates.json -> no context injected" "${out:+nonempty}" ""
+printf '%s' "$out" | grep -q "verified-autonomy:setup" && r=hint || r="${out:+other}"
+chk "unarmed repo -> one hint pointing at setup" "$r" "hint"
 
 mkdir -p "$tmp/.claude"
 printf '{"full":[{"name":"probe","cmd":"exit 1"}]}' > "$tmp/.claude/gates.json"

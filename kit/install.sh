@@ -31,14 +31,13 @@ else
   cp "$KIT/AGENTS.md.template" AGENTS.md && echo "  AGENTS.md"
 fi
 
-for line in ".claude/evidence/" ".claude/.gate-attempts" ".claude/gates.json.new" ".claude/gates.json.surfaced" "AGENTS.md.new"; do
+for line in ".claude/evidence/" ".claude/.gate-attempts" ".claude/.sessions/" ".claude/gates.json.new" ".claude/gates.json.surfaced" "AGENTS.md.new"; do
   git check-ignore -q --no-index "$line" 2>/dev/null || grep -qxF "$line" .gitignore 2>/dev/null || echo "$line" >> .gitignore
 done
 
 cat <<'NEXT'
 
-next:
-  1. review .claude/gates.json — arm wrote only commands that passed here
-  2. merge kit/adapters/claude-code.settings.json into .claude/settings.json
-  3. bash .claude/hooks/selftest.sh
+next: the verified-autonomy:setup skill finishes this. In Claude Code, say
+  "set up verified-autonomy". It merges the gates, maps the product, writes and proves
+  .claude/acceptance.json, runs the self-test and commits on a branch.
 NEXT

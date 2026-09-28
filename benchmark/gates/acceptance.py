@@ -2,8 +2,10 @@
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
+import time
 
 CONTRACT = ".claude/acceptance.json"
 REQUIRED = ("name", "expect", "check")
@@ -11,7 +13,7 @@ TIMEOUT = int(os.environ.get("ACCEPT_TIMEOUT", "300"))
 
 HARNESS_ERROR = 2
 
-EXPECTED_CONTROLS = 17
+EXPECTED_CONTROLS = 20
 
 def run(cmd, cwd, extra=None):
     try:
@@ -87,7 +89,49 @@ def provenance(env, root):
                        "would be evidence about a different build" % (sha[:12], head[:12]))
     return True, "running %s, the revision under test" % sha[:12]
 
-def judge(outcome, root, environments=None, resolved=None, shot=None):
+def boot(env, root, name, servers):
+    start, ready = env.get("start"), env.get("ready")
+    if not start:
+        return True, ""
+    if not ready:
+        return False, "declares `start` with no `ready` probe, so nothing says when it is up"
+    env_vars = env.get("vars") or {}
+    start, ready = substitute(start, env_vars), substitute(ready, env_vars)
+    if run(ready, root) == 0:
+        if env.get("reuse"):
+            return True, "already up, reused as declared"
+        return False, ("`ready` passes before `start` ran, so something else is already serving "
+                       "there and would be checked instead of this build. Stop it, or declare "
+                       "\"reuse\": true if that process is this build")
+    logs = os.path.join(root, ".claude", "evidence")
+    os.makedirs(logs, exist_ok=True)
+    log = open(os.path.join(logs, "server-%s.log" % re.sub(r"[^a-z0-9]+", "-", name.lower())), "w")
+    p = subprocess.Popen(start, shell=True, cwd=root, stdout=log, stderr=subprocess.STDOUT,
+                         start_new_session=True)
+    servers.append(p)
+    deadline = time.time() + int(os.environ.get("ACCEPT_READY_TIMEOUT", "180"))
+    while time.time() < deadline:
+        if p.poll() is not None:
+            return False, "`start` exited %d before `ready` passed (see %s)" % (p.returncode, log.name)
+        if run(ready, root) == 0:
+            return True, "started, ready"
+        time.sleep(1)
+    return False, "`ready` never passed (see %s)" % log.name
+
+def stop(servers):
+    for p in servers:
+        if p.poll() is not None:
+            continue
+        try:
+            os.killpg(p.pid, signal.SIGTERM)
+            p.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGKILL)
+            p.wait()
+        except ProcessLookupError:
+            print("  server pid %d exited before it could be stopped" % p.pid)
+
+def judge(outcome, root, environments=None, resolved=None, shot=None, servers=None):
     environments = environments or {}
     resolved = {} if resolved is None else resolved
     missing = [f for f in REQUIRED if not outcome.get(f)]
@@ -102,8 +146,12 @@ def judge(outcome, root, environments=None, resolved=None, shot=None):
                                % name)
         env = environments[name]
         if name not in resolved:
-            resolved[name] = provenance(env, root)
-        ok, detail = resolved[name]
+            up = boot(env, root, name, [] if servers is None else servers)
+            resolved[name] = (up, provenance(env, root) if up[0] else None)
+        up, prov = resolved[name]
+        if not up[0]:
+            return "CANNOT RUN", "environment '%s' did not come up: %s" % (name, up[1])
+        ok, detail = prov
         if not ok:
             return "WRONG BUILD", "environment '%s': %s" % (name, detail)
 
@@ -171,12 +219,18 @@ def report(root, results_path=None):
           % (len(outcomes), len(set(where(o) for o in outcomes))))
     print()
     bad = unrunnable = wrong_build = 0
-    resolved, results = {}, []
+    resolved, results, servers = {}, [], []
     shots = os.path.join(root, ".claude", "evidence", "shots")
     os.makedirs(shots, exist_ok=True)
+    try:
+        judged = [judge(o, root, environments, resolved,
+                        os.path.join(shots, slug(o.get("name"), i) + ".png"), servers)
+                  for i, o in enumerate(outcomes)]
+    finally:
+        stop(servers)
     for i, o in enumerate(outcomes):
         shot = os.path.join(shots, slug(o.get("name"), i) + ".png")
-        verdict, detail = judge(o, root, environments, resolved, shot)
+        verdict, detail = judged[i]
         results.append({"name": o.get("name"), "expect": o.get("expect"), "verdict": verdict,
                         "detail": detail, "controlled": bool(o.get("control")),
                         "shot": shot if os.path.exists(shot) else None})
@@ -214,8 +268,8 @@ ABSENT = """product : NOT PROVEN - no product expectations are declared (.claude
   to do or see, each checked against the running product.
     {"outcomes": [{"name": "...", "expect": "<what the user observes, in their words>",
                    "check": "<command that exercises the product: drive.mjs, curl, the CLI>"}]}
-  Read the spec, the linked issue or PR and earlier product decisions first. Expectations often
-  live somewhere the request does not point."""
+  Run the verified-autonomy:setup skill: it maps the product, writes the contract, starts the
+  app and proves every outcome. Expectations often live somewhere the request does not point."""
 
 def summarize(path):
     try:
@@ -380,6 +434,34 @@ def selftest():
     chk("the summary names what is open, and absence or no results is never held",
         st == "open" and any("Search results: only matches" in l for l in lines)
         and "Continue with them" in lines[-1] and held[0] == "open" and ab[0] == "absent")
+
+    d = repo("boot", None)
+    with open(os.path.join(d, CONTRACT), "w") as fh:
+        json.dump({"environments": {"local": {
+            "start": "echo run >> hits; echo $$ > pid; touch up; exec sleep 60", "ready": "test -f up"}},
+            "outcomes": [dict(outcome("exit 0", "exit 1", env="local"), name="o%d" % i) for i in range(3)]}, fh)
+    with redirect_stdout(io.StringIO()):
+        rc = report(d)
+    alive = run("kill -0 $(cat pid)", d)
+    chk("a declared start is launched once, awaited, and stopped afterwards",
+        rc == 0 and open(os.path.join(d, "hits")).read().count("run") == 1 and alive != 0)
+
+    d = repo("bootfail", {"environments": {"local": {"start": "exit 3", "ready": "exit 1"}},
+                          "outcomes": [outcome("exit 0", "exit 1", env="local")]})
+    rc, out = rc_of(d)
+    chk("an app that will not start is CANNOT RUN, never FAILS or holds",
+        rc == 1 and "CANNOT RUN" in out and "did not come up" in out and "FAILS" not in out)
+
+    d = repo("occupied", {"environments": {"local": {"start": "touch started", "ready": "exit 0"}},
+                          "outcomes": [outcome("exit 0", "exit 1", env="local")]})
+    rc, out = rc_of(d)
+    with open(os.path.join(d, CONTRACT), "w") as fh:
+        json.dump({"environments": {"local": {"start": "touch started", "ready": "exit 0", "reuse": True}},
+                   "outcomes": [outcome("exit 0", "exit 1", env="local")]}, fh)
+    rc2, _ = rc_of(d)
+    chk("a port already serving is CANNOT RUN unless reuse is declared, and is never restarted",
+        rc == 1 and "something else is already serving" in out and rc2 == 0
+        and not os.path.exists(os.path.join(d, "started")))
 
     shutil.rmtree(tmp, ignore_errors=True)
     if ran != EXPECTED_CONTROLS:

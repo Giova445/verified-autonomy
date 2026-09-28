@@ -69,9 +69,9 @@ names each open expectation in the user's words, and the agent continues with th
 what blocks one. After three refusals in a row it asks for a blocked report, then lets the
 turn end so a person can review it.
 
-## Setup, step by step
+## Setup
 
-### 1. Install the plugin
+### 1. Install the plugin, once per machine
 
 In Claude Code:
 
@@ -80,71 +80,82 @@ In Claude Code:
 /plugin install verified-autonomy@verified-autonomy
 ```
 
-Restart Claude Code. The plugin is safe to install globally: in a repo without
-`.claude/gates.json` every hook exits 0 and injects nothing.
+Restart Claude Code. The plugin is safe to install globally. In a repo it has not armed, no
+gate runs and nothing blocks; the session only learns that the `setup` skill exists.
 
-### 2. Install the kit into your project
+### 2. Arm a repo: say one sentence
 
-```bash
-git clone --depth 1 https://github.com/Giova445/verified-autonomy /tmp/verified-autonomy
-bash /tmp/verified-autonomy/kit/install.sh /path/to/your/repo
-```
+In Claude Code, inside the repo:
 
-The installer copies the runner, hooks and checkers into your repo (`bin/`, `.claude/bin/`,
-`.claude/hooks/`, `.claude/gates/`), then **runs every lint, typecheck and test command it
-can find** and writes `.claude/gates.json` from the ones that passed. It never overwrites an
-existing `gates.json` or `AGENTS.md`; it writes `.new` files beside them to merge.
+> set up verified-autonomy
 
-### 3. Review `.claude/gates.json`
+The `setup` skill does the rest on a branch, with no manual steps:
 
-Every entry already passed once in your repo. Remove what you do not want run before every
-"done", and give slow gates a `surface` so they run only when the diff touches their files:
+| Step | What happens |
+|---|---|
+| Engineering gates | installs the runner and hooks, runs every lint, typecheck and test command it finds at the root and one directory down, and keeps only the ones that pass today. A subdirectory's gates get a `surface`, so they run only when the diff touches that app |
+| Map the product | `bin/discover` lists how to serve each app (command, port, readiness probe), its pages, endpoints, CLIs, existing e2e specs and docs. The agent also reads the README, specs, issues and recent PRs |
+| Write the contract | `.claude/acceptance.json`: the three to eight journeys a user would call the product, in the user's words, each checked against the running product and paired with a control that must fail |
+| Prove it | `./bin/verify product` starts the app, waits for it, runs every check in a real browser or over HTTP, saves a screenshot per outcome, and stops the app |
+| Commit | runs the self-test and commits on `chore/arm-verified-autonomy`, with no co-author trailer. It pushes and opens a PR where it may; it never merges |
+
+It stops to ask only when a credential is needed and the repo has none, when more than one
+environment could be authoritative, or when an outcome fails because the product itself is
+broken.
+
+The same happens without the sentence: when `done` refuses because no contract exists, the
+refusal points the agent at `setup`.
+
+### What it writes
+
+`.claude/gates.json`, every entry already passing once in the repo:
 
 ```json
 { "full": [
-  { "name": "unit",     "cmd": "npm test --silent" },
-  { "name": "api-test", "cmd": "cd api && pytest -q", "surface": ["api/**"] }
+  { "name": "unit",         "cmd": "npm test --silent" },
+  { "name": "api-js-test",  "cmd": "cd api && pytest -q", "surface": ["api/**"] }
 ] }
 ```
 
-### 4. Write the product contract, `.claude/acceptance.json`
-
-One outcome per thing a user must be able to do or see. Write it before the code, in the
-user's words, and check it against the running product rather than a unit:
+`.claude/acceptance.json`, the product contract:
 
 ```json
-{ "outcomes": [
-  {
-    "name": "search finds a customer",
-    "expect": "Typing a customer's name lists that customer and no one else",
-    "check": "node .claude/gates/drive.mjs http://localhost:3000/customers checks/search.json",
-    "control": "node .claude/gates/drive.mjs http://localhost:3000/customers checks/search-wrong-name.json"
+{
+  "environments": {
+    "local": {
+      "start": "cd web && npm run dev",
+      "ready": "curl -fsS -o /dev/null http://localhost:3000/"
+    }
   },
-  {
-    "name": "the API reports healthy",
-    "expect": "GET /health answers 200",
-    "check": "curl -fsS http://localhost:8000/health"
-  }
-] }
+  "outcomes": [
+    {
+      "name": "search finds a customer",
+      "expect": "Typing a customer's name lists that customer and no one else",
+      "env": "local",
+      "check": "node .claude/gates/drive.mjs http://localhost:3000/customers .claude/checks/search.json",
+      "control": "node .claude/gates/drive.mjs http://localhost:3000/customers .claude/checks/search-wrong-name.json"
+    }
+  ]
+}
 ```
 
+- **`start` / `ready`**: the harness runs `start`, polls `ready` until it passes (default
+  180s, `ACCEPT_READY_TIMEOUT`), runs the outcomes, then stops the app. Its output goes to
+  `.claude/evidence/server-<env>.log`. If `ready` already passes before `start`, something
+  else is serving there and would be checked instead of this build, so the outcomes read
+  CANNOT RUN. Declare `"reuse": true` only when that process is this build.
 - **`check`** exits 0 when the outcome holds, 1 when it does not, and 2 when it cannot run
-  at all (server down, missing credentials). Exit 2 reads as CANNOT RUN, never as a failure
-  of the code.
-- **`control`** is optional: a variant that must fail, which proves the check can tell a
-  broken product from a working one. Outcomes without one are reported as such.
+  at all. Exit 2 reads as CANNOT RUN, never as a failure of the code.
+- **`control`** is a variant that must fail, proving the check can tell a broken product
+  from a working one. It is optional, and outcomes without one are reported as such.
 - **`drive.mjs`** drives a real browser from a JSON list of steps: `fill`, `click`,
   `visible`, `hidden`, `enabled`, `disabled`, `text`, `count`, `consoleClean`,
-  `noOverflow`, `focusable`. It needs Playwright resolvable, or `PLAYWRIGHT_PATH` set. It
-  saves a screenshot per outcome in `.claude/evidence/shots/` for the reviewer to compare
-  with the expectation.
-- **Remote environments** such as staging go under `environments`, with `vars` for the
-  base URL and a `provenance` probe that prints the deployed commit. A deployment running
-  a different commit reads as WRONG BUILD, not as a pass.
+  `noOverflow`, `focusable`. It needs Playwright resolvable, or `PLAYWRIGHT_PATH` set.
+- **Remote environments** such as staging add `vars` for the base URL and a `provenance`
+  probe that prints the deployed commit. A deployment running a different commit reads as
+  WRONG BUILD, not as a pass.
 
-Run the product half alone with `./bin/verify product`.
-
-### 5. Optional settings
+### Optional settings
 
 | File or variable | Effect |
 |---|---|
@@ -153,15 +164,14 @@ Run the product half alone with `./bin/verify product`.
 | `GATE_MAX_BLOCKS` | refusals before the blocked report (default 3) |
 | `kit/ci/verify.yml` | copy to `.github/workflows/` so CI runs the same `./bin/verify done` |
 
-### 6. Prove it fires, then commit
+### By hand, if you want to
 
 ```bash
-bash .claude/hooks/selftest.sh
-git add .claude/gates.json .claude/acceptance.json && git commit -m "chore: arm verified-autonomy"
+bash "$(ls -d ~/.claude/plugins/cache/verified-autonomy/verified-autonomy/*/ | sort -V | tail -1)kit/install.sh" .
+python3 bin/discover .          # the product map
+./bin/verify product            # the contract alone
+bash .claude/hooks/selftest.sh  # prove the hooks fire
 ```
-
-The self-test builds a throwaway repo and checks that a red gate refuses, a missing
-contract refuses, a holding contract allows, and the deny rules block what they should.
 
 ## The loop an agent runs
 
@@ -187,7 +197,7 @@ Restart Claude Code, then re-run step 2 in each project to refresh its copies. E
 
 | You see | Meaning | Do |
 |---|---|---|
-| `no product expectations are declared` | the project has no `.claude/acceptance.json` | write the contract (step 4) |
+| `no product expectations are declared` | the project has no `.claude/acceptance.json` | say "set up verified-autonomy", or run the `setup` skill |
 | `NOT PROVEN` on an outcome | its control passed too, so the check cannot tell broken from working | make the check stricter |
 | `CANNOT RUN` | the check exited 2: environment, not code | start the server, provide credentials |
 | `WRONG BUILD` | the environment runs a different commit | deploy this commit, then re-run |
@@ -213,6 +223,7 @@ A skill is a request; a mechanism is a guarantee.
 
 | Skill | Mechanically backed by |
 |---|---|
+| `setup` | arms only commands that pass; the contract must reach `holds` with failing controls before it is committed |
 | `brainstorming` | open assumptions block `verify preflight`; criteria become contract outcomes |
 | `writing-plans` | judgment |
 | `using-worktrees` | pushes to protected branches are blocked |

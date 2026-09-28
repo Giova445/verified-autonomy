@@ -14,7 +14,11 @@ tmp="$(mktemp -d)"; ( cd "$tmp" && git init -q . && git config user.email t@t &&
 CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
 chk "no gates.json -> stop hook stays out of the way" "$?" "0"
 out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
-chk "no gates.json -> no context injected" "${out:+nonempty}" ""
+printf '%s' "$out" | grep -q "verified-autonomy:setup" && r=hint || r="${out:+other}"
+chk "unarmed git repo -> one hint pointing at setup" "$r" "hint"
+nongit="$(mktemp -d)"; out="$(CLAUDE_PROJECT_DIR="$nongit" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
+chk "not a git repo -> no context injected" "${out:+nonempty}" ""
+rmdir "$nongit"
 
 mkdir -p "$tmp/.claude"
 printf '{"full":[{"name":"probe","cmd":"exit 1"}]}' > "$tmp/.claude/gates.json"
@@ -41,13 +45,28 @@ chk "green gates, expectations hold -> allows" "$r" "0 reported"
 
 rm -f "$tmp/.claude/.gate-attempts"
 printf '{"full":[{"name":"probe","cmd":"exit 1"}]}' > "$tmp/.claude/gates.json"
-for i in 1 2 3; do CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; done
+for i in 1 2 3; do echo "$i" > "$tmp/work.txt"; CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; done
+echo 4 > "$tmp/work.txt"
 out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null 2>&1)"
 printf '%s' "$out" | grep -q "CIRCUIT BREAKER after 3" && r=yes || r=no
 chk "three blocked stops -> blocked report, not a fourth retry" "$r" "yes"
 CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; a=$?
+echo 5 > "$tmp/work.txt"
 CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; b=$?
-chk "after the report the stop is allowed, then gating resumes" "$a $b" "0 2"
+chk "after the report the stop is allowed, then gating resumes once the repo changes" "$a $b" "0 2"
+rm -f "$tmp/work.txt" "$tmp/.claude/.gate-attempts" "$tmp/.claude/.gate-stalled"
+
+lp="$(mktemp -d)"
+( cd "$lp" && git init -q . && git config user.email t@t && git config user.name t && mkdir -p .claude \
+  && printf '{"full":[{"name":"red","cmd":"exit 1"}]}' > .claude/gates.json && echo a > a \
+  && git add -A && git commit -qm init ) >/dev/null 2>&1
+stops(){ local n="$1" change="$2" seq="" i; for i in $(seq 1 "$n"); do
+  [ "$change" = yes ] && echo "$i" >> "$lp/a"
+  CLAUDE_PROJECT_DIR="$lp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; seq="$seq$?"; done; printf '%s' "$seq"; }
+chk "unchanged repo: the loop ends at the first identical refusal" "$(stops 6 no)" "200000"
+rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-stalled"
+chk "a repo changed before every stop still ends at the breaker" "$(stops 5 yes)" "22220"
+find "$lp" -maxdepth 0 -exec rm -rf {} +
 rm -f "$tmp/.claude/.gate-attempts"
 printf '{"full":[{"name":"probe","cmd":"true"}]}' > "$tmp/.claude/gates.json"
 out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
@@ -89,6 +108,23 @@ chk "scope: untouched gate is skipped" "$r" "yes"
 printf '%s' "$o" | grep -q "ALL GATES GREEN" && r=yes || r=no
 chk "scope: a scoped pass is not ALL GATES GREEN" "$r" "no"
 find "$sc" -maxdepth 0 -exec rm -rf {} +
+
+ss="$(mktemp -d)"
+( cd "$ss" && git init -q . && git config user.email t@t && git config user.name t && mkdir -p .claude \
+  && printf '{"full":[{"name":"probe","cmd":"true"}]}' > .claude/gates.json && echo a > app.txt \
+  && git add -A && git commit -qm init ) >/dev/null 2>&1
+printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/session-start.sh" >/dev/null 2>&1
+out="$(printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/stop-gate.sh" 2>&1)"; rc=$?
+printf '%s' "$out" | grep -q "has not changed this repo" && r="$rc said" || r="$rc silent"
+chk "no contract, session changed nothing -> stop allowed, said why" "$r" "0 said"
+echo b >> "$ss/app.txt"
+printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/stop-gate.sh" >/dev/null 2>&1
+chk "no contract, session changed the repo -> refuses" "$?" "2"
+printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/session-start.sh" >/dev/null 2>&1
+rm -f "$ss/.claude/.gate-attempts"
+printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/stop-gate.sh" >/dev/null 2>&1
+chk "a restart after compaction keeps the first baseline" "$?" "2"
+find "$ss" -maxdepth 0 -exec rm -rf {} +
 
 chk "deny: push to main"                   "$(deny 'git push origin main')" "2"
 chk "deny: force push own branch allowed"  "$(deny 'git push --force origin feature/x')" "0"
@@ -148,6 +184,7 @@ suite "holdout"         bash    "$PLUGIN/bin/holdout"         selftest
 suite "mutate-changed"  bash    "$PLUGIN/bin/mutate-changed"  selftest
 suite "ambiguity"       bash    "$PLUGIN/bin/ambiguity"       selftest
 suite "arm"             bash    "$PLUGIN/bin/arm"             selftest
+suite "discover"        python3 "$PLUGIN/bin/discover"        selftest
 suite "arm-surface"     python3 "$PLUGIN/bin/arm-surface.py"  --self-test
 suite "scope"           python3 "$PLUGIN/bin/scope"           selftest
 suite "inert-mask"      python3 "$PLUGIN/hooks/inert-mask.py" --self-test

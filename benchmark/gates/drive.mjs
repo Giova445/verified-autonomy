@@ -1,17 +1,21 @@
 import { createRequire } from "node:module";
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, readdirSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, isAbsolute } from "node:path";
 
 const require_ = createRequire(import.meta.url);
 
-const EXPECTED_CONTROLS = 10;
+const EXPECTED_CONTROLS = 12;
 
-function loadPlaywright() {
+function loadPlaywright(cwd = process.cwd()) {
   const roots = [];
   if (process.env.PLAYWRIGHT_PATH) roots.push(process.env.PLAYWRIGHT_PATH);
   roots.push("playwright");
-  roots.push(join(process.cwd(), "node_modules", "playwright"));
+  roots.push(join(cwd, "node_modules", "playwright"));
+  for (const d of readdirSync(cwd, { withFileTypes: true })) {
+    if (d.isDirectory() && d.name !== "node_modules" && !d.name.startsWith("."))
+      roots.push(join(cwd, d.name, "node_modules", "playwright"));
+  }
 
   for (const r of roots) {
     try { return require_(r); } catch { /* try the next */ }
@@ -110,6 +114,7 @@ async function drive(target, checks) {
   page.on("pageerror", (e) => ctx.consoleErrors.push(String(e)));
 
   let failures = 0;
+  let unreachable = false;
   try {
     const url = /^https?:|^file:/.test(target)
       ? target
@@ -134,11 +139,13 @@ async function drive(target, checks) {
       console.log(`  shot  ${process.env.ACCEPT_SHOT}`);
     }
   } catch (e) {
-    console.log(`  FAIL  could not drive ${target}: ${e.message}`);
+    unreachable = /ERR_CONNECTION_REFUSED|ERR_NAME_NOT_RESOLVED|ERR_ADDRESS_UNREACHABLE|ERR_CONNECTION_RESET/.test(e.message);
+    console.log(`  ${unreachable ? "CANNOT RUN" : "FAIL"}  could not drive ${target}: ${e.message.split("\n")[0]}`);
     failures++;
   } finally {
     await browser.close();
   }
+  if (unreachable) return 2;
   return failures === 0 ? 0 : 1;
 }
 
@@ -198,6 +205,20 @@ async function selftest() {
 
   chk("a fill against a missing selector fails",
     await run(live, [{ fill: { selector: "#nope", value: "x" } }]) === 1);
+
+  const mono = join(tmp, "mono", "web", "node_modules", "playwright");
+  mkdirSync(mono, { recursive: true });
+  writeFileSync(join(mono, "package.json"), '{"name":"playwright","main":"index.js"}');
+  writeFileSync(join(mono, "index.js"), "module.exports = { monorepoCopy: true };");
+  const saved = process.env.PLAYWRIGHT_PATH;
+  delete process.env.PLAYWRIGHT_PATH;
+  const found = loadPlaywright(join(tmp, "mono"));
+  if (saved !== undefined) process.env.PLAYWRIGHT_PATH = saved;
+  chk("Playwright installed one directory down is found",
+    found !== null && (found.monorepoCopy === true || typeof found.chromium === "object"));
+
+  chk("a server that is not running is CANNOT RUN (exit 2), not a product failure",
+    await run("http://127.0.0.1:59173/", [{ visible: "body" }]) === 2);
 
   const shot = join(tmp, "shot.png");
   process.env.ACCEPT_SHOT = shot;

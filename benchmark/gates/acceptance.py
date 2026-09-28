@@ -13,16 +13,23 @@ TIMEOUT = int(os.environ.get("ACCEPT_TIMEOUT", "300"))
 
 HARNESS_ERROR = 2
 
-EXPECTED_CONTROLS = 20
+EXPECTED_CONTROLS = 21
 
 def run(cmd, cwd, extra=None):
+    return run_said(cmd, cwd, extra)[0]
+
+def run_said(cmd, cwd, extra=None):
     try:
         p = subprocess.run(cmd, shell=True, cwd=cwd, timeout=TIMEOUT,
                            env={**os.environ, **(extra or {})},
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        return p.returncode
     except subprocess.TimeoutExpired:
-        return None
+        return None, ""
+    lines = [l.strip() for l in p.stdout.decode("utf-8", "replace").splitlines() if l.strip()]
+    return p.returncode, (lines[-1][:200] if lines else "")
+
+def said(text):
+    return " — it said: %s" % text if text else ""
 
 def run_out(cmd, cwd):
     try:
@@ -156,16 +163,16 @@ def judge(outcome, root, environments=None, resolved=None, shot=None, servers=No
             return "WRONG BUILD", "environment '%s': %s" % (name, detail)
 
     env_vars = env.get("vars") or {}
-    rc_check = run(substitute(outcome["check"], env_vars), root,
-                   {"ACCEPT_SHOT": shot} if shot else None)
+    rc_check, check_said = run_said(substitute(outcome["check"], env_vars), root,
+                                    {"ACCEPT_SHOT": shot} if shot else None)
     if rc_check is None:
         return "NO VERDICT", "check still running at %ss" % TIMEOUT
     if not outcome.get("control"):
         if rc_check == HARNESS_ERROR:
-            return "CANNOT RUN", ("the check exited %d — the harness could not do its job, so "
-                                  "nothing was learned about the deliverable" % HARNESS_ERROR)
+            return "CANNOT RUN", ("the check exited %d, so nothing was learned about the "
+                                  "deliverable%s" % (HARNESS_ERROR, said(check_said)))
         if rc_check != 0:
-            return "FAILS", "check exited %d" % rc_check
+            return "FAILS", "check exited %d%s" % (rc_check, said(check_said))
         return "holds", "check exit 0 (no control declared)"
     rc_control = run(substitute(outcome["control"], env_vars), root)
     if rc_control is None:
@@ -173,15 +180,14 @@ def judge(outcome, root, environments=None, resolved=None, shot=None, servers=No
 
     if rc_check == HARNESS_ERROR or rc_control == HARNESS_ERROR:
         which = "check" if rc_check == HARNESS_ERROR else "control"
-        return "CANNOT RUN", ("the %s exited %d — the harness could not do its job, so nothing "
-                              "was learned about the deliverable. Fix the environment, not the "
-                              "code." % (which, HARNESS_ERROR))
+        return "CANNOT RUN", ("the %s exited %d, so nothing was learned about the deliverable%s"
+                              % (which, HARNESS_ERROR, said(check_said if which == "check" else "")))
 
     if rc_control == 0:
         return "NOT PROVEN", ("the control passed (exit 0) — this check cannot tell a broken "
                               "artifact from a whole one, so its verdict means nothing")
     if rc_check != 0:
-        return "FAILS", "check exited %d; control discriminates (exit %d)" % (rc_check, rc_control)
+        return "FAILS", "check exited %d%s" % (rc_check, said(check_said))
     return "holds", "check exit 0, control exit %d" % rc_control
 
 def slug(name, i):
@@ -462,6 +468,12 @@ def selftest():
     chk("a port already serving is CANNOT RUN unless reuse is declared, and is never restarted",
         rc == 1 and "something else is already serving" in out and rc2 == 0
         and not os.path.exists(os.path.join(d, "started")))
+
+    rc, out = rc_of(repo("reason", {"outcomes": [
+        outcome("echo 'GRIFFIN_STAGING_URL is not set'; exit 2", "exit 1"),
+        dict(outcome("echo 'expected 2 rows, saw 0'; exit 1", "exit 1"), name="p")]}))
+    chk("a verdict carries the check's own last line, not a generic reason",
+        "it said: GRIFFIN_STAGING_URL is not set" in out and "it said: expected 2 rows, saw 0" in out)
 
     shutil.rmtree(tmp, ignore_errors=True)
     if ran != EXPECTED_CONTROLS:

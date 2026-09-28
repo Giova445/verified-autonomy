@@ -54,7 +54,7 @@ CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/nul
 echo 5 > "$tmp/work.txt"
 CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; b=$?
 chk "after the report the stop is allowed, then gating resumes once the repo changes" "$a $b" "0 2"
-rm -f "$tmp/work.txt" "$tmp/.claude/.gate-attempts" "$tmp/.claude/.gate-stalled"
+rm -f "$tmp/work.txt" "$tmp/.claude/.gate-attempts" "$tmp/.claude/.gate-judged"
 
 lp="$(mktemp -d)"
 ( cd "$lp" && git init -q . && git config user.email t@t && git config user.name t && mkdir -p .claude \
@@ -64,14 +64,14 @@ stops(){ local n="$1" change="$2" seq="" i; for i in $(seq 1 "$n"); do
   [ "$change" = yes ] && echo "$i" >> "$lp/a"
   CLAUDE_PROJECT_DIR="$lp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; seq="$seq$?"; done; printf '%s' "$seq"; }
 chk "unchanged repo: the loop ends at the first identical refusal" "$(stops 6 no)" "200000"
-rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-stalled"
+rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-judged"
 chk "a repo changed before every stop still ends at the breaker" "$(stops 5 yes)" "22220"
-rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-stalled"
+rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-judged"
 mkdir -p "$lp/.claude-flow"; seq=""
 for i in 1 2; do echo "$i" >> "$lp/.claude-flow/log"; echo "$i" > "$lp/agentdb.rvf"
   CLAUDE_PROJECT_DIR="$lp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; seq="$seq$?"; done
 chk "agent-tooling writes between stops are not progress" "$seq" "20"
-rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-stalled"
+rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-judged"
 printf 'printf "run\\n" >> .claude/runs\n' > "$lp/.claude/count.sh"
 printf '{"full":[{"name":"count","cmd":"sh .claude/count.sh"}]}' > "$lp/.claude/gates.json"
 printf '{"outcomes":[{"name":"o","expect":"e","check":"exit 0","control":"exit 1"}]}' > "$lp/.claude/acceptance.json"
@@ -136,10 +136,20 @@ echo b >> "$ss/app.txt"
 printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/stop-gate.sh" >/dev/null 2>&1
 chk "no contract, session changed the repo -> refuses" "$?" "2"
 printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/session-start.sh" >/dev/null 2>&1
-rm -f "$ss/.claude/.gate-attempts"
+rm -f "$ss/.claude/.gate-attempts" "$ss/.claude/.gate-judged"
 printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/stop-gate.sh" >/dev/null 2>&1
 chk "a restart after compaction keeps the first baseline" "$?" "2"
 find "$ss" -maxdepth 0 -exec rm -rf {} +
+
+ro="$(mktemp -d)"
+( cd "$ro" && git init -q . && git config user.email t@t && git config user.name t && mkdir -p .claude \
+  && printf 'printf "run\\n" >> .claude/runs; exit 1\n' > .claude/red.sh \
+  && printf '{"full":[{"name":"red","cmd":"sh .claude/red.sh"}]}' > .claude/gates.json && echo a > a \
+  && git add -A && git commit -qm init ) >/dev/null 2>&1
+printf '{"session_id":"ro"}' | CLAUDE_PROJECT_DIR="$ro" bash "$PLUGIN/hooks/session-start.sh" >/dev/null 2>&1
+seq=""; for i in 1 2 3; do printf '{"session_id":"ro"}' | CLAUDE_PROJECT_DIR="$ro" bash "$PLUGIN/hooks/stop-gate.sh" >/dev/null 2>&1; seq="$seq$?"; done
+chk "a read-only session on a red repo stops at once, running no gate" "$seq $(cat "$ro/.claude/runs" 2>/dev/null | wc -l | tr -d ' ')" "000 0"
+find "$ro" -maxdepth 0 -exec rm -rf {} +
 
 chk "deny: push to main"                   "$(deny 'git push origin main')" "2"
 chk "deny: force push own branch allowed"  "$(deny 'git push --force origin feature/x')" "0"

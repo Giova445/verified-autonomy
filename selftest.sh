@@ -114,6 +114,8 @@ inst="$tmp/inst"; mkdir -p "$inst"
   && printf '.claude/*\n' > .gitignore && git add -A && git commit -qm init ) >/dev/null 2>&1
 ( cd "$inst" && ARM_TIMEOUT=30 bash "$PLUGIN/kit/install.sh" . ) >/dev/null 2>&1
 chk "installer adds only .gitignore lines not already ignored" "$(tail -n +2 "$inst/.gitignore" | tr '\n' ' ')" "AGENTS.md.new "
+bash "$inst/.claude/hooks/selftest.sh" >/dev/null 2>&1
+chk "the installed self-test passes in the installed layout" "$?" "0"
 
 find "$tmp" -maxdepth 0 -exec rm -rf {} +
 
@@ -154,6 +156,7 @@ suite "trailer-check"   python3 "$PLUGIN/benchmark/gates/trailer-check.py"      
 suite "identity"        python3 "$PLUGIN/benchmark/gates/identity-preflight.py" --self-test
 suite "acceptance"      python3 "$PLUGIN/benchmark/gates/acceptance.py"         --self-test
 suite "drive"           node    "$PLUGIN/benchmark/gates/drive.mjs"             --self-test
+suite "kit self-test"    bash    "$PLUGIN/kit/selftest.sh"
 
 echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0

@@ -169,7 +169,7 @@ $(printf '%s' "$out" | tail -30 | sed 's/^/   │ /')
 accept_py() {
   local here p
   here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-  for p in "$here/../benchmark/gates/acceptance.py" "$ROOT/.claude/gates/acceptance.py"; do
+  for p in "$here/../benchmark/gates/acceptance.py" "$here/../gates/acceptance.py" "$ROOT/.claude/gates/acceptance.py"; do
     [ -f "$p" ] && { printf '%s' "$p"; return 0; }
   done
   return 1

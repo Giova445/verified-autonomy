@@ -66,6 +66,21 @@ stops(){ local n="$1" change="$2" seq="" i; for i in $(seq 1 "$n"); do
 chk "unchanged repo: the loop ends at the first identical refusal" "$(stops 6 no)" "200000"
 rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-stalled"
 chk "a repo changed before every stop still ends at the breaker" "$(stops 5 yes)" "22220"
+rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-stalled"
+mkdir -p "$lp/.claude-flow"; seq=""
+for i in 1 2; do echo "$i" >> "$lp/.claude-flow/log"; echo "$i" > "$lp/agentdb.rvf"
+  CLAUDE_PROJECT_DIR="$lp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; seq="$seq$?"; done
+chk "agent-tooling writes between stops are not progress" "$seq" "20"
+rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-stalled"
+printf 'printf "run\\n" >> .claude/runs\n' > "$lp/.claude/count.sh"
+printf '{"full":[{"name":"count","cmd":"sh .claude/count.sh"}]}' > "$lp/.claude/gates.json"
+printf '{"outcomes":[{"name":"o","expect":"e","check":"exit 0","control":"exit 1"}]}' > "$lp/.claude/acceptance.json"
+rm -f "$lp/.claude/runs"
+for i in 1 2 3; do CLAUDE_PROJECT_DIR="$lp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; done
+a="$(grep -c run "$lp/.claude/runs")"
+echo more >> "$lp/a"
+CLAUDE_PROJECT_DIR="$lp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; rc=$?
+chk "green once, unchanged stops reuse it; a change runs the gates again" "$a $(grep -c run "$lp/.claude/runs") $rc" "1 2 0"
 find "$lp" -maxdepth 0 -exec rm -rf {} +
 rm -f "$tmp/.claude/.gate-attempts"
 printf '{"full":[{"name":"probe","cmd":"true"}]}' > "$tmp/.claude/gates.json"

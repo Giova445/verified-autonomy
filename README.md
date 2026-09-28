@@ -150,7 +150,9 @@ refusal points the agent at `setup`.
   from a working one. It is optional, and outcomes without one are reported as such.
 - **`drive.mjs`** drives a real browser from a JSON list of steps: `fill`, `click`,
   `visible`, `hidden`, `enabled`, `disabled`, `text`, `count`, `consoleClean`,
-  `noOverflow`, `focusable`. It needs Playwright resolvable, or `PLAYWRIGHT_PATH` set.
+  `noOverflow`, `focusable`. It finds Playwright at the root or one directory down (a monorepo's
+  web app), or at `PLAYWRIGHT_PATH`. A page it cannot reach because the app is not running
+  exits 2 (CANNOT RUN); a missing local file fails, because the artifact itself is missing.
 - **Remote environments** such as staging add `vars` for the base URL and a `provenance`
   probe that prints the deployed commit. A deployment running a different commit reads as
   WRONG BUILD, not as a pass.
@@ -199,18 +201,22 @@ Restart Claude Code, then re-run step 2 in each project to refresh its copies. E
 |---|---|---|
 | `no product expectations are declared` | the project has no `.claude/acceptance.json` | say "set up verified-autonomy", or run the `setup` skill |
 | `NOT PROVEN` on an outcome | its control passed too, so the check cannot tell broken from working | make the check stricter |
-| `CANNOT RUN` | the check exited 2: environment, not code | start the server, provide credentials |
+| `CANNOT RUN` | the check exited 2: environment, not code | read `.claude/evidence/server-<env>.log`, fix `start`/`ready`, or provide the credential it names |
 | `WRONG BUILD` | the environment runs a different commit | deploy this commit, then re-run |
-| `CIRCUIT BREAKER` | three refusals in a row | the agent writes a blocked report; the next stop is allowed |
+| `CIRCUIT BREAKER` | three refusals in a row, each after a change | the agent writes a blocked report; the next stop is allowed |
+| `NO PROGRESS` | refused before, and nothing in the repo changed since | the stop is allowed without re-running the gates; the agent writes a blocked report |
+| `STALLED` | a later stop on that same unchanged state | allowed at once; the gates run again as soon as the repo changes |
+| `UNCHANGED since the last green run` | nothing changed since the gates last passed | allowed at once, reusing that verdict; `VERIFY_CACHE=0` forces a full run |
+| `has not changed this repo` | no contract, and this session changed nothing here | allowed; arm the repo with `setup` when you work in it |
 | a hook blocks a routine command | a deny rule matched | the message names the rule; push to a feature branch, not a protected one |
 
 ## What the hooks do
 
 | Hook | Behavior |
 |---|---|
-| `Stop` / `SubagentStop` | Runs `bin/verify done`. **Exit 2 while the engineering or the product half is red**; the reason returns to the agent. |
+| `Stop` / `SubagentStop` | Runs `bin/verify done`. **Exit 2 while the engineering or the product half is red**; the reason returns to the agent, naming each open expectation. It never loops: a refusal on an unchanged repo is allowed through as NO PROGRESS, and a stop on a repo unchanged since the last green run returns at once. "Unchanged" compares HEAD, the diff, untracked contents, the gate config, the contract and the runner itself, and ignores agent-tooling output such as `.claude-flow/` and `.agents/`. Time limit 15 minutes. |
 | `PreToolUse` | Blocks pushes and merges into protected branches, `reset --hard`, `clean -f`, destructive SQL, self-approval, credential reads, exit-code suppression on a test command, and commits carrying a `Co-Authored-By` trailer. Force-pushing your own branch is allowed. |
-| `SessionStart` | Injects the contract, only in repos that opted in. |
+| `SessionStart` | Injects the contract in armed repos and records the repo's state for this session; in an unarmed git repo, one line pointing at `setup`. |
 
 Plus: a cheat scanner that diffs for the documented ways agents fake green (skipped tests,
 deleted assertions, `|| true`, retry-to-green, snapshot re-recording), a never-worse-than-

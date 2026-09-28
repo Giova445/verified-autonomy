@@ -80,16 +80,7 @@ candidates() {
     fi
   fi
   [ -x "$d/.claude/hooks/scan-diff-cheats.sh" ] && emit full cheat-scan '.claude/hooks/scan-diff-cheats.sh'
-  local accept=""
-  local p
-  for p in "$KIT_ROOT/benchmark/gates/acceptance.py" "$KIT_ROOT/.claude/gates/acceptance.py"; do
-    [ -f "$p" ] && { accept="$p"; break; }
-  done
-  local accept_ref="$accept"
-  case "$accept" in "$d"/*) accept_ref=".${accept#"$d"}" ;; esac
-  [ -f "$d/.claude/acceptance.json" ] && [ -n "$accept" ] \
-    && emit full acceptance "python3 '$accept_ref' ."
-  local trailer=""
+  local trailer="" p
   for p in "$KIT_ROOT/benchmark/gates/trailer-check.py" "$KIT_ROOT/.claude/gates/trailer-check.py"; do
     [ -f "$p" ] && { trailer="$p"; break; }
   done
@@ -277,9 +268,9 @@ PY
   local with_out without_out
   with_out="$(bash "$self" detect "$tmp/contract" 2>&1)"
   without_out="$(bash "$self" detect "$tmp/script" 2>&1)"
-  printf '%s' "$with_out" | grep -q 'acceptance' \
+  ! printf '%s' "$with_out" | grep -q 'acceptance' \
     && ! printf '%s' "$without_out" | grep -q 'acceptance'
-  chk "the acceptance gate is armed only where a contract exists" $?
+  chk "no acceptance gate is armed: verify done runs the contract itself" $?
 
   rm -rf "$tmp"
   [ "$ran" -eq "$EXPECTED_CONTROLS" ] || { printf '  FAIL  ran %s controls, expected %s\n' "$ran" "$EXPECTED_CONTROLS"; ok=-1; }

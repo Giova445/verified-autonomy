@@ -12,6 +12,11 @@ hook checks.
 
 `./bin/verify done` exits 0. Nothing else counts. Not "tests look right", not "should work".
 
+It needs two things. The engineering gates in `.claude/gates.json` are green, and every
+outcome in `.claude/acceptance.json` holds against the running product. With no contract,
+`done` refuses: green code is not a delivered product. When it refuses it names each open
+expectation. Continue with those, or say what blocks one.
+
 A `Stop` hook runs this. If any gate is red the hook exits 2, the turn does not end, and
 stderr comes back to you as the reason. You cannot talk your way past it — deterministic
 results are facts, and per the docs an exit-2 hook wins even over a JSON `allow`.

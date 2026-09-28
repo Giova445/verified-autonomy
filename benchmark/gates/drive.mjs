@@ -5,7 +5,7 @@ import { join, resolve, isAbsolute } from "node:path";
 
 const require_ = createRequire(import.meta.url);
 
-const EXPECTED_CONTROLS = 9;
+const EXPECTED_CONTROLS = 10;
 
 function loadPlaywright() {
   const roots = [];
@@ -129,6 +129,10 @@ async function drive(target, checks) {
       console.log(`  ${r.ok ? "ok  " : "FAIL"}  ${kind}: ${r.detail}`);
       if (!r.ok) failures++;
     }
+    if (process.env.ACCEPT_SHOT) {
+      await page.screenshot({ path: process.env.ACCEPT_SHOT, fullPage: true });
+      console.log(`  shot  ${process.env.ACCEPT_SHOT}`);
+    }
   } catch (e) {
     console.log(`  FAIL  could not drive ${target}: ${e.message}`);
     failures++;
@@ -194,6 +198,12 @@ async function selftest() {
 
   chk("a fill against a missing selector fails",
     await run(live, [{ fill: { selector: "#nope", value: "x" } }]) === 1);
+
+  const shot = join(tmp, "shot.png");
+  process.env.ACCEPT_SHOT = shot;
+  const shotRc = await run(live, [{ visible: "#go" }]);
+  delete process.env.ACCEPT_SHOT;
+  chk("ACCEPT_SHOT saves a screenshot of the driven page", shotRc === 0 && existsSync(shot));
 
   rmSync(tmp, { recursive: true, force: true });
   if (ran !== EXPECTED_CONTROLS) { console.log(`  FAIL  ran ${ran} controls, expected ${EXPECTED_CONTROLS}`); passed = -1; }

@@ -23,8 +23,30 @@ chk "red gate -> Stop hook exit 2 (refuses)" "$?" "2"
 
 rm -f "$tmp/.claude/.gate-attempts"
 printf '{"full":[{"name":"probe","cmd":"true"}]}' > "$tmp/.claude/gates.json"
-CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
-chk "green gate -> Stop hook exit 0 (allows)" "$?" "0"
+out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null 2>&1)"; rc=$?
+printf '%s' "$out" | grep -q "no product expectations are declared" && r="$rc named" || r="$rc silent"
+chk "green gates, no contract -> refuses, says why" "$r" "2 named"
+
+rm -f "$tmp/.claude/.gate-attempts"
+printf '{"outcomes":[{"name":"Queue filters","expect":"a processor sees only blockers","check":"exit 1"}]}' > "$tmp/.claude/acceptance.json"
+out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null 2>&1)"; rc=$?
+printf '%s' "$out" | grep -q "Queue filters: a processor sees only blockers" && r="$rc named" || r="$rc silent"
+chk "green gates, open expectation -> refuses, names it" "$r" "2 named"
+
+rm -f "$tmp/.claude/.gate-attempts"
+printf '{"outcomes":[{"name":"Queue filters","expect":"a processor sees only blockers","check":"exit 0","control":"exit 1"}]}' > "$tmp/.claude/acceptance.json"
+out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null 2>&1)"; rc=$?
+printf '%s' "$out" | grep -q "1 product expectation(s) hold" && r="$rc reported" || r="$rc silent"
+chk "green gates, expectations hold -> allows" "$r" "0 reported"
+
+rm -f "$tmp/.claude/.gate-attempts"
+printf '{"full":[{"name":"probe","cmd":"exit 1"}]}' > "$tmp/.claude/gates.json"
+for i in 1 2 3; do CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; done
+out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null 2>&1)"
+printf '%s' "$out" | grep -q "CIRCUIT BREAKER after 3" && r=yes || r=no
+chk "three blocked stops -> blocked report, not a fourth retry" "$r" "yes"
+rm -f "$tmp/.claude/.gate-attempts"
+printf '{"full":[{"name":"probe","cmd":"true"}]}' > "$tmp/.claude/gates.json"
 out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
 printf '%s' "$out" | grep -q "verified-autonomy" && r=yes || r=no
 chk "gates.json present -> context injected" "$r" "yes"
@@ -77,6 +99,18 @@ chk "deny: plain commit allowed"            "$(deny 'git commit -m fix')" "0"
 o="$(bash "$PLUGIN/bin/arm" detect "$tmp" 2>&1)"
 printf '%s' "$o" | grep -q 'co-author .*passes' && r=yes || r=no
 chk "arm: co-author gate armed in a git repo"  "$r" "yes"
+
+out="$(VERIFIED_AUTONOMY_UNATTENDED=1 CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
+a="$(printf '%s' "$out" | grep -c '<unattended>')"
+out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
+b="$(printf '%s' "$out" | grep -c '<unattended>')"
+chk "unattended guidance only when opted in" "$a $b" "1 0"
+
+inst="$tmp/inst"; mkdir -p "$inst"
+( cd "$inst" && git init -q . && git config user.email t@t && git config user.name t \
+  && printf '.claude/*\n' > .gitignore && git add -A && git commit -qm init ) >/dev/null 2>&1
+( cd "$inst" && ARM_TIMEOUT=30 bash "$PLUGIN/kit/install.sh" . ) >/dev/null 2>&1
+chk "installer adds only .gitignore lines not already ignored" "$(tail -n +2 "$inst/.gitignore" | tr '\n' ' ')" "AGENTS.md.new "
 
 find "$tmp" -maxdepth 0 -exec rm -rf {} +
 

@@ -6,7 +6,9 @@ tokens of always-on context. Everything longer belongs in a scoped rule or a ski
 
 ## Definition of done
 
-`./bin/verify done` exits 0. Nothing else counts as done.
+`./bin/verify done` exits 0. Nothing else counts as done. It runs the engineering gates and
+every outcome in `.claude/acceptance.json` against the running product; with no contract it
+refuses.
 
 Not "tests look right". Not "should work". The command, exit 0. If you cannot run it, say
 so and stop — do not claim completion.

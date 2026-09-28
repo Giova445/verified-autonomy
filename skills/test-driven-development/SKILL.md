@@ -1,6 +1,6 @@
 ---
 name: test-driven-development
-description: Use when implementing any feature or bugfix, before writing implementation code. Enforces that the test is written first and proven to fail for the right reason.
+description: Use when implementing any feature or bugfix, before writing implementation code. The first failing check is the user's expectation, run against the product; unit tests come only where it cannot reach.
 ---
 
 # Test-Driven Development
@@ -8,8 +8,17 @@ description: Use when implementing any feature or bugfix, before writing impleme
 ## The law
 
 ```
-NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
+NO PRODUCTION CODE WITHOUT A FAILING PRODUCT CHECK FIRST
 ```
+
+The first check is what the user expects to see or do, written as an outcome in
+`.claude/acceptance.json` and run against the product: the page in a browser (`drive.mjs`),
+the endpoint over HTTP, the command as a user types it. Run `./bin/verify product` and watch
+it fail before you build. That failure is the definition of the work.
+
+Add a unit test only where the product check cannot isolate the logic: a parser, a rounding
+rule, a state machine. Unit tests are how you debug. They are not how the work is proven, and
+their count is not progress. A green suite has shipped a page that returns 500.
 
 Wrote the code first? Delete it. Not "keep it as reference", not "adapt it while writing the
 test" — delete, then implement fresh from the test. Code you are looking at while writing a

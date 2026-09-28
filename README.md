@@ -204,17 +204,16 @@ Restart Claude Code, then re-run step 2 in each project to refresh its copies. E
 | `CANNOT RUN` | the check exited 2: environment, not code | read `.claude/evidence/server-<env>.log`, fix `start`/`ready`, or provide the credential it names |
 | `WRONG BUILD` | the environment runs a different commit | deploy this commit, then re-run |
 | `CIRCUIT BREAKER` | three refusals in a row, each after a change | the agent writes a blocked report; the next stop is allowed |
-| `NO PROGRESS` | refused before, and nothing in the repo changed since | the stop is allowed without re-running the gates; the agent writes a blocked report |
-| `STALLED` | a later stop on that same unchanged state | allowed at once; the gates run again as soon as the repo changes |
-| `UNCHANGED since the last green run` | nothing changed since the gates last passed | allowed at once, reusing that verdict; `VERIFY_CACHE=0` forces a full run |
-| `has not changed this repo` | no contract, and this session changed nothing here | allowed; arm the repo with `setup` when you work in it |
+| `unchanged since the last check (refused)` | nothing changed since a refusal was reported | allowed at once, without re-running anything; the gates run again when the repo changes |
+| `unchanged since the last check (green)` | nothing changed since the gates last passed | allowed at once, reusing that verdict; `VERIFY_CACHE=0` forces a full run |
+| `this session has not changed this repo` | a turn that only read code, answered a question, or worked elsewhere | allowed at once: there is nothing to judge |
 | a hook blocks a routine command | a deny rule matched | the message names the rule; push to a feature branch, not a protected one |
 
 ## What the hooks do
 
 | Hook | Behavior |
 |---|---|
-| `Stop` / `SubagentStop` | Runs `bin/verify done`. **Exit 2 while the engineering or the product half is red**; the reason returns to the agent, naming each open expectation. It never loops: a refusal on an unchanged repo is allowed through as NO PROGRESS, and a stop on a repo unchanged since the last green run returns at once. "Unchanged" compares HEAD, the diff, untracked contents, the gate config, the contract and the runner itself, and ignores agent-tooling output such as `.claude-flow/` and `.agents/`. Time limit 15 minutes. |
+| `Stop` / `SubagentStop` | Runs `bin/verify done`. **Exit 2 while the engineering or the product half is red**; the reason returns to the agent, naming each open expectation. It only judges turns that changed the repo: a stop on a repo this session has not changed, or one unchanged since the last check, returns at once without running a gate or booting the app, so reading code costs nothing and a refusal is never repeated. "Unchanged" compares HEAD, the diff, untracked contents, the gate config, the contract and the runner itself, and ignores agent-tooling output such as `.claude-flow/` and `.agents/`. Time limit 15 minutes. |
 | `PreToolUse` | Blocks pushes and merges into protected branches, `reset --hard`, `clean -f`, destructive SQL, self-approval, credential reads, exit-code suppression on a test command, and commits carrying a `Co-Authored-By` trailer. Force-pushing your own branch is allowed. |
 | `SessionStart` | Injects the contract in armed repos and records the repo's state for this session; in an unarmed git repo, one line pointing at `setup`. |
 

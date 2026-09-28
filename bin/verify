@@ -5,8 +5,7 @@ ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}
 CONFIG="$ROOT/.claude/gates.json"
 EVIDENCE="$ROOT/.claude/evidence"
 STATE="$ROOT/.claude/.gate-attempts"
-STALL="$ROOT/.claude/.gate-stalled"
-GREEN="$ROOT/.claude/.gate-green"
+JUDGED="$ROOT/.claude/.gate-judged"
 BASE="${VERIFY_BASE:-origin/main}"
 MAX_BLOCKS="${GATE_MAX_BLOCKS:-3}"
 HOOK=0
@@ -181,8 +180,10 @@ fingerprint() {
 
 untouched_this_session() {
   local base="${VERIFY_SESSION_BASELINE:-}"
-  [ -n "$base" ] && [ -s "$base" ] && [ "$(cat "$base")" = "$(fingerprint)" ]
+  [ -n "$base" ] && [ -s "$base" ] && [ "$(cat "$base")" = "$1" ]
 }
+
+judged() { printf '%s %s\n' "$fp" "$1" > "$JUDGED"; }
 
 accept_py() {
   local here p
@@ -224,10 +225,10 @@ print(json.dumps(out,indent=2))' \
   "${RESULTS:-[]}" "$sha" "${CONFIG_ERROR:-}" "${PRODUCT_STATUS:-not run}" > "$EVIDENCE/latest.json"
 }
 
-attempts=0; last_fp=""
-[ -f "$STATE" ] && read -r attempts last_fp < "$STATE" 2>/dev/null
+attempts=0
+[ -f "$STATE" ] && read -r attempts _ < "$STATE" 2>/dev/null
 case "$attempts" in ''|*[!0-9]*) attempts=0 ;; esac
-refuse() { echo "$((attempts + 1)) $(fingerprint)" > "$STATE"; }
+refuse() { echo "$((attempts + 1))" > "$STATE"; judged "refused"; }
 
 case "${1:-done}" in
   preflight) say "preflight:"; preflight || exit 1 ;;
@@ -247,23 +248,17 @@ case "${1:-done}" in
       else say "full: GREEN"; fi ;;
   done|--hook)
       fp="$(fingerprint)"
-      if [ "${VERIFY_CACHE:-1}" != 0 ] && [ -f "$GREEN" ] && [ "$(cat "$GREEN")" = "$fp" ]; then
-        say "UNCHANGED since the last green run (same commit, diff and gate config): not re-running."
-        say "   evidence: .claude/evidence/latest.json. VERIFY_CACHE=0 forces a full run."
-        exit 0
-      fi
-      rm -f "$GREEN"
-      if [ -f "$STALL" ] && [ "$(cat "$STALL")" = "$fp" ]; then
-        say "STALLED: nothing in this repo has changed since a refusal that retrying could not clear."
-        say "Not done. Stopping is allowed; the gates run again once the repo changes."
-        exit 0
-      fi
-      if [ -n "$last_fp" ] && [ "$last_fp" = "$fp" ]; then
-        rm -f "$STATE"; echo "$fp" > "$STALL"
-        say "NO PROGRESS: refused before, and nothing in the repo has changed since, so another"
-        say "attempt cannot turn out differently. Not done. Write a BLOCKED report: the failing gate,"
-        say "what you tried, the decision needing a human, a recommendation. This stop is allowed."
-        exit 0
+      if [ "${VERIFY_CACHE:-1}" != 0 ]; then
+        if untouched_this_session "$fp"; then
+          rm -f "$STATE"
+          say "verified-autonomy: this session has not changed this repo, so there is nothing to judge."
+          exit 0
+        fi
+        if [ -f "$JUDGED" ] && [ "$(cut -d' ' -f1 "$JUDGED")" = "$fp" ]; then
+          rm -f "$STATE"
+          say "verified-autonomy: unchanged since the last check ($(cut -d' ' -f2- "$JUDGED")); not re-running."
+          exit 0
+        fi
       fi
       if [ "$attempts" -gt "$MAX_BLOCKS" ]; then
         rm -f "$STATE"
@@ -297,12 +292,6 @@ case "${1:-done}" in
         say "Attempt $((attempts+1))/${MAX_BLOCKS} before escalation is required."
         die_code
       fi
-      if [ "$PRODUCT_STATUS" = "absent" ] && untouched_this_session; then
-        rm -f "$STATE"
-        say "product : no contract here, but this session has not changed this repo, so nothing"
-        say "          in it is being claimed done. Stopping is allowed. Arm it with the setup skill."
-        exit 0
-      fi
       if [ "$PRODUCT_STATUS" != "held" ]; then
         refuse
         say "$PRODUCT_MSG"
@@ -310,7 +299,7 @@ case "${1:-done}" in
         say "Attempt $((attempts+1))/${MAX_BLOCKS} before escalation is required."
         die_code
       fi
-      rm -f "$STATE" "$STALL"
+      rm -f "$STATE"
       if [ "${SKIPPED_N:-0}" -gt 0 ]; then
         say "GATES GREEN for what ran — ${SKIPPED_N} gate(s) scoped out, unexecuted not green."
         say "   Those gates are unproven for this change. Run VERIFY_SCOPE=0 bin/verify done to execute every one."
@@ -318,7 +307,7 @@ case "${1:-done}" in
       else
         say "ALL GATES GREEN — evidence: .claude/evidence/latest.json"
       fi
-      echo "$fp" > "$GREEN"
+      judged "green"
       say "DONE — $PRODUCT_MSG; engineering gates green. Screenshots: .claude/evidence/shots/" ;;
   fingerprint) fingerprint ;;
   product)   FAILED=""; CONFIG_ERROR=""; product; say "$PRODUCT_MSG"; [ "$PRODUCT_STATUS" = held ] || exit 1 ;;

@@ -31,7 +31,7 @@ else
   cp "$KIT/AGENTS.md.template" AGENTS.md && echo "  AGENTS.md"
 fi
 
-for line in ".claude/evidence/" ".claude/.gate-attempts" ".claude/.sessions/" ".claude/.gate-green" ".claude/.gate-stalled" ".claude/gates.json.new" ".claude/gates.json.surfaced" "AGENTS.md.new"; do
+for line in ".claude/evidence/" ".claude/.gate-attempts" ".claude/.sessions/" ".claude/.gate-judged" ".claude/gates.json.new" ".claude/gates.json.surfaced" "AGENTS.md.new"; do
   git check-ignore -q --no-index "$line" 2>/dev/null || grep -qxF "$line" .gitignore 2>/dev/null || echo "$line" >> .gitignore
 done
 

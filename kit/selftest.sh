@@ -1,80 +1,72 @@
 #!/usr/bin/env bash
 set -uo pipefail
-ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-PLUGIN="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$HERE/stop-gate.sh" ]; then
+  HOOKS="$HERE"; BIN="$HERE/../bin"; GATES="$HERE/../gates"
+else
+  HOOKS="$HERE/../hooks"; BIN="$HERE/../bin"; GATES="$HERE/../benchmark/gates"
+fi
 pass=0; fail=0
-chk(){ if [ "$2" = "$3" ]; then printf '  ok    %-46s (%s)\n' "$1" "$3"; pass=$((pass+1));
-       else printf '  FAIL  %-46s want=%s got=%s\n' "$1" "$3" "$2"; fail=$((fail+1)); fi; }
+chk(){ if [ "$2" = "$3" ]; then printf '  ok    %-50s (%s)\n' "$1" "$3"; pass=$((pass+1));
+       else printf '  FAIL  %-50s want=%s got=%s\n' "$1" "$3" "$2"; fail=$((fail+1)); fi; }
+stop(){ rm -f "$tmp/.claude/.gate-attempts"; CLAUDE_PROJECT_DIR="$tmp" bash "$HOOKS/stop-gate.sh" </dev/null 2>&1; }
+deny(){ printf '%s' "$1" | python3 -c 'import json,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.stdin.read()}}))' \
+  | CLAUDE_PROJECT_DIR="$tmp" bash "$HOOKS/deny-dangerous.sh" >/dev/null 2>&1; echo $?; }
+held='{"outcomes":[{"name":"search","expect":"searching a name lists only matching items","check":"exit 0","control":"exit 1"}]}'
 
-echo "self-test: $ROOT"
+echo "self-test: hooks in $HOOKS"
+tmp="$(mktemp -d)"
+( cd "$tmp" && git init -q . && git config user.email t@t && git config user.name t && git commit -q --allow-empty -m init )
 
-tmp="$(mktemp -d)"; ( cd "$tmp" && git init -q . )
-CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
-chk "no gates.json -> stop hook stays out of the way" "$?" "0"
-out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
+stop >/dev/null; chk "no gates.json -> stop hook stays out of the way" "$?" "0"
+out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$HOOKS/session-start.sh" 2>/dev/null)"
 chk "no gates.json -> no context injected" "${out:+nonempty}" ""
 
 mkdir -p "$tmp/.claude"
 printf '{"full":[{"name":"probe","cmd":"exit 1"}]}' > "$tmp/.claude/gates.json"
-CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
-chk "red gate -> Stop hook exit 2 (refuses)" "$?" "2"
+stop >/dev/null; chk "red gate -> refuses" "$?" "2"
 
-rm -f "$tmp/.claude/.gate-attempts"
 printf '{"full":[{"name":"probe","cmd":"true"}]}' > "$tmp/.claude/gates.json"
-CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
-chk "green gate -> Stop hook exit 0 (allows)" "$?" "0"
+out="$(stop)"; rc=$?
+printf '%s' "$out" | grep -q "no product expectations" && r="$rc named" || r="$rc silent"
+chk "green gates, no contract -> refuses, says why" "$r" "2 named"
 
-out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
+printf '{"outcomes":[{"name":"search","expect":"searching a name lists only matching items","check":"exit 1"}]}' > "$tmp/.claude/acceptance.json"
+out="$(stop)"; rc=$?
+printf '%s' "$out" | grep -q "search: searching a name lists only matching items" && r="$rc named" || r="$rc silent"
+chk "open expectation -> refuses, names it" "$r" "2 named"
+
+printf '%s' "$held" > "$tmp/.claude/acceptance.json"
+stop >/dev/null; chk "gates green, expectations hold -> allows" "$?" "0"
+out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$HOOKS/session-start.sh" 2>/dev/null)"
 printf '%s' "$out" | grep -q "verified-autonomy" && r=yes || r=no
 chk "gates.json present -> context injected" "$r" "yes"
 
-mkdir -p "$tmp/.claude"
 fc(){ printf '%s' "$2" > "$tmp/.claude/gates.json"; rm -rf "$tmp/.claude/evidence" "$tmp/.claude/.gate-attempts"
-      CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/bin/verify" done >/dev/null 2>&1
-      chk "$1" "$?" "1"; }
-fc "unparseable config -> refuse"      '{"full":[{"name":"u","cmd":"exit 0"},]}'
-fc "empty full tier -> refuse"         '{"full":[]}'
-fc "mis-keyed tier -> refuse"          '{"ful":[{"name":"u","cmd":"exit 1"}]}'
-fc "zero-byte config -> refuse"        ''
-fc "placeholder gate -> refuse"        '{"full":[{"name":"u","cmd":"echo TODO"}]}'
-printf '{"full":[{"name":"u","cmd":"exit 0"}]}' > "$tmp/.claude/gates.json"
-rm -rf "$tmp/.claude/evidence" "$tmp/.claude/.gate-attempts"
-CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/bin/verify" done >/dev/null 2>&1
-chk "valid green config -> certifies" "$?" "0"
-ag="$(python3 -c "import json;print(json.load(open('$tmp/.claude/evidence/latest.json'))['all_green'])" 2>/dev/null || echo missing)"
-chk "green run emits all_green=True" "$ag" "True"
+      CLAUDE_PROJECT_DIR="$tmp" bash "$BIN/verify" done >/dev/null 2>&1; chk "$1" "$?" "1"; }
+fc "unparseable config -> refuses"  '{"full":[{"name":"u","cmd":"exit 0"},]}'
+fc "empty full tier -> refuses"     '{"full":[]}'
+fc "mis-keyed tier -> refuses"      '{"ful":[{"name":"u","cmd":"exit 0"}]}'
+fc "placeholder gate -> refuses"    '{"full":[{"name":"u","cmd":"echo TODO"}]}'
 
-( cd "$tmp" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t commit -qm gates >/dev/null 2>&1 )
 printf '{"full":[{"name":"u","cmd":"exit 1"}]}' > "$tmp/.claude/gates.json"
-rm -f "$tmp/.claude/.gate-attempts"
-CLAUDE_PROJECT_DIR="$tmp" env -u CLAUDE_PLUGIN_ROOT bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
-chk "unset CLAUDE_PLUGIN_ROOT -> blocks" "$?" "2"
+( cd "$tmp" && git add -A && git commit -qm gates ) >/dev/null 2>&1
 mv "$tmp/.claude/gates.json" "$tmp/.claude/gates.bak"
-CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
-chk "tracked config deleted -> blocks" "$?" "2"
+stop >/dev/null; chk "tracked config deleted -> refuses" "$?" "2"
 mv "$tmp/.claude/gates.bak" "$tmp/.claude/gates.json"
 mkdir -p "$tmp/bin"; printf '#!/bin/sh\nexit 0\n' > "$tmp/bin/verify"; chmod +x "$tmp/bin/verify"
-rm -f "$tmp/.claude/.gate-attempts"
-CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
-chk "stubbed bin/verify ignored" "$?" "2"
-rm -rf "$tmp/bin"
+stop >/dev/null; chk "a stub bin/verify in the repo is ignored" "$?" "2"
 
-echo '{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}' \
-  | bash "$PLUGIN/hooks/deny-dangerous.sh" >/dev/null 2>&1
-chk "force push blocked" "$?" "2"
-echo '{"tool_name":"Edit","tool_input":{"file_path":"/r/.claude/gates.json"}}' \
-  | bash "$PLUGIN/hooks/deny-dangerous.sh" >/dev/null 2>&1
-chk "editing own guardrails blocked" "$?" "2"
-echo '{"tool_name":"Bash","tool_input":{"command":"npm test"}}' \
-  | bash "$PLUGIN/hooks/deny-dangerous.sh" >/dev/null 2>&1
-chk "ordinary command allowed" "$?" "0"
+chk "push to main blocked"               "$(deny 'git push origin main')" "2"
+chk "force push to own branch allowed"   "$(deny 'git push --force-with-lease origin feature/x')" "0"
+chk "exit-code suppression on tests blocked" "$(deny 'pytest -q || true')" "2"
+chk "commit with a co-author blocked"    "$(deny 'git commit -m x -m "Co-Authored-By: a <a@b>"')" "2"
+chk "ordinary command allowed"           "$(deny 'npm test')" "0"
 
-out="$(bash "$PLUGIN/bin/test-delta" selftest 2>&1)"; rc=$?
-n="$(printf '%s' "$out" | grep -oE '\([0-9]+ checks' | tail -1 | tr -dc '0-9')"
-if [ "$rc" -eq 0 ] && [ -n "$n" ]; then chk "test-delta selftest ($n checks)" "0" "0"
-else chk "test-delta selftest" "rc=$rc/n=${n:-none}" "0"; fi
+python3 "$GATES/trailer-check.py" --self-test >/dev/null 2>&1; chk "co-author gate controls" "$?" "0"
+python3 "$GATES/acceptance.py" --self-test >/dev/null 2>&1;   chk "product contract controls" "$?" "0"
 
-rm -rf "$tmp"
+find "$tmp" -maxdepth 0 -exec rm -rf {} +
 echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0
 else echo "SELF-TEST FAILED  ($fail of $((pass+fail)) checks)"; exit 1; fi

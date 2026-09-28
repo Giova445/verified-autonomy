@@ -52,6 +52,7 @@ echo "$SCAN" | grep -Eq 'git[[:space:]]+clean[[:space:]]+-[a-z]*f' \
   && deny "git clean -f destroys untracked files"
 
 if echo "$SCAN" | grep -Eq 'git[[:space:]]+push([[:space:]]|$)'; then
+  [ -f "$HERE/push-targets.py" ] || deny "push-targets.py is missing beside this hook, so protected branches cannot be checked"
   TARGETS="$(python3 "$HERE/push-targets.py" "$SCAN" "$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)")"
   for t in $TARGETS; do
     case " $PROTECTED " in *" $t "*) deny "push to protected branch '$t' — deliver via a PR" ;; esac

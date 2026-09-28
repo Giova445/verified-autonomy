@@ -17,17 +17,12 @@ project-agnostic; the only file you edit per project is `gates.json`.
 ## Install
 
 ```bash
-mkdir -p .claude/hooks .claude/agents
-cp docs/autonomous-agent-architecture/kit/hooks/*.sh   .claude/hooks/
-cp docs/autonomous-agent-architecture/kit/agents/*.md  .claude/agents/
-cp docs/autonomous-agent-architecture/kit/gates.json   .claude/gates.json
-chmod +x .claude/hooks/*.sh
-echo ".claude/evidence/" >> .gitignore
-echo ".claude/.gate-attempts" >> .gitignore
+bash path/to/verified-autonomy/kit/install.sh [target-repo]
 ```
 
-Then edit `.claude/gates.json` with commands that pass on a clean checkout today, and
-merge `settings.hooks.json` into `.claude/settings.json`.
+It copies `bin/`, `hooks/` and the deliverable gates from the repo root, then runs
+`bin/arm write` so `.claude/gates.json` holds only commands that passed there. Merge
+`settings.hooks.json` into `.claude/settings.json`.
 
 ## Verify it actually works
 

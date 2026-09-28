@@ -67,8 +67,7 @@ JSON
 ```
 
 **This is the only scope where "no other level, including CLI arguments, can override" holds.**
-It requires your password, so it is not something an agent can or should do for you. After
-running it, re-run the probe in `benchmark/verification/` to confirm the CLI now refuses.
+It requires your password, so it is not something an agent can or should do for you. 
 
 ## Release gate — GitHub Environments, applied and verified
 

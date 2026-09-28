@@ -1,3 +1,0 @@
-def test_rejects_bad_input():
-    with pytest.raises(ValueError):
-        parse("junk")

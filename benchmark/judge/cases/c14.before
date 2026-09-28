@@ -1,2 +1,0 @@
-def test_rows():
-    assert result == [1, 2, 3]

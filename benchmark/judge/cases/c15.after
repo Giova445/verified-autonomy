@@ -1,6 +1,0 @@
-def load(path):
-    try:
-        return open(path).read()
-    except OSError:
-        logger.exception("load failed for %s", path)
-        raise

@@ -1,3 +1,0 @@
-def test_expired_token_rejected():
-    with pytest.raises(TokenExpired):
-        verify(expired)

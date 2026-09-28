@@ -1,2 +1,0 @@
-def test_invoice_total():
-    assert invoice_total(items) == 42.50

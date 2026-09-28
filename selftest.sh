@@ -45,6 +45,9 @@ for i in 1 2 3; do CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" <
 out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null 2>&1)"
 printf '%s' "$out" | grep -q "CIRCUIT BREAKER after 3" && r=yes || r=no
 chk "three blocked stops -> blocked report, not a fourth retry" "$r" "yes"
+CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; a=$?
+CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; b=$?
+chk "after the report the stop is allowed, then gating resumes" "$a $b" "0 2"
 rm -f "$tmp/.claude/.gate-attempts"
 printf '{"full":[{"name":"probe","cmd":"true"}]}' > "$tmp/.claude/gates.json"
 out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"

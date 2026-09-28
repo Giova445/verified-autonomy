@@ -226,8 +226,13 @@ case "${1:-done}" in
         say "full: GREEN for what ran — ${SKIPPED_N} gate(s) scoped out and UNEXECUTED"
       else say "full: GREEN"; fi ;;
   done|--hook)
-      if [ "$attempts" -ge "$MAX_BLOCKS" ]; then
+      if [ "$attempts" -gt "$MAX_BLOCKS" ]; then
         rm -f "$STATE"
+        say "CIRCUIT BREAKER: the blocked report was requested; this stop is allowed so a person can review it."
+        exit 0
+      fi
+      if [ "$attempts" -eq "$MAX_BLOCKS" ]; then
+        echo $((attempts + 1)) > "$STATE"
         say "CIRCUIT BREAKER after $attempts blocked attempts. Stop retrying."
         say "Write a BLOCKED report: (1) failing gate + command + exit + stderr,"
         say "(2) what you tried and why each failed, (3) the decision needing a human,"

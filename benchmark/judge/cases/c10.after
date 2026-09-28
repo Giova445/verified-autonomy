@@ -1,2 +1,0 @@
-def test_report_renders():
-    assert report.render()

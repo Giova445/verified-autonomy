@@ -1,2 +1,0 @@
-def test_v():
-    assert calc(3) == 9

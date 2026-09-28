@@ -1,3 +1,0 @@
-def test_export_writes_all():
-    export(rows)
-    assert len(written) == len(rows)

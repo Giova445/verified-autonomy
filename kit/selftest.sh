@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# selftest.sh — prove the enforcement actually fires. Run after install, in the target repo.
-#
-# An unverified gate is worse than no gate, because you will trust it. This exists so that
-# "I installed it" and "it works" are different claims with different evidence.
 set -uo pipefail
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 PLUGIN="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
@@ -12,33 +8,26 @@ chk(){ if [ "$2" = "$3" ]; then printf '  ok    %-46s (%s)\n' "$1" "$3"; pass=$(
 
 echo "self-test: $ROOT"
 
-# 1. safe when the project opts out
 tmp="$(mktemp -d)"; ( cd "$tmp" && git init -q . )
 CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
 chk "no gates.json -> stop hook stays out of the way" "$?" "0"
 out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
 chk "no gates.json -> no context injected" "${out:+nonempty}" ""
 
-# 2. red gate must refuse the turn
 mkdir -p "$tmp/.claude"
 printf '{"full":[{"name":"probe","cmd":"exit 1"}]}' > "$tmp/.claude/gates.json"
 CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
 chk "red gate -> Stop hook exit 2 (refuses)" "$?" "2"
 
-# 3. green gate must allow it
 rm -f "$tmp/.claude/.gate-attempts"
 printf '{"full":[{"name":"probe","cmd":"true"}]}' > "$tmp/.claude/gates.json"
 CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
 chk "green gate -> Stop hook exit 0 (allows)" "$?" "0"
 
-# 4. context injected once the project opts in
 out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
 printf '%s' "$out" | grep -q "verified-autonomy" && r=yes || r=no
 chk "gates.json present -> context injected" "$r" "yes"
 
-# --- fail-closed: a gate set that cannot be read is not a passing gate set -------------
-# Every case below silently certified before this suite existed: verify emitted exit 0 and
-# an evidence bundle reading {"gates": [], "all_green": true}. A trailing comma was enough.
 mkdir -p "$tmp/.claude"
 fc(){ printf '%s' "$2" > "$tmp/.claude/gates.json"; rm -rf "$tmp/.claude/evidence" "$tmp/.claude/.gate-attempts"
       CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/bin/verify" done >/dev/null 2>&1
@@ -55,7 +44,6 @@ chk "valid green config -> certifies" "$?" "0"
 ag="$(python3 -c "import json;print(json.load(open('$tmp/.claude/evidence/latest.json'))['all_green'])" 2>/dev/null || echo missing)"
 chk "green run emits all_green=True" "$ag" "True"
 
-# --- tampering: removing or stubbing the enforcement is not a way to pass ---------------
 ( cd "$tmp" && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t commit -qm gates >/dev/null 2>&1 )
 printf '{"full":[{"name":"u","cmd":"exit 1"}]}' > "$tmp/.claude/gates.json"
 rm -f "$tmp/.claude/.gate-attempts"
@@ -71,7 +59,6 @@ CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/nul
 chk "stubbed bin/verify ignored" "$?" "2"
 rm -rf "$tmp/bin"
 
-# 5. deny-list
 echo '{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}' \
   | bash "$PLUGIN/hooks/deny-dangerous.sh" >/dev/null 2>&1
 chk "force push blocked" "$?" "2"
@@ -82,11 +69,8 @@ echo '{"tool_name":"Bash","tool_input":{"command":"npm test"}}' \
   | bash "$PLUGIN/hooks/deny-dangerous.sh" >/dev/null 2>&1
 chk "ordinary command allowed" "$?" "0"
 
-# 6. coverage gate — production code must arrive with tests
 out="$(bash "$PLUGIN/bin/test-delta" selftest 2>&1)"; rc=$?
 n="$(printf '%s' "$out" | grep -oE '\([0-9]+ checks' | tail -1 | tr -dc '0-9')"
-# An exit 0 that verified nothing is the fabricated receipt this kit exists to stop,
-# so an unparseable check count fails here too.
 if [ "$rc" -eq 0 ] && [ -n "$n" ]; then chk "test-delta selftest ($n checks)" "0" "0"
 else chk "test-delta selftest" "rc=$rc/n=${n:-none}" "0"; fi
 

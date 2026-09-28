@@ -1,2 +1,0 @@
-def test_edge():
-    assert edge(0) == 1

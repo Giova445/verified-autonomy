@@ -55,8 +55,8 @@ survives the compliance budget, and treat CI as the real gate for Codex-authored
 ```bash
 # 1. spine
 mkdir -p bin .claude/hooks .claude/agents
-cp docs/autonomous-agent-architecture/kit/bin/verify        bin/
-cp docs/autonomous-agent-architecture/kit/hooks/*.sh        .claude/hooks/
+bash kit/install.sh   # installs bin/, hooks/ and the gates
+cp docs/autonomous-agent-architecture/hooks/*.sh        .claude/hooks/
 cp docs/autonomous-agent-architecture/kit/agents/verifier.md .claude/agents/
 cp docs/autonomous-agent-architecture/kit/gates.json        .claude/gates.json
 chmod +x bin/verify .claude/hooks/*.sh

@@ -1,5 +1,0 @@
-def parse(raw):
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        raise ParseError("malformed payload")

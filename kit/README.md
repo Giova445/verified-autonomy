@@ -7,7 +7,7 @@ project-agnostic; the only file you edit per project is `gates.json`.
 
 | File | Hook | Purpose |
 |---|---|---|
-| `hooks/gate.sh` | `Stop`, `SubagentStop` | Refuses to let the turn end while any gate is red. The core mechanism. |
+| `hooks/stop-gate.sh` | `Stop`, `SubagentStop` | Refuses to let the turn end while any gate is red. The core mechanism. |
 | `hooks/deny-dangerous.sh` | `PreToolUse` | Blocks irreversible ops and self-modification of guardrails. |
 | `hooks/scan-diff-cheats.sh` | gate + CI | Detects the documented ways an agent fakes a green gate. |
 | `agents/verifier.md` | subagent | Adversarial reviewer. Runs after gates are green. |
@@ -17,17 +17,12 @@ project-agnostic; the only file you edit per project is `gates.json`.
 ## Install
 
 ```bash
-mkdir -p .claude/hooks .claude/agents
-cp docs/autonomous-agent-architecture/kit/hooks/*.sh   .claude/hooks/
-cp docs/autonomous-agent-architecture/kit/agents/*.md  .claude/agents/
-cp docs/autonomous-agent-architecture/kit/gates.json   .claude/gates.json
-chmod +x .claude/hooks/*.sh
-echo ".claude/evidence/" >> .gitignore
-echo ".claude/.gate-attempts" >> .gitignore
+bash path/to/verified-autonomy/kit/install.sh [target-repo]
 ```
 
-Then edit `.claude/gates.json` with commands that pass on a clean checkout today, and
-merge `settings.hooks.json` into `.claude/settings.json`.
+It copies `bin/`, `hooks/` and the deliverable gates from the repo root, then runs
+`bin/arm write` so `.claude/gates.json` holds only commands that passed there. Merge
+`settings.hooks.json` into `.claude/settings.json`.
 
 ## Verify it actually works
 
@@ -37,7 +32,7 @@ merge `settings.hooks.json` into `.claude/settings.json`.
 # 1. The Stop gate must refuse a red build
 printf '{"full":[{"name":"probe","cmd":"exit 1"}]}' > /tmp/g.json
 cp .claude/gates.json /tmp/gates.bak && cp /tmp/g.json .claude/gates.json
-echo '{}' | CLAUDE_PROJECT_DIR="$PWD" .claude/hooks/gate.sh; echo "expect exit 2, got $?"
+echo '{}' | CLAUDE_PROJECT_DIR="$PWD" .claude/hooks/stop-gate.sh; echo "expect exit 2, got $?"
 cp /tmp/gates.bak .claude/gates.json && rm -f .claude/.gate-attempts
 
 # 2. The deny hook must block a force push
@@ -59,11 +54,11 @@ refuse.
 
 ## Behavior notes
 
-- **Circuit breaker.** `gate.sh` blocks at most `GATE_MAX_BLOCKS` times (default 6) on
+- **Circuit breaker.** `stop-gate.sh` blocks at most `GATE_MAX_BLOCKS` times (default 6) on
   the same red gate, then demands a structured BLOCKED report instead of looping forever.
   Reset by deleting `.claude/.gate-attempts`.
 - **Tier selection.** `GATE_TIER=fast` runs the fast gates; default is `full`.
-- **No config, no enforcement.** If `.claude/gates.json` is absent, `gate.sh` exits 0 and
+- **No config, no enforcement.** If `.claude/gates.json` is absent, `stop-gate.sh` exits 0 and
   stays out of the way. This is deliberate for gradual adoption — and it means a missing
   config silently disables the gate, so check it in.
 - **Evidence bundle** is written to `.claude/evidence/latest.json` on every run,

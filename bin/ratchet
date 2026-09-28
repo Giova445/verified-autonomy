@@ -1,13 +1,4 @@
 #!/usr/bin/env bash
-# ratchet — never-worse-than-baseline gate.
-#
-# Lets you turn on a gate against a codebase that fails it today: the agent is judged on
-# whether it made things WORSE, not on inherited debt it did not create. When a run comes
-# in under baseline, the baseline is lowered automatically, so improvement is monotonic.
-#
-#   ratchet <name> <command that prints a count on stdout>
-#
-# Baselines live in .quality-baseline/<name> and are committed.
 set -uo pipefail
 
 NAME="${1:?usage: ratchet <name> <command...>}"; shift

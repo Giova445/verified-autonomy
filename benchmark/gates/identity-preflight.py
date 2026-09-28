@@ -1,42 +1,4 @@
 #!/usr/bin/env python3
-"""Gate: does the CLI identity that would create a remote resource match this project's?
-
-WHY THIS ONE EXISTS
-
-It is the only class in docs/cross-account-learning-audit.md that has already cost
-something real. A Vercel project created from this machine was filed under a **Cadre**
-org while the work belonged to **Orchid**, and a Siigo access key went into it. The user's
-words at the time: *"wait, im getting this on the cadre account!!!"* The rule they wrote
-afterwards -- `no-render-vercel-cli` -- is prose in one project's memory directory, and it
-is true of all 47 project directories on this host.
-
-Verified on this machine, from files, on 2026-09-13:
-
-    ~/.render/cli.yaml                 workspace_name: Cadre AI
-    ~/.config/gh/hosts.yml             user: Giova445
-    ~/Library/.../com.vercel.cli/auth.json   userId: eqGW...  (opaque, no org name)
-
-IT READS FILES. IT DOES NOT INVOKE THE CLIs.
-
-Two reasons, and the first is the binding one. The standing rule for this host is not to
-*use* the render and vercel CLIs at all, so a gate that shells out to `vercel whoami` to
-enforce that rule would violate it on every run. The second is that a file read is
-offline, instant, and cannot itself create or mutate anything -- a preflight that can have
-side effects is not a preflight.
-
-The cost is honest: a config file can be stale relative to the live session. A token that
-expired, or a `logout` that left the file behind, will read as an identity the service no
-longer accepts. That makes this gate sound in the direction that matters (it will still
-flag a Cadre file when Orchid was expected) and weak in the other (it cannot detect that a
-recorded identity has gone invalid). `expires_at` is checked where the file records one,
-which narrows but does not close that gap.
-
-WHAT IT DECIDES
-
-Whether the identity on disk matches the one this project declares in
-`.claude/identity.json`. Not whether the credential is valid, not whether the operation is
-wise. An undeclared project is `undeclared`, never `ok` -- silence is not permission.
-"""
 import argparse
 import json
 import os
@@ -47,15 +9,10 @@ import time
 HOME = os.path.expanduser("~")
 POLICY = os.path.join(".claude", "identity.json")
 
-# Declared independently of RESOLVERS so that deleting a resolver cannot delete its own
-# requirement -- the expectation-derived-from-subject defect this repo has now hit five
-# times. A tool named here with no resolver is a failure, not a silent skip.
 EXPECTED_TOOLS = {"gh", "render", "vercel"}
 
 VERDICTS = {"ok", "mismatch", "unresolved", "undeclared", "no-policy"}
 
-# Sub-commands that create or mutate a remote resource. Read-only verbs are deliberately
-# absent: gating `gh pr view` would make the gate noise, and a noisy gate gets removed.
 CREATING = re.compile(
     r"\b(?:"
     r"vercel\s+(?:deploy|link|env\s+add|project\s+add|alias|domains\s+add|secrets\s+add)"
@@ -65,22 +22,16 @@ CREATING = re.compile(
     r"|supabase\s+(?:link|db\s+push|projects?\s+create)"
     r")\b", re.I)
 
-# Bare `vercel` and bare `render` deploy by default with no sub-command at all.
 BARE_DEPLOY = re.compile(r"(?:^|[;&|]\s*)(vercel|render)\s*(?:$|[;&|])", re.I)
-
 
 class IdentityError(Exception):
     pass
-
 
 def _read(path):
     with open(path, encoding="utf-8") as fh:
         return fh.read()
 
-
 def resolve_gh(home=HOME):
-    """~/.config/gh/hosts.yml -> the active user. Parsed as text: the file is a tiny
-    fixed-shape YAML and this gate must not take a PyYAML dependency to read three lines."""
     p = os.path.join(home, ".config", "gh", "hosts.yml")
     if not os.path.exists(p):
         raise IdentityError("gh: ~/.config/gh/hosts.yml not found — not logged in?")
@@ -89,9 +40,7 @@ def resolve_gh(home=HOME):
         raise IdentityError("gh: hosts.yml has no active `user:` line")
     return {"user": m.group(1)}
 
-
 def resolve_render(home=HOME):
-    """~/.render/cli.yaml -> workspace_name, the human-readable org."""
     p = os.path.join(home, ".render", "cli.yaml")
     if not os.path.exists(p):
         raise IdentityError("render: ~/.render/cli.yaml not found — not logged in?")
@@ -105,10 +54,7 @@ def resolve_render(home=HOME):
         out["expired"] = True
     return out
 
-
 def resolve_vercel(home=HOME):
-    """auth.json -> userId. Vercel records no org name here, so the declaration must pin
-    the opaque id. Less readable than a name and still decidable, which is what matters."""
     p = os.path.join(home, "Library", "Application Support", "com.vercel.cli", "auth.json")
     if not os.path.exists(p):
         p = os.path.join(home, ".config", "vercel", "auth.json")
@@ -127,12 +73,9 @@ def resolve_vercel(home=HOME):
         out["expired"] = True
     return out
 
-
 RESOLVERS = {"gh": resolve_gh, "render": resolve_render, "vercel": resolve_vercel}
 
-
 def read_policy(root):
-    """-> {tool: {field: expected}}. A missing file is `no-policy`, not `ok`."""
     p = os.path.join(root, POLICY)
     if not os.path.exists(p):
         return None
@@ -144,9 +87,7 @@ def read_policy(root):
         raise IdentityError(f"{POLICY} is not an object")
     return doc
 
-
 def judge_tool(tool, policy, home=HOME):
-    """-> (verdict, detail) for one tool."""
     if policy is None:
         return "no-policy", f"{POLICY} absent — this project declares no expected identity"
     want = policy.get(tool)
@@ -168,9 +109,7 @@ def judge_tool(tool, policy, home=HOME):
         return "unresolved", f"{tool}: credential on disk is expired"
     return "ok", f"{tool}: {have}"
 
-
 def tools_in(command):
-    """Which gated tools a shell command would invoke to create something."""
     hits = set()
     for m in CREATING.finditer(command or ""):
         hits.add(m.group(0).split()[0].lower())
@@ -178,9 +117,7 @@ def tools_in(command):
         hits.add(m.group(1).lower())
     return hits & EXPECTED_TOOLS
 
-
 def check_command(root, command, home=HOME):
-    """-> (tools, findings). Empty tools means the command creates nothing gated."""
     tools = tools_in(command)
     if not tools:
         return set(), []
@@ -192,11 +129,6 @@ def check_command(root, command, home=HOME):
             out.append((t, verdict, detail))
     return tools, out
 
-
-# --------------------------------------------------------------------------- controls
-# Hermetic: every control builds a fake HOME with fake config files and a fake project,
-# then resolves against it. Nothing reads the real machine, nothing invokes a CLI, nothing
-# touches the network.
 import tempfile
 
 EXPECTED_CONTROLS = {
@@ -207,7 +139,6 @@ EXPECTED_CONTROLS = {
     "creating-verb-detected", "readonly-verb-ignored", "bare-deploy-detected",
     "resolver-set-matches-expected",
 }
-
 
 def _home(tmp, render=None, gh=None, vercel=None, render_expires=None, vercel_expires=None):
     h = os.path.join(tmp, "home")
@@ -231,7 +162,6 @@ def _home(tmp, render=None, gh=None, vercel=None, render_expires=None, vercel_ex
     os.makedirs(h, exist_ok=True)
     return h
 
-
 def _proj(tmp, policy):
     r = os.path.join(tmp, "proj")
     os.makedirs(os.path.join(r, ".claude"), exist_ok=True)
@@ -239,7 +169,6 @@ def _proj(tmp, policy):
         with open(os.path.join(r, POLICY), "w", encoding="utf-8") as fh:
             json.dump(policy, fh)
     return r
-
 
 def self_test():
     print("identity preflight — controls\n")
@@ -256,15 +185,12 @@ def self_test():
             print(f"       expected {want!r}")
 
     with tempfile.TemporaryDirectory() as td:
-        # The real-world case, both arms. Same project, same command, only the identity
-        # on disk differs -- which is what makes the pass meaningful rather than lucky.
         proj = _proj(os.path.join(td, "a"), {"render": {"workspace_name": "Orchid"}})
         good = _home(os.path.join(td, "a"), render="Orchid")
         bad = _home(os.path.join(td, "b"), render="Cadre AI")
         check("render-match", judge_tool("render", read_policy(proj), good)[0], "ok")
         check("render-mismatch", judge_tool("render", read_policy(proj), bad)[0], "mismatch")
 
-        # An expired credential is not a valid identity.
         old = _home(os.path.join(td, "c"), render="Orchid", render_expires=1)
         check("render-expired-is-unresolved",
               judge_tool("render", read_policy(proj), old)[0], "unresolved")
@@ -281,7 +207,6 @@ def self_test():
         check("vercel-mismatch", judge_tool("vercel", read_policy(p3),
                                             _home(os.path.join(td, "g"), vercel="zzz"))[0], "mismatch")
 
-        # FAIL CLOSED, three ways. None of these may read as ok.
         check("missing-config-is-unresolved",
               judge_tool("render", read_policy(proj), _home(os.path.join(td, "h")))[0],
               "unresolved")
@@ -291,7 +216,6 @@ def self_test():
         check("undeclared-is-not-ok",
               judge_tool("vercel", read_policy(proj), good)[0], "undeclared")
 
-        # Command classification: gate what creates, ignore what reads.
         check("creating-verb-detected", sorted(tools_in("vercel deploy --prod")), ["vercel"])
         check("readonly-verb-ignored", sorted(tools_in("gh pr view 42 && render services list")), [])
         check("bare-deploy-detected", sorted(tools_in("cd app && vercel")), ["vercel"])
@@ -308,7 +232,6 @@ def self_test():
         print(f"\n  control set matches EXPECTED_CONTROLS ({len(EXPECTED_CONTROLS)} names)")
     print(f"\n  identity preflight ({n} checks)")
     return 0 if ok else 1
-
 
 def main():
     ap = argparse.ArgumentParser(description="assert CLI identity matches the project")
@@ -353,7 +276,6 @@ def main():
     print(f"\n  refusing: this command would create a remote resource as the wrong "
           f"identity.", file=sys.stderr)
     return 1
-
 
 if __name__ == "__main__":
     sys.exit(main())

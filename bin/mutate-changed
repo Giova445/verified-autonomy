@@ -1,40 +1,4 @@
 #!/usr/bin/env bash
-# mutate-changed — diff-scoped mutation testing, shaped the way the evidence says.
-#
-#   mutate-changed [base-ref]   mutate changed production lines, report survivors
-#   mutate-changed selftest     run the built-in checks
-#
-# Config:
-#   MT_SRC     regex of production paths        (default: ^(src|lib|app)/ )
-#   MT_TEST    command that runs the suite      (default: pytest -q)
-#   MT_MAX     cap on mutants generated         (default: 40)
-#   MT_STRICT  1 = exit non-zero on survivors   (default: 0, report only)
-#
-# WHY THIS SHAPE, AND WHY NO SCORE THRESHOLD
-# Mutation testing is the single best-evidenced gate in this literature — and the threshold
-# everyone attaches to it is not part of that evidence.
-#
-# What IS evidenced (Google, ICSE 2021 / TSE 2021, ~15M mutants, >1,000 projects, 6 years):
-#   - 70% of 1,502 high-priority bugs would have had a live, fault-coupled mutant surfaced
-#     on the bug-introducing change. No other gate here has a bug-coupling number.
-#   - >90% of lines have a uniform mutant fate, so ONE mutant per line is sufficient.
-#     Mutants are massively redundant; generating more buys almost nothing.
-#   - Diff-scoping is mandatory: median 2 live mutants per changelist, 99th percentile 43.
-#   - 87.5% of generated mutants are already killed by existing tests.
-#
-# What is NOT evidenced: any threshold. Google runs this across >24,000 developers with NO
-# mutation-score threshold anywhere. Findings appear in review with "Please Fix" / "Not
-# useful" links and can be dismissed. Unfiltered, developers rated 85% of mutants
-# unproductive; suppression heuristics moved the productive ratio from 15% to 89%.
-#
-# So this reports by default and is dismissible. MT_STRICT exists for the rare repo that
-# wants it, and turning it on is a decision, not a default.
-#
-# One honest caveat on the 70%: it is a COUNTERFACTUAL COUPLING RATE, not a measured
-# prevention rate. Mutation testing was actually enabled on only 10.8% of those changes, and
-# nobody has measured how many surfaced mutants a developer would have acted on. And it
-# assesses whether an algorithm is implemented correctly, not whether it is the CORRECT
-# algorithm — the spec-level failure that dominates in practice is out of its reach.
 set -uo pipefail
 
 MT_SRC="${MT_SRC:-^(src|lib|app)/}"
@@ -62,8 +26,6 @@ run() {
   local base; base="$(resolve_base "${1:-}")"
   [ -z "$base" ] && { say "mutate-changed: no baseline. Pass a base ref or set MT_BASE."; return 1; }
 
-  # A mutant is "killed" when the suite fails. If the suite is ALREADY failing, every mutant
-  # looks killed and the run reports a perfect result over a red build. Refuse instead.
   local baseline
   baseline="$(eval "$MT_TEST" 2>&1)"
   if [ $? -ne 0 ]; then
@@ -73,7 +35,6 @@ run() {
     return 1
   fi
 
-  # Changed production lines: file:line pairs from the diff, working tree included.
   local pairs
   pairs="$( {
       git diff -U0 "$base"...HEAD 2>/dev/null
@@ -94,9 +55,6 @@ run() {
 
   local killed=0 survived=0 skipped=0 generated=0
   local survivors=""
-  # This edits source files IN PLACE. If the run is interrupted between writing a mutant and
-  # restoring it, the user is left with corrupted source and no idea why. Restore on every
-  # signal, not just on a clean return.
   local tmp; tmp="$(mktemp -d)"
   MT_ACTIVE_FILE=""
   restore_now() {
@@ -117,8 +75,6 @@ run() {
     local src; src="$(sed -n "${ln}p" "$file" 2>/dev/null)"
     [ -z "$src" ] && continue
 
-    # ONE mutant per line — >90% of lines have a uniform mutant fate, so more is waste.
-    # First operator that applies, wins.
     local mut=""
     for rule in 's/==/!=/' 's/!=/==/' 's/ < / <= /' 's/ > / >= /' 's/ <= / < /' 's/ >= / > /' \
                 's/ + / - /' 's/ - / + /' 's/ and / or /' 's/ or / and /' \
@@ -126,8 +82,6 @@ run() {
       local cand; cand="$(printf '%s' "$src" | sed "$rule")"
       [ "$cand" != "$src" ] && { mut="$cand"; break; }
     done
-    # Arid lines — no operator to flip. Google's biggest single win was suppressing these;
-    # unsuppressed they are the bulk of the 85% developers called unproductive.
     [ -z "$mut" ] && { skipped=$((skipped+1)); continue; }
 
     generated=$((generated+1))
@@ -169,7 +123,6 @@ PY
   echo "  unproductive by developers. Dismiss what is not useful."
   echo "  Dismiss durably with a commit trailer:  Mutation-Dismissed: <file:line> <why>"
 
-  # Dismissal, recorded in git history rather than in a mutable file.
   local dismissed=0 remaining=0
   local trailers; trailers="$(git log -1 --format='%B' 2>/dev/null | grep -iE '^Mutation-Dismissed:' || true)"
   if [ -n "$trailers" ]; then
@@ -210,19 +163,15 @@ selftest() {
   [ -z "$PY" ] && { echo "  SKIP  no working pytest runner"; rm -rf "$repo"; return 0; }
   export CLAUDE_PROJECT_DIR="$repo" MT_SRC='^src/' MT_TEST="$PY -q"
 
-  # canaries, both directions — a runner stuck on pass or fail makes every check below vacuous
   ( cd "$repo" && eval "$MT_TEST" >/dev/null 2>&1 ); chk "canary: green suite passes" "$?" "0"
   printf 'def test_bad(): assert 0\n' > "$repo/tests/test_canary.py"
   ( cd "$repo" && eval "$MT_TEST" >/dev/null 2>&1 ); chk "canary: red suite fails" "$?" "1"
 
-  # red baseline must be refused, not measured
   ( run "$base" >/dev/null 2>&1 ); chk "red baseline -> refuse to measure" "$?" "1"
   rm -f "$repo/tests/test_canary.py"
 
   ( run "$base" >/dev/null 2>&1 ); chk "clean tree, no changed lines -> ok" "$?" "0"
 
-  # A boundary the tests do NOT pin: >50 vs >=50 is invisible to grade(90)/grade(10),
-  # so this mutant must SURVIVE and be reported.
   printf 'def grade(n):\n    if n > 50:\n        return "pass"\n    return "fail"\n\ndef band(n):\n    if n > 80:\n        return "high"\n    return "low"\n' > "$repo/src/g.py"
   local out; out="$(run "$base" 2>&1)"
   printf '%s' "$out" | grep -q "SURVIVED"; chk "unpinned boundary -> survivor reported" "$?" "0"
@@ -230,12 +179,10 @@ selftest() {
   ( run "$base" >/dev/null 2>&1 ); chk "survivors do not block by default" "$?" "0"
   ( MT_STRICT=1 run "$base" >/dev/null 2>&1 ); chk "MT_STRICT=1 blocks on survivors" "$?" "1"
 
-  # a test that pins the boundary must kill the mutant
   printf 'from src.g import grade, band\ndef test_hi(): assert grade(90) == "pass"\ndef test_lo(): assert grade(10) == "fail"\ndef test_band_edge(): assert band(80) == "low"\ndef test_band_hi(): assert band(81) == "high"\n' > "$repo/tests/test_g.py"
   out="$(run "$base" 2>&1)"
   printf '%s' "$out" | grep -qE 'killed [1-9]'; chk "pinned boundary -> mutant killed" "$?" "0"
 
-  # one mutant per line, never more
   printf '%s' "$out" | awk '/generated/ {print $2}' | while read -r g; do :; done
   local gen; gen="$(printf '%s' "$out" | grep -oE 'generated [0-9]+' | head -1 | tr -dc '0-9')"
   local lns; lns="$(printf '%s' "$out" | grep -oE '^mutate-changed: [0-9]+ changed' | tr -dc '0-9')"

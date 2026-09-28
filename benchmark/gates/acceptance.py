@@ -120,15 +120,16 @@ def boot(env, root, name, servers):
 
 def stop(servers):
     for p in servers:
-        if p.poll() is None:
-            try:
-                os.killpg(p.pid, signal.SIGTERM)
-                p.wait(timeout=10)
-            except (ProcessLookupError, subprocess.TimeoutExpired):
-                try:
-                    os.killpg(p.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+        if p.poll() is not None:
+            continue
+        try:
+            os.killpg(p.pid, signal.SIGTERM)
+            p.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGKILL)
+            p.wait()
+        except ProcessLookupError:
+            print("  server pid %d exited before it could be stopped" % p.pid)
 
 def judge(outcome, root, environments=None, resolved=None, shot=None, servers=None):
     environments = environments or {}

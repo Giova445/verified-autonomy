@@ -7,6 +7,17 @@ if [ ! -f "$ROOT/.claude/gates.json" ]; then
   exit 0
 fi
 
+SID="$(python3 -c 'import json,sys,re,select
+try:
+    ready = select.select([sys.stdin], [], [], 2)[0]
+    print(re.sub(r"[^A-Za-z0-9_-]", "", json.loads(sys.stdin.read() if ready else "{}").get("session_id") or ""))
+except Exception: print("")' 2>/dev/null)"
+VERIFY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/verify"
+if [ -n "$SID" ] && [ -x "$VERIFY" ] && [ ! -e "$ROOT/.claude/.sessions/$SID" ]; then
+  mkdir -p "$ROOT/.claude/.sessions"
+  CLAUDE_PROJECT_DIR="$ROOT" "$VERIFY" fingerprint > "$ROOT/.claude/.sessions/$SID" 2>/dev/null
+fi
+
 python3 - <<'PY'
 import json
 msg = """<verified-autonomy>

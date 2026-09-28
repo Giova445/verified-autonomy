@@ -166,6 +166,20 @@ $(printf '%s' "$out" | tail -30 | sed 's/^/   │ /')
   done
 }
 
+fingerprint() {
+  local ex=(-- . ':(exclude).claude' ':(exclude).quality-baseline')
+  {
+    git -C "$ROOT" rev-parse HEAD 2>/dev/null
+    git -C "$ROOT" diff HEAD "${ex[@]}" 2>/dev/null
+    git -C "$ROOT" ls-files --others --exclude-standard "${ex[@]}" 2>/dev/null
+  } | shasum -a 256 | cut -d' ' -f1
+}
+
+untouched_this_session() {
+  local base="${VERIFY_SESSION_BASELINE:-}"
+  [ -n "$base" ] && [ -s "$base" ] && [ "$(cat "$base")" = "$(fingerprint)" ]
+}
+
 accept_py() {
   local here p
   here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -258,6 +272,12 @@ case "${1:-done}" in
         say "Attempt $((attempts+1))/${MAX_BLOCKS} before escalation is required."
         die_code
       fi
+      if [ "$PRODUCT_STATUS" = "absent" ] && untouched_this_session; then
+        rm -f "$STATE"
+        say "product : no contract here, but this session has not changed this repo, so nothing"
+        say "          in it is being claimed done. Stopping is allowed. Arm it with the setup skill."
+        exit 0
+      fi
       if [ "$PRODUCT_STATUS" != "held" ]; then
         echo $((attempts+1)) > "$STATE"
         say "$PRODUCT_MSG"
@@ -274,6 +294,7 @@ case "${1:-done}" in
         say "ALL GATES GREEN — evidence: .claude/evidence/latest.json"
       fi
       say "DONE — $PRODUCT_MSG; engineering gates green. Screenshots: .claude/evidence/shots/" ;;
+  fingerprint) fingerprint ;;
   product)   FAILED=""; CONFIG_ERROR=""; product; say "$PRODUCT_MSG"; [ "$PRODUCT_STATUS" = held ] || exit 1 ;;
   *) say "usage: verify {preflight|fast|full|done [--hook]|product|blast <symbol>|tests}"; exit 1 ;;
 esac

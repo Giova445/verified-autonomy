@@ -19,5 +19,10 @@ if [ ! -x "$VERIFY" ]; then
   exit 2
 fi
 
-cat >/dev/null 2>&1 || true
-CLAUDE_PROJECT_DIR="$ROOT" exec "$VERIFY" done --hook
+SID="$(python3 -c 'import json,sys,re,select
+try:
+    ready = select.select([sys.stdin], [], [], 2)[0]
+    print(re.sub(r"[^A-Za-z0-9_-]", "", json.loads(sys.stdin.read() if ready else "{}").get("session_id") or ""))
+except Exception: print("")' 2>/dev/null)"
+BASE=""; [ -n "$SID" ] && BASE="$ROOT/.claude/.sessions/$SID"
+CLAUDE_PROJECT_DIR="$ROOT" VERIFY_SESSION_BASELINE="$BASE" exec "$VERIFY" done --hook

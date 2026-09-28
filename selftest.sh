@@ -94,6 +94,23 @@ printf '%s' "$o" | grep -q "ALL GATES GREEN" && r=yes || r=no
 chk "scope: a scoped pass is not ALL GATES GREEN" "$r" "no"
 find "$sc" -maxdepth 0 -exec rm -rf {} +
 
+ss="$(mktemp -d)"
+( cd "$ss" && git init -q . && git config user.email t@t && git config user.name t && mkdir -p .claude \
+  && printf '{"full":[{"name":"probe","cmd":"true"}]}' > .claude/gates.json && echo a > app.txt \
+  && git add -A && git commit -qm init ) >/dev/null 2>&1
+printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/session-start.sh" >/dev/null 2>&1
+out="$(printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/stop-gate.sh" 2>&1)"; rc=$?
+printf '%s' "$out" | grep -q "has not changed this repo" && r="$rc said" || r="$rc silent"
+chk "no contract, session changed nothing -> stop allowed, said why" "$r" "0 said"
+echo b >> "$ss/app.txt"
+printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/stop-gate.sh" >/dev/null 2>&1
+chk "no contract, session changed the repo -> refuses" "$?" "2"
+printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/session-start.sh" >/dev/null 2>&1
+rm -f "$ss/.claude/.gate-attempts"
+printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/stop-gate.sh" >/dev/null 2>&1
+chk "a restart after compaction keeps the first baseline" "$?" "2"
+find "$ss" -maxdepth 0 -exec rm -rf {} +
+
 chk "deny: push to main"                   "$(deny 'git push origin main')" "2"
 chk "deny: force push own branch allowed"  "$(deny 'git push --force origin feature/x')" "0"
 chk "deny: pytest || true blocked"         "$(deny 'pytest -q || true')" "2"

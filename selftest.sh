@@ -45,13 +45,28 @@ chk "green gates, expectations hold -> allows" "$r" "0 reported"
 
 rm -f "$tmp/.claude/.gate-attempts"
 printf '{"full":[{"name":"probe","cmd":"exit 1"}]}' > "$tmp/.claude/gates.json"
-for i in 1 2 3; do CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; done
+for i in 1 2 3; do echo "$i" > "$tmp/work.txt"; CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; done
+echo 4 > "$tmp/work.txt"
 out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null 2>&1)"
 printf '%s' "$out" | grep -q "CIRCUIT BREAKER after 3" && r=yes || r=no
 chk "three blocked stops -> blocked report, not a fourth retry" "$r" "yes"
 CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; a=$?
+echo 5 > "$tmp/work.txt"
 CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; b=$?
-chk "after the report the stop is allowed, then gating resumes" "$a $b" "0 2"
+chk "after the report the stop is allowed, then gating resumes once the repo changes" "$a $b" "0 2"
+rm -f "$tmp/work.txt" "$tmp/.claude/.gate-attempts" "$tmp/.claude/.gate-stalled"
+
+lp="$(mktemp -d)"
+( cd "$lp" && git init -q . && git config user.email t@t && git config user.name t && mkdir -p .claude \
+  && printf '{"full":[{"name":"red","cmd":"exit 1"}]}' > .claude/gates.json && echo a > a \
+  && git add -A && git commit -qm init ) >/dev/null 2>&1
+stops(){ local n="$1" change="$2" seq="" i; for i in $(seq 1 "$n"); do
+  [ "$change" = yes ] && echo "$i" >> "$lp/a"
+  CLAUDE_PROJECT_DIR="$lp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; seq="$seq$?"; done; printf '%s' "$seq"; }
+chk "unchanged repo: the loop ends at the first identical refusal" "$(stops 6 no)" "200000"
+rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-stalled"
+chk "a repo changed before every stop still ends at the breaker" "$(stops 5 yes)" "22220"
+find "$lp" -maxdepth 0 -exec rm -rf {} +
 rm -f "$tmp/.claude/.gate-attempts"
 printf '{"full":[{"name":"probe","cmd":"true"}]}' > "$tmp/.claude/gates.json"
 out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"

@@ -1,5 +1,7 @@
 # 04 — The Gate Ladder
 
+> The probe scripts and `bench.sh` cited here were removed in the simplification; they remain at commit `6724302`.
+
 Ordered cheapest-and-most-deterministic first, so a doomed change dies before it burns
 the expensive stages. Every gate is a command with an exit code. No gate is a judgment.
 

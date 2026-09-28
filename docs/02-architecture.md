@@ -263,5 +263,5 @@ adjudication layer largely built, which is the hard part.
 | Branch protection | `.github/BRANCH_PROTECTION.md` |
 
 What is missing is **layer 2** — nothing currently stops the agent from declaring
-success locally before any of that runs. That gap is exactly what `kit/hooks/gate.sh`
+success locally before any of that runs. That gap is exactly what `hooks/stop-gate.sh`
 plus the `Stop` hook fills.

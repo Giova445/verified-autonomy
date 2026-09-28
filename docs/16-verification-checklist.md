@@ -1,5 +1,7 @@
 # 16 — Harness-agnostic verification checklist
 
+> The probe scripts and `bench.sh` cited here were removed in the simplification; they remain at commit `6724302`.
+
 Status reconciled 2026-08-29 against measured results. Every status below is backed by a
 command in this repo, not by a plan. **Three items the source checklist marked PENDING have
 landed; two it implied were settled turned out not to be.**

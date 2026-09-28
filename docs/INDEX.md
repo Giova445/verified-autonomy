@@ -96,8 +96,8 @@ short version — enforcement is a CLI, not a hook, because Codex has no hooks:
 
 ```bash
 mkdir -p bin .claude/hooks
-cp docs/autonomous-agent-architecture/kit/bin/verify bin/
-cp docs/autonomous-agent-architecture/kit/hooks/*.sh .claude/hooks/
+bash kit/install.sh   # installs bin/, hooks/ and the gates
+cp docs/autonomous-agent-architecture/hooks/*.sh .claude/hooks/
 cp docs/autonomous-agent-architecture/kit/gates.json .claude/gates.json
 chmod +x bin/verify .claude/hooks/*.sh
 ./bin/verify done          # exit 0, or you are not done

@@ -14,8 +14,8 @@ The minimum viable version of this whole architecture. Everything else is refine
 
 1. Write `.claude/gates.json` naming your project's **real** commands. Not aspirational
    ones — commands that pass today.
-2. Install `kit/hooks/gate.sh` and wire the `Stop` hook.
-3. Install `kit/hooks/deny-dangerous.sh` on `PreToolUse`.
+2. Install `hooks/stop-gate.sh` and wire the `Stop` hook.
+3. Install `hooks/deny-dangerous.sh` on `PreToolUse`.
 4. Verify the block works: break a test deliberately, ask the agent to finish, confirm it
    refuses and explains why.
 
@@ -24,7 +24,7 @@ trust it.
 
 ### Phase 2 — Close the cheating paths (week 2)
 
-5. Install `kit/hooks/scan-diff-cheats.sh`.
+5. Install `hooks/scan-diff-cheats.sh`.
 6. Add diff coverage to the ladder (`diff-cover --fail-under=80`).
 7. Deny agent writes to `.claude/hooks/**`, `.claude/gates.json`, `.github/workflows/**`.
 8. Add the assumption register to the agent's workflow.
@@ -187,7 +187,7 @@ Stated plainly, so the limits are known up front:
 ## 7. First-week checklist
 
 - [ ] `.claude/gates.json` written with commands that pass on a clean checkout
-- [ ] `gate.sh` installed, `Stop` hook wired
+- [ ] `stop-gate.sh` installed, `Stop` hook wired
 - [ ] `deny-dangerous.sh` installed on `PreToolUse`
 - [ ] Agent writes denied to `.claude/hooks/**`, `.claude/gates.json`, `.github/workflows/**`
 - [ ] **Deliberately broken test → agent refuses to finish → confirmed by hand**

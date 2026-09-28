@@ -1,41 +1,10 @@
 #!/usr/bin/env python3
-"""B2 — unpinned-dependency gate. Mitigates the K2 FAILS.
-
-K2 measured that an agent could install a dependency at a floating tag and nothing
-objected. This gate reads a DIFF and fails the ones that ADD an install which resolves
-to whatever the registry serves at that moment.
-
-WHY A DIFF AND NOT THE TREE. Scanning the whole tree reports every pre-existing unpinned
-install on every run, which trains people to ignore it. Scanning added lines fails the
-commit that introduces one, while leaving the existing debt to a separate decision.
-
-THE FALSE-POSITIVE BUDGET IS THE HARD PART, AND IT IS MEASURED ON REAL DIFFS. A gate that
-flags ordinary work gets switched off, and a switched-off gate protects nothing — so its
-error rate matters as much as its detection rate. The controls below measure it against
-this repository's own commit history, not against hand-written negatives, because
-hand-written negatives are chosen by the same person who wrote the patterns and inherit
-their blind spots.
-
-DELIBERATELY NOT FLAGGED:
-  - installs inside a fenced code block that is documenting the ATTACK (this file, the
-    audit notes). Detected by a marker, not by guessing.
-  - removed lines. Deleting an unpinned install is the fix, not the offence.
-"""
 import argparse, os, re, subprocess, sys
 
-# Each rule: (id, compiled pattern, human explanation). Patterns match an ADDED diff line.
 RULES = [
     ("pip-unpinned",
-     # -e was written \b-e\b, which never matches: there is no word boundary between a
-     # space and a hyphen, so 'pip install -e .' was flagged. The package token also
-     # excluded quotes, so 'pip install "django>=4.0"' slipped through as a non-match
-     # rather than being caught as an unpinned range. Both found by the labeled corpus.
      re.compile(r"\b(?:pip3?|uv pip)\s+install\s+"
                 r"(?!.*(?:==|--require-hashes|@[0-9a-f]{40}))"
-                # (?:^|\s)-[er] was wrong: install\s+ has already consumed the space, so at
-                # the lookahead's position the flag sits at offset 0 with nothing before it
-                # to match \s, and '-e .' / '-r reqs.txt' were both flagged. A lookbehind
-                # asks the same question without needing a character to spare.
                 r"(?!.*(?<![\w-])-[er](?=\s))"
                 r"['\"]?[A-Za-z0-9._\[\]-]+"),
      "pip install without == or --require-hashes resolves to the newest release"),
@@ -62,39 +31,14 @@ RULES = [
      "container image without a tag or digest resolves to :latest"),
 ]
 
-# The rule set the controls REQUIRE, written out independently of RULES. Deriving the
-# expectation from RULES itself made the control self-referential: deleting a rule deleted
-# the detector and its expectation together, so a gate with a rule removed passed its own
-# control and the whole selftest stayed green. Verified by sabotage — see CONTROL 5.
 EXPECTED_RULES = {"pip-unpinned", "npm-unpinned", "npx-floating", "go-latest",
                   "cargo-unpinned", "curl-pipe-shell", "gha-tag-not-sha", "docker-latest"}
 
-SKIP_MARKER = "pin-check: allow"   # explicit, per-line, and greppable
+SKIP_MARKER = "pin-check: allow"
 
-# The one file that will always contain every pattern is the file that DEFINES them. It is
-# excluded by exact path, hardcoded — NOT by a marker any file could add to itself, which
-# would be a general escape hatch wearing a narrow disguise. CONTROL 4 asserts the
-# exclusion does not leak: the identical line in any other path is still caught.
-# Both files that CONTAIN every pattern by construction: the source that defines the rules,
-# and the labeled corpus whose deny class is deliberately-unpinned fixtures. Excluded by
-# exact path, hardcoded -- NOT by a marker any file could add to itself, which would be a
-# general escape hatch wearing a narrow disguise. CONTROL 4 asserts the exclusion does not
-# leak: the identical line in any other path, including a lookalike, is still caught.
-#
-# corpus-pin.txt was added after CI caught it. The PR-diff step -- which only runs on a
-# pull_request event, so it had never fired -- flagged 12 of its own fixtures as unpinned
-# installs. A gate that fails its own test data is one somebody switches off.
 SELF = frozenset({"benchmark/gates/pin-check.py", "benchmark/gates/corpus-pin.txt"})
 
 def _inert_before(body):
-    """Index of the first character that cannot execute, or None.
-
-    Blanking every quoted span was the first attempt and it was too blunt: it erased
-    legitimate quoted package specs, turning 'pip install "django>=4.0"' into a non-match
-    instead of a catch. What actually matters is where the MATCH starts. So this returns
-    the quoted spans and the comment offset, and the caller asks whether its own match
-    begins inside one. Naming a command is not running it; running it while quoted is not
-    a thing that happens."""
     spans, quote, start, cut = [], None, 0, None
     for k, ch in enumerate(body):
         if quote:
@@ -115,7 +59,6 @@ def _is_inert(body, pos):
     return any(a < pos < b for a, b in spans)
 
 def scan_diff(text):
-    """Return findings for lines the diff ADDS. File context tracked for reporting."""
     out, path = [], "<unknown>"
     for line in text.splitlines():
         if line.startswith("+++ b/"):
@@ -139,7 +82,6 @@ def diff_for(ref):
     return subprocess.run(["git", "show", "--format=", "--unified=0", ref],
                           capture_output=True, text=True).stdout
 
-# --------------------------------------------------------------------------- controls
 PINNED = """--- a/setup.sh
 +++ b/setup.sh
 @@ -1,0 +2,6 @@
@@ -176,16 +118,8 @@ def self_test(fp_budget=10.0, sample=60):
             ok = False
 
     print("  CONTROL 1 — the same installs, pinned and unpinned, one line per rule")
-    # The two fixtures differ ONLY in the pinning. Same tools, same order, same line
-    # count. A pair that also changed the package names would let a pass come from
-    # something other than the property under test.
     hit = {r for _, r, _, _ in scan_diff(UNPINNED)}
     miss = scan_diff(PINNED)
-    # Every rule must appear in the fixture. The first version of this control exercised
-    # six of eight rules and reported the gate green; gha-tag-not-sha was among the two it
-    # never touched, and it was broken — it anchored on "uses:" and so missed the standard
-    # YAML list form "- uses:", which is nearly every real workflow line. A control that
-    # covers most of a gate certifies the whole gate.
     check("every expected rule fires on its fixture", hit, EXPECTED_RULES)
     check("no rule was removed from RULES", {r for r, _, _ in RULES}, EXPECTED_RULES)
     check("silent on the pinned equivalents", [f[1] for f in miss], [])
@@ -220,9 +154,6 @@ def self_test(fp_budget=10.0, sample=60):
         print(f"      {r}  {rid:<16} {p}")
         print(f"                 {body}")
     check("false-positive rate within budget", rate <= fp_budget, True)
-    # A 0% rate on a history containing no installs at all would be vacuous: it would
-    # prove only that nothing was there to find. So require the gate to still fire on a
-    # planted diff, verifying the scanner ran over this corpus rather than no-opped.
     check("scanner still fires after the corpus run", len(scan_diff(UNPINNED)) > 0, True)
     print(f"\n  unpinned-dependency gate ({n} checks)")
     return 0 if ok else 1

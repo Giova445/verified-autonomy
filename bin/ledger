@@ -1,25 +1,4 @@
 #!/usr/bin/env bash
-# ledger — the durable task ledger. Disk is the source of truth; the context window is a cache.
-#
-# A shell script cannot dispatch an LLM. So this is NOT an orchestrator that spawns agents:
-# it is a STATE MACHINE the driving agent consults. The agent asks "what next?", does the
-# work, and reports back. State survives compaction, crash, and session restart — which is
-# the entire point. The most expensive observed failure in long runs was re-dispatching
-# already-completed tasks after the conversation that remembered them was compacted away.
-#
-# Usage:
-#   ledger init   <task-id> --plan <path>          parse "- [ ]" checkboxes into tasks
-#   ledger next   <task-id>                        print "<n>\t<text>"; exit 1 if none left
-#   ledger start  <task-id> <n>                    mark n in-progress
-#   ledger done   <task-id> <n> --evidence <path>  mark n done; REFUSES without evidence
-#   ledger fail   <task-id> <n> --reason <s>       record a failed attempt
-#   ledger rule   <task-id> --text <s>             append a ruling (ambiguity resolved)
-#   ledger open   [task-id]                       exit 1 if any task is still open (gate form)
-#   ledger status <task-id>                        human-readable table
-#   ledger json   <task-id>                        raw state
-#   ledger selftest                                full lifecycle in a temp dir
-#
-# Exit: 0 ok | 1 nothing to hand out | 2 refused (bad request / no evidence) | 3 unreadable state
 set -uo pipefail
 
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
@@ -28,19 +7,10 @@ MAX_ATTEMPTS="${LEDGER_MAX_ATTEMPTS:-3}"
 
 say() { printf '%s\n' "$*" >&2; }
 
-# A flag with no value must REFUSE, not spin. `shift 2` with one argument left fails and
-# does NOT shift, so `while [ $# -gt 0 ]` re-read the same flag forever: `ledger done t 1
-# --evidence` burned 100% CPU until killed. That is trivially reachable from agent-generated
-# shell — `--evidence $EV` with EV unset expands to a bare flag. A hang is not fail-closed:
-# it wedges an autonomous run permanently instead of ending it with a code the caller can read.
 need_value() {
   [ "$1" -ge 2 ] || { say "flag $2 requires a value."; exit 2; }
 }
 
-# Task ids become filenames. A traversing, empty, or dotted id is a bad request, not a new
-# ledger. Leading '.' is refused wholesale, not just the exact '.'/'..': `ledger init .hidden`
-# used to succeed and write .claude/work/.hidden.json — an invisible file, for a tool whose
-# entire premise is a durable record you can SEE.
 id_path() {
   local id="${1:-}"
   case "$id" in
@@ -49,10 +19,6 @@ id_path() {
   printf '%s/%s.json' "$WORK" "$id"
 }
 
-# ---------------------------------------------------------------- state engine
-# One copy of load/validate/save, shared by every subcommand. Anything that cannot be
-# read is exit 3 — never a silent reinit. Silently reinitializing a corrupt ledger loses
-# the record of what is already done, which is the exact failure this tool exists to stop.
 PRELUDE='
 import datetime, fcntl, hashlib, json, os, sys, tempfile, time
 
@@ -66,14 +32,6 @@ def now(): return datetime.datetime.now(datetime.timezone.utc).isoformat()
 def load(path):
     if not os.path.exists(path):
         die(3, "no ledger at " + path + " — run: ledger init <task-id> --plan <path>")
-    # Read BYTES and decode explicitly. open(path, encoding="utf-8").read() raises
-    # UnicodeDecodeError, which is a ValueError, NOT an OSError, so the handler below used to
-    # miss it entirely: one flipped byte made python die with a traceback and status 1, and 1
-    # is the exit code this tool uses for "nothing left to hand out". A driving agent looping
-    # on `ledger next` therefore read a corrupt ledger as a finished plan and certified
-    # unfinished work as done. Same shape as the verifier that emitted all_green:true on an
-    # unreadable config: unreadable state must never produce a keep-going code.
-    # (No apostrophes below this line: PRELUDE is a single-quoted shell string.)
     try:
         raw = open(path, "rb").read().decode("utf-8")
     except (OSError, ValueError) as e:
@@ -98,8 +56,6 @@ def load(path):
     return st
 
 def save(path, st):
-    # temp file + atomic rename: a reader either sees the old state or the new one, never
-    # a half-written file. A truncated ledger reads as corrupt and blocks every later call.
     st["updated_at"] = now()
     d = os.path.dirname(path) or "."
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".ledger-", suffix=".tmp")
@@ -114,18 +70,10 @@ def save(path, st):
         try:
             os.unlink(tmp)
         except OSError as cleanup_err:
-            # best-effort cleanup, but never silent: a temp file we cannot remove is a
-            # symptom (full disk, permissions) worth surfacing even though it does not
-            # change the outcome of the operation that failed.
             print(f"ledger: could not remove temp file {tmp}: {cleanup_err}", file=sys.stderr)
         raise
 
 def lock(path):
-    # Every mutation is read-modify-write, and atomic rename alone does not make that safe:
-    # it stops a TORN file, not a LOST UPDATE. Measured — 10 concurrent `rule` calls landed
-    # 5 rulings, because each wrote back the state it had read. Fan-out is the whole point
-    # of this tool, so mutations are serialized. Readers need no lock: they always observe
-    # one whole renamed file. The lock releases when the process exits, crash included.
     d = os.path.dirname(path) or "."
     if not os.path.isdir(d):
         die(3, "no ledger directory " + d)
@@ -156,7 +104,6 @@ def pick(st, raw):
 py() { local body="$1"; shift; python3 -c "$PRELUDE
 $body" "$@"; }
 
-# ---------------------------------------------------------------- commands
 cmd_init() {
   local id="${1:-}"; shift 2>/dev/null || true
   local plan=""
@@ -190,7 +137,7 @@ for i, line in enumerate(lines, 1):
     m = box.match(line)
     if not m: continue
     if m.group(1) != " ":
-        skipped += 1          # already checked in the plan: not our work to re-do
+        skipped += 1
         continue
     tasks.append({"n": len(tasks) + 1, "text": m.group(2), "plan_line": i,
                   "status": "pending", "attempts": 0, "evidence": None, "failures": []})
@@ -215,15 +162,13 @@ pend = [t for t in st["tasks"] if t["status"] == "pending"]
 wip  = [t for t in st["tasks"] if t["status"] == "in_progress"]
 blk  = [t for t in st["tasks"] if t["status"] == "blocked"]
 if wip:
-    # Not an error: a fan-out may have several in flight. But after a crash this is the
-    # orphan, so name it rather than let it sit invisible.
     say("note: in progress — " + ", ".join("#%d %s" % (t["n"], t["text"]) for t in wip))
 if not pend:
     if blk:
         die(1, "no pending task. " + str(len(blk)) + " task(s) BLOCKED after " + str(mx) +
                " attempts — escalate with the failure reasons, do not retry silently.")
     die(1, "no pending task — all " + str(len(st["tasks"])) + " accounted for.")
-t = min(pend, key=lambda x: x["n"])       # lowest n: deterministic across processes
+t = min(pend, key=lambda x: x["n"])
 print("%d\t%s" % (t["n"], t["text"]))
 ' "$f" "$MAX_ATTEMPTS"
 }
@@ -256,33 +201,16 @@ cmd_done() {
     esac
   done
   [ -n "$n" ] || { say "usage: ledger done <task-id> <n> --evidence <path>"; exit 2; }
-  # The refusal lives here, before any state is touched: a task marked done with no
-  # evidence is exactly the fabricated-completion failure this project exists to prevent.
   [ -n "$ev" ] || { say "REFUSED: done requires --evidence <path>. A completion claim with no artifact is not a completion."; exit 2; }
   [ -f "$ev" ] || { say "REFUSED: evidence file does not exist: $ev"; exit 2; }
   [ -s "$ev" ] || { say "REFUSED: evidence file is empty: $ev. A zero-byte file is not evidence."; exit 2; }
 
-  # RELEVANCE. The three checks above establish that a file exists and has bytes in it.
-  # They do not establish that it is about the task. Demonstrated: a file reading
-  # "grocery list / milk / eggs" closed the task "Implement OAuth token refresh", exit 0.
-  #
-  # Two ways to pass, and a task needs only one:
-  #   a receipt — the evidence looks like the output of something that ran and reported an
-  #               exit status, which is what most real evidence is; or
-  #   an overlap — the evidence mentions at least one significant word from the task text.
-  #
-  # WHAT THIS CANNOT DO, stated plainly: it cannot tell you the evidence is TRUE, or
-  # sufficient, or that the work was done well. A determined agent defeats it by pasting the
-  # task title into a file. It is aimed at the accidental case — the wrong file, the stale
-  # file, the placeholder — which is the one that actually happens, and it makes the honest
-  # path no harder than before.
   if ! python3 - "$ev" "$(py '
 st = load(sys.argv[1]); t = pick(st, sys.argv[2]); print(t["text"])' "$f" "$n" 2>/dev/null)" <<'PYEOF'
 import re, sys
 blob = open(sys.argv[1], encoding="utf-8", errors="replace").read().lower()
 task = (sys.argv[2] if len(sys.argv) > 2 else "").lower()
 
-# A receipt: something ran and said how it went.
 RECEIPT = re.compile(r"(exit(ed)?[ _-]?(code[ :]*)?\d|all_green|\bpassed\b|\bfailed\b|"
                      r"\bok\b|✓|selftest|test(s)? run|assert)")
 if RECEIPT.search(blob):
@@ -293,9 +221,6 @@ STOP = {"the", "and", "for", "with", "that", "this", "from", "into", "when", "th
         "implement", "update", "create", "build", "ensure", "should", "must", "page"}
 words = {w for w in re.findall(r"[a-z][a-z0-9_-]{3,}", task) if w not in STOP}
 if not words:
-    # Nothing distinctive to match on. Fall back to demanding a receipt rather than
-    # accepting anything — a task whose title is all stopwords must not become the one
-    # task any file can close.
     print("REFUSED: the task text has no distinctive words to match, so the evidence must "
           "be a verification receipt (a command's output with an exit status).",
           file=sys.stderr)
@@ -352,8 +277,6 @@ if t["status"] == "done":
     die(2, "task #%d is recorded done; refusing to reopen it as a failure." % t["n"])
 t["attempts"] += 1
 t["failures"].append({"at": now(), "attempt": t["attempts"], "reason": reason})
-# Back to pending so it is handed out again — until the budget is spent. A task that keeps
-# coming back forever is an infinite dispatch loop, so it is parked as blocked instead.
 t["status"] = "blocked" if t["attempts"] >= mx else "pending"
 save(path, st)
 if t["status"] == "blocked":
@@ -386,20 +309,6 @@ say("ruling %d recorded." % len(st["rulings"]))
 ' "$f" "$text"
 }
 
-# ---------------------------------------------------------------- the gate form
-# `ledger open` answers the one question the gate ladder never asked: is the WORK finished?
-#
-# `grep -n "ledger" bin/verify hooks/` returned nothing. The Stop hook enforced that the
-# gates are green; nothing enforced that the plan is done. So a turn could end with every
-# gate passing and seven tasks pending, and the layer that CAN refuse never knew.
-#
-# Shaped to be a gate command, so it takes no required argument and sweeps every ledger:
-#   0  nothing open (or no ledger in use — the project has not opted in)
-#   1  open tasks, named
-#   3  a ledger exists and cannot be read — never a pass
-#
-# The no-ledger case exits 0 deliberately. Blocking every repo on a file none of them have
-# is how a gate gets deleted in week one; a project opts in by running `ledger init`.
 cmd_open() {
   local id="${1:-}"
   if [ -n "$id" ]; then
@@ -455,7 +364,6 @@ cmd_json() {
   py 'print(json.dumps(load(sys.argv[1]), indent=2))' "$f"
 }
 
-# ---------------------------------------------------------------- selftest
 selftest() {
   local self; self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
   local tmp; tmp="$(mktemp -d)"
@@ -467,15 +375,10 @@ selftest() {
   echo "ledger self-test: $tmp"
   ( cd "$tmp" && git init -q . )
   cat > "$tmp/plan.md" <<'PLAN'
-# Plan
 - [x] already finished before we started
 - [ ] parse the token
 - [ ] wire the middleware
 PLAN
-  # Realistic evidence, deliberately. This used to be the literal string "gate output",
-  # which names nothing about "parse the token" and contains no exit status — exactly what
-  # the relevance check below exists to reject. The fixture was the unrealistic part, not
-  # the requirement: a file that could close any task was never evidence of this one.
   printf 'pytest -q tests/test_token.py\n3 passed\n' > "$tmp/ev.txt"
   : > "$tmp/empty.txt"
 
@@ -516,14 +419,6 @@ PLAN
   s="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["tasks"][0]["status"])' "$tmp/.claude/work/t1.json")"
   chk "refused done left the task untouched" "$s" "pending"
 
-  # RELEVANCE, on an isolated id so the assertions above keep their own state.
-  # Existence and non-emptiness were already checked; neither says the file is about the
-  # task. A file reading "grocery list / milk / eggs" closed "Implement OAuth token
-  # refresh" with exit 0 until this existed.
-  # THE GATE FORM. Nothing in the gate ladder ever asked whether the WORK was finished:
-  # `grep -n "ledger" bin/verify hooks/` returned no matches, so a turn could end with every
-  # gate green and every task pending. All four arms, because a gate that only ever answers
-  # one way is not a gate.
   L open t9 >/dev/null 2>&1
   chk "open on a project with no such ledger" "$?" "3"
   L init t8 --plan "$tmp/plan.md" >/dev/null 2>&1
@@ -544,8 +439,6 @@ PLAN
   chk "evidence about something else REFUSED" "$?" "2"
   s5="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["tasks"][1]["status"])' "$tmp/.claude/work/t5.json")"
   chk "a relevance refusal left the task untouched" "$s5" "pending"
-  # The other direction, so this is not simply "refuse everything": a verification receipt
-  # is accepted even when it shares no vocabulary with the task text.
   printf 'npm test --silent\nexit 0\n' > "$tmp/receipt.txt"
   L done t5 1 --evidence "$tmp/receipt.txt" >/dev/null 2>&1
   chk "a receipt with no shared vocabulary is accepted" "$?" "0"
@@ -566,21 +459,17 @@ PLAN
   L next t1 >/dev/null 2>&1
   chk "exhausted ledger -> exit 1" "$?" "1"
 
-  # escalation: a task that keeps failing must stop being handed out forever
   L init t4 --plan "$tmp/plan.md" >/dev/null 2>&1
   for i in 1 2 3; do L fail t4 1 --reason "attempt $i" >/dev/null 2>&1; done
   s="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["tasks"][0]["status"])' "$tmp/.claude/work/t4.json")"
   chk "task blocked after LEDGER_MAX_ATTEMPTS" "$s" "blocked"
   chk "next never returns a blocked task" "$(L next t4 2>/dev/null | cut -f1)" "2"
 
-  # concurrency: atomic rename stops a torn file, the lock stops a lost update.
-  # Without lock() this landed 5 of 10 — each writer saved the state it had already read.
   L init t7 --plan "$tmp/plan.md" >/dev/null 2>&1
   for i in 1 2 3 4 5 6 7 8 9 10; do L rule t7 --text "r$i" >/dev/null 2>&1 & done; wait
   r="$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1]))["rulings"]))' "$tmp/.claude/work/t7.json" 2>/dev/null || echo err)"
   chk "10 concurrent writers -> 10 rulings, none lost" "$r" "10"
 
-  # fail closed on damaged state — and do NOT quietly start over
   printf '{"schema":1,"tasks":[' > "$tmp/.claude/work/t5.json"
   L next t5 >/dev/null 2>&1
   chk "truncated ledger -> exit 3" "$?" "3"
@@ -592,10 +481,6 @@ PLAN
   L next t6 >/dev/null 2>&1
   chk "unknown schema version -> exit 3" "$?" "3"
 
-  # REGRESSION: a single non-UTF-8 byte used to raise UnicodeDecodeError past an `except
-  # OSError`, killing python with status 1 — this tool's code for "nothing left to hand out".
-  # An agent looping `while ledger next` read that as "plan complete" and stopped, certifying
-  # unfinished work. Truncated JSON was already caught; a bad BYTE was not.
   L init t8 --plan "$tmp/plan.md" >/dev/null 2>&1
   python3 -c 'import sys
 b=bytearray(open(sys.argv[1],"rb").read()); b[5]=0xff; open(sys.argv[1],"wb").write(bytes(b))' \
@@ -607,33 +492,17 @@ b=bytearray(open(sys.argv[1],"rb").read()); b[5]=0xff; open(sys.argv[1],"wb").wr
   L json t8 >/dev/null 2>&1
   chk "  ... json agrees it is unreadable" "$?" "3"
 
-  # REGRESSION: `shift 2` with one argument left FAILS and does not shift, so the flag loop
-  # re-read the same flag forever at 100% CPU. `--evidence $EV` with EV empty is all it took.
-  # A hang is not fail-closed: it wedges the run instead of ending it with a readable code.
-  # THE KILLER USED TO ORPHAN WHAT IT KILLED. The probe ran as `( ... ) &`, so `$!` was the
-  # SUBSHELL, not the bash process inside it. `kill -9 "$bg"` killed the wrapper and the
-  # spinning grandchild reparented to PID 1 and kept burning a core. Five such orphans were
-  # found on a developer machine at ~99% CPU each, 3 days 11 hours old, load average 9.
-  # The spin itself was fixed earlier (need_value, dcd8cd3); these predated that fix and
-  # nothing ever reaped them, because the reaper was aimed at the wrong process.
-  #
-  # A test that detects a hang and then LEAKS it is worse than no test: it converts a
-  # reproducible failure into a silent, permanent resource drain on someone else's machine.
   for probe in "init t99 --plan" "done t1 1 --evidence" "fail t1 1 --reason" "rule t1 --text"; do
-    # No subshell wrapper: $! must be the process that can actually hang.
     CLAUDE_PROJECT_DIR="$tmp" bash "$self" $probe >/dev/null 2>&1 &
     bg=$!
     for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$bg" 2>/dev/null || break; sleep 0.2; done
     if kill -0 "$bg" 2>/dev/null; then
-      # descendants first, then the process itself — killing the parent first orphans them
       pkill -9 -P "$bg" 2>/dev/null || true
       kill -9 "$bg" 2>/dev/null; wait "$bg" 2>/dev/null; rc=HUNG
     else wait "$bg"; rc=$?; fi
     chk "valueless flag refuses: $probe" "$rc" "2"
   done
 
-  # REGRESSION for the reaper itself. Induce a REAL hang and confirm nothing survives it.
-  # Without this, the orphan bug is invisible again the moment a new hang appears.
   cat > "$tmp/hang.sh" <<'HANG'
 #!/usr/bin/env bash
 while :; do :; done
@@ -648,9 +517,6 @@ HANG
   pgrep -f "$tmp/hang.sh" >/dev/null 2>&1 && r=leaked || r=reaped
   chk "hung probe leaves no orphan behind" "$r" "reaped"
 
-  # REGRESSION: the case pattern matched only the exact "." and "..", so `.hidden` was
-  # accepted and wrote an invisible .claude/work/.hidden.json — for a tool whose premise
-  # is a durable record you can see.
   L init .hidden --plan "$tmp/plan.md" >/dev/null 2>&1
   chk "dotted task-id refused" "$?" "2"
   ls -a "$tmp/.claude/work/" | grep -q '^\.hidden\.json$' && r=yes || r=no
@@ -664,7 +530,6 @@ HANG
   else echo "LEDGER SELF-TEST FAILED  ($fail of $((pass+fail)) checks)"; exit 1; fi
 }
 
-# ---------------------------------------------------------------- entrypoint
 cmd="${1:-}"; shift 2>/dev/null || true
 case "$cmd" in
   init)     cmd_init   "$@" ;;

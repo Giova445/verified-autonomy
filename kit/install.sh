@@ -12,7 +12,7 @@ mkdir -p bin .claude/bin .claude/hooks .claude/gates .claude/agents
 for f in "$SRC"/bin/*; do
   [ -f "$f" ] && install -m 0755 "$f" "bin/$(basename "$f")" && echo "  bin/$(basename "$f")"
 done
-# The Stop hook resolves its runner beside itself, never from the repo, so it needs its own copy.
+# The Stop hook resolves its runner beside itself, so it needs its own copy.
 install -m 0755 "$SRC/bin/verify" .claude/bin/verify && echo "  .claude/bin/verify"
 for f in "$SRC"/hooks/*.sh "$SRC"/hooks/*.py; do
   [ -f "$f" ] && install -m 0755 "$f" ".claude/hooks/$(basename "$f")" && echo "  .claude/hooks/$(basename "$f")"

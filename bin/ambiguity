@@ -1,57 +1,4 @@
 #!/usr/bin/env bash
-# ambiguity — find decisions the code makes that the spec never asked for.
-#
-#   ambiguity [base-ref]    report undocumented decision points in the diff
-#   ambiguity selftest      run the built-in checks
-#
-# Config:
-#   AG_SPEC     spec file(s), space-separated  (default: SPEC.md README.md docs/SPEC.md)
-#   AG_SRC      regex of production paths      (default: ^(src|lib|app)/ )
-#   AG_STRICT   1 = exit non-zero on findings  (default: 0, report only — see BUDGET below)
-#
-# ---------------------------------------------------------------------------------------
-# WHAT THIS DOES NOT DO, STATED FIRST
-#
-# It does NOT decide whether a spec is ambiguous. That is a judgment, and every attempt to
-# mechanise it collapses into a lexicon of "vague words" — someone's taste, dressed as a
-# measurement. This gate deliberately does not contain such a list.
-#
-# It answers a narrower question that IS mechanically decidable:
-#
-#   Which decisions does this diff make that the spec never mentions?
-#
-# Every new branch, default value, error path, or magic constant is a decision. If the
-# concept it turns on appears nowhere in the spec, the agent chose it — reasonably or not —
-# and nobody recorded that choice. That is the thing to surface.
-#
-# WHY THIS IS THE HIGHEST-LEVERAGE GATE IN THE LADDER
-# Task ambiguity is the largest measured lever on agent misbehaviour. On unambiguous
-# problems, hardcoding runs 0-2.1% across Codex/GPT-5, Claude Code/Sonnet 4 and Gemini CLI.
-# On ambiguous ones it jumps to 22-44% — a 10-20x increase from the task statement alone,
-# with no change to the model or the harness. Separately, in 20,574 real sessions, 44.10% of
-# intent-misreads had the developer leave the request underspecified. And SpecBench found
-# the modal failure is not deliberate exploitation but "feature isolation": each visible
-# requirement satisfied separately, by a decision nobody wrote down.
-#
-# THE HONEST PART
-# The DECISION-POINT patterns below (a branch, a default, a caught error, a magic literal)
-# are my choice, not a finding. No published work says "these five constructs are the
-# decision points that matter." They are the constructs where an implementation commits to
-# behaviour, which is a defensible reading of the evidence above and not a measured one.
-# Treat this gate as the least-evidenced thing in this repo, and read its FP number before
-# trusting it.
-#
-# BUDGET
-# Reports by default rather than blocking. A gate above ~10% effective false positives gets
-# routed around regardless of what it catches, and this one is a heuristic over prose. Its
-# measured false-positive rate is in benchmark/gates. Turn on AG_STRICT deliberately.
-#
-# RECORDING A DECISION
-# A finding is cleared by writing the decision down, not by deleting the check:
-#   - a line in ASSUMPTIONS.md naming the file, the symbol, or the literal, or
-#   - a commit trailer:  Assumption: <symbol-or-literal> <why this choice, and what would
-#     change it>
-# Both are durable and reviewable. Neither is a mutable switch that turns the gate off.
 set -uo pipefail
 
 AG_SPEC="${AG_SPEC:-SPEC.md README.md docs/SPEC.md}"
@@ -78,7 +25,6 @@ run() {
   local base; base="$(resolve_base "${1:-}")"
   [ -z "$base" ] && { say "ambiguity: no baseline. Pass a base ref or set AG_BASE."; return 1; }
 
-  # Gather spec text. NO SPEC IS THE MAXIMALLY AMBIGUOUS CASE — it must never read as clean.
   local spec="" found=""
   for f in $AG_SPEC; do
     [ -f "$ROOT/$f" ] && { spec="$spec
@@ -93,11 +39,6 @@ $(cat "$ROOT/$f")"; found="$found $f"; }
     return 0
   fi
 
-  # A README IS NOT A TASK SPEC, and using one as a stand-in makes this gate useless.
-  # Measured against 80 real merged commits with README.md as the spec: 32% of commits
-  # flagged, 120 findings, one commit with 18. Against the duel's actual SPEC.md, the same
-  # gate produced ZERO findings on two known-correct implementations. The difference is not
-  # the code — it is whether a real spec exists to check decisions against.
   case "$found" in
     *SPEC*) ;;
     *README*)
@@ -108,7 +49,6 @@ $(cat "$ROOT/$f")"; found="$found $f"; }
       say "" ;;
   esac
 
-  # Production-side added lines only.
   local added
   added="$( {
       git diff "$base"...HEAD 2>/dev/null
@@ -143,14 +83,6 @@ def words(text):
 spec_w = words(spec)
 reg_l  = register.lower()
 
-# Names the diff assigns itself: loop variables, accumulators, working sets. A branch on
-# `if unmet:` or `if node in seen:` is ALGORITHM MECHANICS, not a behavioural decision, and
-# a spec has no business mentioning them.
-#
-# Measured: without this, the gate produced 5 findings across the two duel implementations —
-# `seen`, `unmet`, `stuck`, `missing`, `outstanding` — both of which scored 20/20 on the
-# held-out suite. Five false positives, zero true positives. A gate that noisy is above the
-# ~10% budget and gets switched off, which is worse than not having it.
 LOCALS = set()
 for line in added.splitlines():
     if "\t" not in line: continue
@@ -172,27 +104,18 @@ for line in added.splitlines():
     if not t or t.startswith("#"): continue
 
     kind = ident = None
-    # a branch keyed to a comparison — the code decides based on something
     m = re.match(r"(el)?if\s+(.+?)\s*[:{]", t)
     if m: kind, ident = "branch", m.group(2)
-    # a caught exception — a decision about what failure means
     elif re.match(r"(except|catch)\b", t):
         mm = re.match(r"except\s+([A-Za-z_.]+)", t); kind, ident = "error-path", (mm.group(1) if mm else t)
-    # a default value — a decision about the unspecified case
     elif re.search(r"\b\w+\s*=\s*(None|\[\]|\{\}|0|\"\"|''|False|True)\s*$", t) and "def " in t:
         kind, ident = "default", t
     elif re.search(r"\bdef\s+\w+\([^)]*=\s*[^)]+\)", t):
         mm = re.search(r"(\w+)\s*=\s*([^,)]+)", t); kind, ident = "default", (mm.group(0) if mm else t)
-    # a magic literal in a return — a decision about a specific value
     elif re.match(r"return\s+(-?\d{2,}|\"[^\"]{2,}\"|'[^']{2,}')\s*$", t):
         kind, ident = "magic-value", t[len("return"):].strip()
     if not kind: continue
 
-    # LITERALS FIRST. The first version keyed only on identifiers, so `return 4999` and
-    # `if len(items) > 500` were both treated as covered — "items" appears in the spec, and
-    # a bare number yields no identifiers at all, so it was skipped outright. But the
-    # decision in both lines IS the number. A threshold or constant the spec never states is
-    # precisely an unrecorded choice, and it was the one case this gate exists to catch.
     lits = re.findall(r"-?\d{2,}|\"[^\"]{2,}\"|'[^']{2,}'", ident)
     lits = [l.strip("\"'") for l in lits]
     spec_l = spec.lower()
@@ -200,16 +123,10 @@ for line in added.splitlines():
 
     iw = words(ident)
     if uncovered_lit:
-        # A literal the spec never mentions, and nobody wrote down. Clearing REQUIRES naming
-        # the literal: an earlier version also accepted a bare file path in the register,
-        # which meant writing "src/inv.py" once excused every decision in that file forever.
-        # A waiver that broad is indistinguishable from switching the gate off.
         if all(l.lower() in reg_l for l in uncovered_lit): continue
         findings.append((path, kind, t[:88]))
         continue
     if not iw: continue
-    # No unexplained literal: fall back to concepts, but ONLY for names the diff did not
-    # introduce itself. Anything it assigns is its own scaffolding.
     raw_names = {n.lower() for n in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", ident)}
     if raw_names & LOCALS: continue
     if iw & spec_w: continue
@@ -262,7 +179,6 @@ selftest() {
   ( cd "$repo" && git init -q . && git config user.email b@b && git config user.name b )
   mkdir -p "$repo/src"
   cat > "$repo/SPEC.md" <<'EOF'
-# Invoice totals
 Compute the total for a list of items. Apply a discount when the customer tier is gold.
 If the item list is empty, return zero. Raise InvalidTier for an unknown tier.
 EOF
@@ -271,7 +187,6 @@ EOF
   local base; base="$(git -C "$repo" rev-parse HEAD)"
   export CLAUDE_PROJECT_DIR="$repo" AG_SRC='^src/'
 
-  # decisions the spec DOES cover -> clean
   cat > "$repo/src/inv.py" <<'EOF'
 def total(items, tier):
     if not items:
@@ -285,7 +200,6 @@ EOF
   local o; o="$(run "$base" 2>&1)"
   chk "spec-grounded decisions -> clean" "$(count_of "$o")" ""
 
-  # a decision the spec never mentions -> flagged
   cat > "$repo/src/inv.py" <<'EOF'
 def total(items, tier):
     if not items:
@@ -299,28 +213,19 @@ EOF
   o="$(run "$base" 2>&1)"
   printf '%s' "$o" | grep -q 'magic-value\|branch'; chk "unspecified decision -> flagged" "$?" "0"
 
-  # recording only ONE of the two literals must leave the other flagged. This runs BEFORE
-  # any full record exists, because the register spans the last 20 commits on the branch —
-  # an assumption recorded earlier still stands, so a later partial record cannot retract it.
   printf -- '- capped bulk orders at 4999 pending pricing sign-off\n' > "$repo/ASSUMPTIONS.md"
   o="$(run "$base" 2>&1)"
   chk "partial record -> the other stays flagged" "$([ -n "$(count_of "$o")" ] && echo yes || echo no)" "yes"
 
-  # naming only the FILE must not excuse everything in it
   printf -- '- src/inv.py: it is fine, trust me\n' > "$repo/ASSUMPTIONS.md"
   o="$(run "$base" 2>&1)"
   chk "file-path-only waiver does not clear" "$([ -n "$(count_of "$o")" ] && echo yes || echo no)" "yes"
 
-  # recording BOTH clears it
   printf -- '- capped orders over 500 items at 4999 pending pricing sign-off\n' > "$repo/ASSUMPTIONS.md"
   o="$(run "$base" 2>&1)"
   chk "recorded in ASSUMPTIONS.md -> cleared" "$(count_of "$o")" ""
   rm -f "$repo/ASSUMPTIONS.md"
 
-  # a commit trailer clears it too. NOTE: the diff contains TWO undocumented literals here
-  # (the 500 threshold and the 4999 value); an earlier version of this check recorded only
-  # 4999 and expected a clean result. The gate was right to keep flagging 500 — the test
-  # was wrong. Both get recorded.
   ( cd "$repo" && git add -A >/dev/null && git commit -q -m "wip
 
 Assumption: 4999 cap for bulk orders, pending pricing sign-off
@@ -328,18 +233,15 @@ Assumption: 500 item threshold for the bulk path, pending pricing sign-off" >/de
   o="$(run "$base" 2>&1)"
   chk "recorded by commit trailer -> cleared" "$(count_of "$o")" ""
 
-  # no spec at all must never read as clean
   rm -f "$repo/SPEC.md"
   o="$(run "$base" 2>&1)"
   printf '%s' "$o" | grep -q 'no spec found'; chk "no spec -> says so loudly" "$?" "0"
   ( AG_STRICT=1 run "$base" >/dev/null 2>&1 ); chk "no spec + strict -> refuse" "$?" "1"
   cat > "$repo/SPEC.md" <<'EOF'
-# Invoice totals
 Compute the total for a list of items. Apply a discount when the customer tier is gold.
 If the item list is empty, return zero. Raise InvalidTier for an unknown tier.
 EOF
 
-  # default posture is report, not block
   cat > "$repo/src/inv.py" <<'EOF'
 def total(items, tier):
     if warehouse_zone == 7:
@@ -349,13 +251,6 @@ EOF
   ( run "$base" >/dev/null 2>&1 );              chk "findings do not block by default" "$?" "0"
   ( AG_STRICT=1 run "$base" >/dev/null 2>&1 );  chk "AG_STRICT=1 blocks on findings" "$?" "1"
 
-  # docs-only and test-only changes are not production decisions.
-  # NOTE: `git checkout -- src` restores the INDEX, not the base commit, and earlier steps
-  # here committed production changes — so this check was previously running against a diff
-  # that still contained them. Restore src to the BASE commit explicitly.
-  # Compare against HEAD, not the original base: earlier steps COMMITTED production
-  # changes, so base...HEAD still contains them and this was never a doc-only diff. The
-  # question here is "a doc added on top of the current commit", which is base = HEAD.
   ( cd "$repo" && git add -A >/dev/null && git commit -q -m sync >/dev/null 2>&1 )
   printf '# notes\n' > "$repo/NOTES.md"
   o="$(run HEAD 2>&1)"; printf '%s' "$o" | grep -q 'no production changes'

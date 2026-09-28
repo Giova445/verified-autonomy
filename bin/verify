@@ -1,22 +1,4 @@
 #!/usr/bin/env bash
-# verify — the portable gate runner.
-#
-# ONE spine, THREE callers:
-#   Claude Code  → Stop hook runs `verify done --hook`   (exit 2 blocks the turn)
-#   Codex        → AGENTS.md instructs `./bin/verify done` (exit 1 = not done)
-#   CI           → workflow runs `./bin/verify done`      (exit 1 fails the build)
-#
-# Enforcement must NOT live in hooks: Codex has no Stop hook. Hooks are an adapter.
-#
-# Usage:
-#   verify preflight            graph health + clean-tree + assumption register
-#   verify fast                 lint/typecheck/unit  (every edit)
-#   verify full                 everything + cheat scan
-#   verify done [--hook]        full + evidence bundle; the "am I allowed to stop" call
-#   verify blast <symbol>       blast radius via codegraph (callers ∪ references)
-#   verify tests                print graph-selected test targets for the current diff
-#
-# Exit: 0 green | 1 red | 2 red-and-called-from-a-hook
 set -uo pipefail
 
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
@@ -34,15 +16,10 @@ say() { printf '%s\n' "$*" >&2; }
 
 mkdir -p "$EVIDENCE"
 
-# ---------------------------------------------------------------- preflight
 preflight() {
   local bad=0
 
-  # graph health — degrade EXPLICITLY, never silently to grep precision
   if command -v codegraph >/dev/null 2>&1; then
-    # Check the OUTPUT, not the exit code: `codegraph status` prints "Not initialized"
-    # and still exits 0. Trusting the exit code reports graph:ok on a repo with no index,
-    # which tells the agent it has blast-radius precision it does not have.
     gs="$(codegraph status "$ROOT" 2>&1)"
     if [ -n "$gs" ] && ! printf '%s' "$gs" | grep -qiE "not initialized|no such|not found"; then
       say "  graph   : ok"
@@ -55,13 +32,11 @@ preflight() {
     say "  graph   : codegraph not on PATH (degraded, see above)"
   fi
 
-  # gate config must be valid JSON before anything trusts it
   if [ -f "$CONFIG" ]; then
     if python3 -m json.tool "$CONFIG" >/dev/null 2>&1; then say "  gates   : parseable"
     else say "  gates   : INVALID JSON in $CONFIG"; bad=1; fi
   fi
 
-  # assumption register must have no open entries
   local reg="$EVIDENCE/assumptions.jsonl"
   if [ -f "$reg" ] && grep -q '"status"[[:space:]]*:[[:space:]]*"open"' "$reg" 2>/dev/null; then
     say "  assume  : OPEN assumptions remain — resolve by reading code or asking. Never infer."
@@ -74,10 +49,6 @@ preflight() {
   return $bad
 }
 
-# ---------------------------------------------------------------- blast radius
-# codegraph_impact returns CONTAINED symbols, not reverse deps. Use callers.
-# Union with references: DI frameworks (FastAPI Depends, NestJS providers) pass
-# functions by reference, so callers alone under-reports the real impact set.
 blast() {
   local sym="${1:?usage: verify blast <symbol>}"
   command -v codegraph >/dev/null 2>&1 || { say "codegraph not installed"; return 1; }
@@ -90,11 +61,7 @@ blast() {
   echo "NOTE: union with reference-edges by hand for DI-heavy code (Depends/@Injectable)."
 }
 
-# ---------------------------------------------------------------- test scoping
 tests_for_diff() {
-  # MUST include the working tree. Scoping to BASE...HEAD alone means an agent editing
-  # uncommitted files gets an empty change set and a silently-passing gate — the worst
-  # possible failure mode for a gate. Union committed + unstaged + staged + untracked.
   local changed; changed="$(
     {
       git -C "$ROOT" diff --name-only --diff-filter=ACM "$BASE"...HEAD 2>/dev/null
@@ -105,7 +72,6 @@ tests_for_diff() {
   )"
   [ -z "$changed" ] && { echo "(no changes vs $BASE)"; return 0; }
 
-  # Fail OPEN: a selection bug is indistinguishable from a passing suite.
   if printf '%s\n' "$changed" | grep -qE '(package(-lock)?\.json|requirements.*\.txt|pyproject\.toml|uv\.lock|Dockerfile|\.github/|alembic/|migrations?/)'; then
     echo "ALL  # config/dependency/migration touched — full suite required"
     return 0
@@ -117,16 +83,10 @@ tests_for_diff() {
   printf '%s\n' "$changed"
 }
 
-# ---------------------------------------------------------------- gate runner
 run_tier() {
   local tier="$1"
   [ -f "$CONFIG" ] || { say "no $CONFIG — nothing to enforce"; return 0; }
 
-  # A gate set that cannot be read is NOT a green gate set. An earlier version returned
-  # non-zero here and the caller ignored it, so a trailing comma in gates.json produced
-  # `exit 0` plus an evidence bundle claiming {"gates": [], "all_green": true} — a
-  # fabricated verification receipt, with no adversary required. CI runs the same command,
-  # so layers 2 and 3 failed together.
   local gates
   if ! gates="$(python3 -c '
 import json,sys
@@ -138,25 +98,11 @@ print(json.dumps(json.load(open(sys.argv[1])).get(sys.argv[2],[])))' "$CONFIG" "
   local n; n="$(python3 -c 'import json,sys;print(len(json.loads(sys.argv[1])))' "$gates" 2>/dev/null)"
   [ -z "$n" ] && { CONFIG_ERROR="gate list is unreadable"; return 0; }
 
-  # `fast` and `deferred` may legitimately be empty — install.sh emits "fast": [] for a JS
-  # repo with a test script but no lint script. An empty `full` tier means nothing gates
-  # completion, which must never certify.
   if [ "$n" -eq 0 ]; then
     [ "$tier" = full ] && CONFIG_ERROR="tier 'full' declares no gates"
     return 0
   fi
 
-  # ---- scope selection ------------------------------------------------------------
-  # Only the `full` tier, and only when the project has DECLARED a `surface` on some gate.
-  # A config with no surfaces behaves exactly as it always has — scoping is opt-in by
-  # declaration, the same way the deliverable contract is.
-  #
-  # bin/scope is resolved from THIS SCRIPT'S directory, never from the repo and never from
-  # an env var, for the same reason stop-gate refuses $ROOT/bin/verify: the repo is the
-  # untrusted side, and a scope tool it controls could skip every gate.
-  #
-  # Every failure path here runs MORE, not less: scope missing, scope non-zero, scope
-  # unreadable — all leave SKIP empty. A selection bug must cost time, never coverage.
   SCOPE_SKIPPED=""
   if [ "$tier" = full ] && [ "${VERIFY_SCOPE:-1}" != "0" ]; then
     local self_dir scope_bin has_surface
@@ -177,10 +123,6 @@ print("yes" if any(x.get("surface") for x in g) else "no")' "$CONFIG" 2>/dev/nul
     local name cmd out code start dur
     name="$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])[int(sys.argv[2])]["name"])' "$gates" "$i")"
     cmd="$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])[int(sys.argv[2])]["cmd"])' "$gates" "$i")"
-    # A placeholder is not a gate. The shipped gates.json template ships `echo 'TODO'`
-    # entries; without this they execute, exit 0, and certify a repo that has never been
-    # checked. NOTE: `true` is deliberately NOT rejected — selftest.sh uses `exit 0` as its
-    # green probe, and rejecting bare `true` would break legitimate no-op gates.
     case "$cmd" in
       echo\ *|:|""|" "*)
         say "  ✗ $name — placeholder command ($cmd), not a gate"
@@ -188,9 +130,6 @@ print("yes" if any(x.get("surface") for x in g) else "no")' "$CONFIG" 2>/dev/nul
         continue ;;
     esac
 
-    # A scoped-out gate is UNEXECUTED, not green. It is printed, it is recorded with
-    # "skipped": true and no exit code, and it never contributes to a pass. Reporting it the
-    # same way as a passing gate is how a scoped ladder quietly becomes no ladder.
     if [ -n "$SCOPE_SKIPPED" ] && printf '%s\n' "$SCOPE_SKIPPED" | grep -qxF "$name"; then
       say "  ⊘ $name — scoped out: nothing in the diff touches its declared surface"
       RESULTS="$(python3 -c '
@@ -227,19 +166,11 @@ $(printf '%s' "$out" | tail -30 | sed 's/^/   │ /')
   done
 }
 
-# The bundle is SELF-REPORTED and is now labelled as such in its own JSON.
-# It is written by the agent's own process, on the agent's own machine, as the agent's own
-# user. It is a HINT for a human or a downstream checker, never a receipt. Signing it would
-# add ceremony and zero security, because the key would be readable by the same process that
-# writes the file. A receipt is unforgeable only when the deciding credential lives where the
-# agent holds none: an ephemeral CI runner, a separate uid, or hardware. Relocation, not
-# cryptography, is the move that changes the property.
 write_bundle() {
   local sha; sha="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
   python3 -c '
 import json,sys,datetime
 g=json.loads(sys.argv[1]); err=sys.argv[3] if len(sys.argv)>3 else ""
-# never certify an empty gate list, and never certify when the config was unreadable
 ok = bool(g) and all(x["exit_code"]==0 for x in g) and not err
 out={"commit_sha":sys.argv[2],
   "generated_at":datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -252,13 +183,6 @@ print(json.dumps(out,indent=2))' \
   "${RESULTS:-[]}" "$sha" "${CONFIG_ERROR:-}" > "$EVIDENCE/latest.json"
 }
 
-# ---------------------------------------------------------------- entrypoint
-# `attempts` is read by both the `full` and `done` branches. It used to be initialised only
-# inside `done`, so the CONFIG_ERROR path in `full` hit `$((attempts + 1))` with the variable
-# unset. Under `set -u` that aborts the branch mid-way, and the script then falls off the end
-# and exits 0 — certifying GREEN on exactly the unreadable configs the branch exists to
-# refuse. A benchmark caught it; the self-test did not, because the self-test only ever
-# invoked `verify done`. Hoisted so both branches share one definition.
 attempts=0; [ -f "$STATE" ] && attempts="$(cat "$STATE" 2>/dev/null || echo 0)"
 case "$attempts" in ''|*[!0-9]*) attempts=0 ;; esac
 
@@ -306,9 +230,6 @@ case "${1:-done}" in
         die_code
       fi
       rm -f "$STATE"
-      # A scoped run is a NARROWER CLAIM than a full pass and is never printed as one.
-      # "ALL GATES GREEN" after skipping three gates is the fabricated receipt this project
-      # exists to stop, arriving through the feature meant to make the ladder affordable.
       if [ "${SKIPPED_N:-0}" -gt 0 ]; then
         say "GATES GREEN for what ran — ${SKIPPED_N} gate(s) scoped out, unexecuted not green."
         say "   Those gates are unproven for this change. Run VERIFY_SCOPE=0 bin/verify done to execute every one."

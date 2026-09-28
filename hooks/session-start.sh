@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Announce the contract only where it applies. Silent in projects with no gates.json,
-# so a globally-installed plugin does not tax every unrelated session with context.
 set -uo pipefail
 ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 [ -f "$ROOT/.claude/gates.json" ] || exit 0

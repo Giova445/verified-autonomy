@@ -23,7 +23,7 @@ ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}
 
 MASKED="$(python3 "$HERE/inert-mask.py" "$CMD" 2>/dev/null)" || MASKED="$CMD"
 [ -z "$MASKED" ] && MASKED="$CMD"
-# Quotes become spaces so anchored rules still see `bash -c "rm -rf /"`; ';' is kept for the WHERE check.
+# Quotes become spaces so anchored rules still see bash -c "rm -rf /"; ';' stays for the WHERE check.
 SCAN="$(printf '%s' "$MASKED" | tr '"'"'"'`()' '      ')"
 
 deny() { echo "BLOCKED by deny-dangerous.sh: $1" >&2; exit 2; }

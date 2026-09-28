@@ -1,71 +1,14 @@
 #!/usr/bin/env bash
-# test-delta — production code changed, so tests must have grown.
-#
-# WHY THIS EXISTS: a head-to-head benchmark exposed the gap it closes. One arm implemented a
-# full dependency-scheduler, verified it with manual throwaway checks it never committed,
-# and its gate reported ALL GATES GREEN — over a suite of 4 pre-existing tests covering
-# almost none of the spec. The gate enforced that tests PASS. It never enforced that tests
-# EXIST. Green over a suite that tests nothing is the same fabricated receipt this project
-# exists to prevent, arriving by a different road.
-#
-#   test-delta [base-ref]      exit 0 = ok, 1 = production changed without new test coverage
-#   test-delta selftest        run the built-in checks
-#
-# Config (env, or leave defaults):
-#   TD_SRC     regex of production paths   (default: ^(src|lib|app)/ )
-#   TD_TESTS   regex of test paths         (default: (^|/)(tests?|__tests__|spec)/ )
-#   TD_MIN     assertions required per N changed production lines (default: 1 per 20)
-#
-# On TD_MIN: the first value tried was 40, chosen by feel. A self-test caught what that
-# actually buys — one single assertion satisfying a 31-line module, which is untested code
-# wearing a green badge. 20 is still a low bar, deliberately: this gate is a floor against
-# zero, not a coverage target. Raise it per-repo; do not lower it to clear a red run.
-#
-# WHAT THIS GATE DOES NOT DO — read before promoting it to a blocking tier.
-# Requiring tests does NOT improve correctness on current models. arXiv:2602.07900 (Apr 2026)
-# on SWE-bench Verified: GPT-5.2 writes tests in 0.6% of tasks and resolves 71.8%; Claude
-# Opus 4.5 writes them in 83.0% and resolves 74.4% — a 138x difference in test-writing for
-# 2.6pp of resolution, and prompting to force it moves nothing (all McNemar p > 0.05). The
-# duel that motivated this gate agrees: the arm that wrote zero tests scored 20/20 on the
-# held-out suite, same as the arm that wrote sixteen.
-#
-# Worse, this gate counts assertions, so an agent under it maximises assertion count — and
-# agent tests already skew that way. Across 179,732 agent vs 24,941 human test files
-# (arXiv:2607.12068), agents use unknown or non-standard assertion methods at 10.93% vs
-# 1.46%, roughly 8x. The metric points at the behaviour that is already over-represented.
-#
-# What survives is a bet, not a finding: that committed tests protect FUTURE changes. That is
-# regression insurance over time, which the study above does not measure and nobody has. It
-# ships in the reporting tier for that reason. Promote it deliberately or not at all.
-#
-# Deliberately NOT a coverage tool. Coverage needs a runner, a config, and a language
-# toolchain; this needs git. It answers a cruder question — "did you write any test for
-# this?" — which is the one that was going unanswered.
 set -uo pipefail
 
 TD_SRC="${TD_SRC:-^(src|lib|app)/}"
 TD_TESTS="${TD_TESTS:-(^|/)(tests?|__tests__|spec)/}"
 TD_MIN="${TD_MIN:-20}"
 
-# Assertion vocabulary across the ecosystems this project targets. Counting assertions
-# rather than lines is deliberate: a test file can grow by fixtures and comments without
-# gaining a single check, and that must not satisfy the gate.
-#
-# POSIX ERE only — no \b. BSD awk (macOS, the primary dev platform here) aborts on \b with
-# "illegal primary in regular expression", which emptied the counts and produced a garbage
-# comparison. Word boundaries are spelled out as [^A-Za-z0-9_] instead.
 ASSERT_RE='(^|[^A-Za-z0-9_])(assert|expect|require)([^A-Za-z0-9_]|$)|assertEqual|assertTrue|assertFalse|assertRaises|assertIn|assertNotEqual|assert_eq!|assert_ne!|\.should|XCTAssert|t\.Error|t\.Fatal'
 
 say() { printf '%s\n' "$*" >&2; }
 
-# Baseline resolution is the whole ballgame. If this picks HEAD, the diff is empty and the
-# gate certifies anything — including a commit that just deleted the entire suite. A
-# subagent found exactly that after the first version shipped: it committed its work on
-# main, `main` resolved as the base, base == HEAD, and the gate reported "no changes" and
-# exited 0. Every self-test had used a dirty working tree, so none of them reached this path.
-#
-# Order: explicit arg, TD_BASE, the branch's upstream, then a remote default branch. A local
-# branch name is NOT a candidate — that is what produced base == HEAD.
 resolve_base() {
   local b="${1:-}"
   if [ -n "$b" ] && git rev-parse --verify --quiet "$b" >/dev/null 2>&1; then printf '%s' "$b"; return; fi
@@ -77,8 +20,6 @@ resolve_base() {
   printf ''
 }
 
-# Change set MUST include the working tree. An agent is judged mid-edit, before it commits;
-# scoping to committed history alone lets uncommitted work pass unexamined.
 collect_diff() {
   local base="$1" head="$2"
   {
@@ -102,10 +43,6 @@ run_check() {
     return 1
   fi
 
-  # An empty change set is only trustworthy if it means "nothing changed". When the baseline
-  # IS the current commit and the tree is clean, it instead means "the work is already
-  # behind the baseline, invisible to me" — indistinguishable from the honest case, so the
-  # only safe answer is to refuse.
   local base_sha head_sha dirty
   base_sha="$(git rev-parse "$base" 2>/dev/null)"
   head_sha="$(git rev-parse HEAD 2>/dev/null)"
@@ -120,7 +57,6 @@ run_check() {
   local diff; diff="$(collect_diff "$base_sha" "$head_sha")"
   [ -z "$diff" ] && { echo "test-delta: no changes"; return 0; }
 
-  # Split the unified diff by target file, then bucket each hunk as production or test.
   local counts
   counts="$(printf '%s' "$diff" | awk -v src="$TD_SRC" -v tst="$TD_TESTS" -v are="$ASSERT_RE" '
     /^\+\+\+ / {
@@ -141,10 +77,6 @@ run_check() {
     END { printf "%d %d %d", sadd+0, tadd+0, tdel+0 }
   ')"
 
-  # Fail closed. If awk aborted, the regex was rejected, or the diff was unreadable, the
-  # counts come back empty or malformed. An unreadable state is never a passing state —
-  # that is the whole premise of this gate ladder, and it is exactly the defect
-  # (all_green over an unparseable config) that this project was built to stop.
   local src_added test_asserts_added test_asserts_removed
   read -r src_added test_asserts_added test_asserts_removed <<< "$counts"
   for v in "$src_added" "$test_asserts_added" "$test_asserts_removed"; do
@@ -156,10 +88,6 @@ run_check() {
   done
   local net=$(( test_asserts_added - test_asserts_removed ))
 
-  # A net LOSS of assertions is a failure on its own, with or without a production change.
-  # Without this, the gate is evaded by splitting the work: commit 1 adds code plus tests
-  # and passes; commit 2 deletes the tests and passes too, because it touches no production
-  # code. Coverage is allowed to go up or stay flat. It is not allowed to quietly go down.
   if [ "$net" -lt 0 ]; then
     say "GATE FAILED — committed test assertions went down (net ${net})."
     say "  added ${test_asserts_added}, removed ${test_asserts_removed}"
@@ -208,50 +136,36 @@ selftest() {
 
   cd "$tmp" || return 1
 
-  # production grows, no new assertions -> must fail
   printf 'def a(): return 1\ndef b(): return 2\ndef c(): return 3\n' > src/m.py
   ( run_check HEAD >/dev/null 2>&1 ); chk "production grows, no tests -> fail" "$?" "1"
 
-  # production grows WITH a new assertion -> passes
   printf 'from src.m import a, b\ndef test_a(): assert a() == 1\ndef test_b(): assert b() == 2\n' > tests/t.py
   ( run_check HEAD >/dev/null 2>&1 ); chk "production grows, tests added -> pass" "$?" "0"
 
-  # deleting assertions cancels additions -> must fail
   printf 'from src.m import a\ndef test_only(): assert a() == 1\n' > tests/t.py
   printf 'def a(): return 1\ndef b(): return 2\ndef c(): return 3\ndef d(): return 4\n' > src/m.py
   ( run_check HEAD >/dev/null 2>&1 ); chk "assertions removed -> fail" "$?" "1"
 
-  # docs-only change -> passes (no production delta)
   git checkout -q -- . 2>/dev/null
   printf '# notes\n' > README.md
   ( run_check HEAD >/dev/null 2>&1 ); chk "non-production change -> pass" "$?" "0"
 
-  # test file that grows without assertions -> must fail
   printf 'def a(): return 1\ndef b(): return 2\ndef c(): return 3\n' > src/m.py
   printf 'from src.m import a\n# fixture\nFIX = 1\n# more setup\nX = 2\ndef test_a(): assert a() == 1\n' > tests/t.py
   ( run_check HEAD >/dev/null 2>&1 ); chk "test file grows w/o assertions -> fail" "$?" "1"
 
-  # THE DUEL CASE, exactly: a brand-new untracked production module, fully implemented,
-  # with zero committed tests. This is what shipped a green "ALL GATES GREEN" receipt.
   git checkout -q -- . 2>/dev/null; rm -f README.md
   mkdir -p src
   { echo 'class Scheduler:'; for i in $(seq 1 30); do echo "    def op$i(self): return $i"; done; } > src/scheduler.py
   ( run_check HEAD >/dev/null 2>&1 ); chk "new untracked module, no tests -> fail" "$?" "1"
 
-  # ...and the same module WITH a real committed suite passes. 30+ production lines needs
-  # more than one assertion, so this also proves the requirement scales with size.
   { echo 'from src.scheduler import Scheduler'; echo 'def test_ops():';
     for i in $(seq 1 12); do echo "    assert Scheduler().op$i() == $i"; done; } > tests/t_sched.py
   ( run_check HEAD >/dev/null 2>&1 ); chk "same module with a real suite -> pass" "$?" "0"
 
-  # A single token assertion must NOT satisfy a large production change.
   printf 'from src.scheduler import Scheduler\ndef test_one(): assert Scheduler()\n' > tests/t_sched.py
   ( run_check HEAD >/dev/null 2>&1 ); chk "one token assertion for 30 lines -> fail" "$?" "1"
 
-  # ---- the committed path ----
-  # Everything above runs against a DIRTY tree. That blind spot is why the first version of
-  # this gate shipped fail-open: a subagent committed its work and the gate said "no changes,
-  # exit 0". These checks are the regression wall for that.
   git checkout -q -- . 2>/dev/null; rm -f README.md tests/t_sched.py 2>/dev/null
   { echo 'class S:'; for i in $(seq 1 30); do echo "    def op$i(self): return $i"; done; } > src/scheduler.py
   local scaffold; scaffold="$(git rev-parse HEAD)"
@@ -261,7 +175,6 @@ selftest() {
   ( run_check "$scaffold" >/dev/null 2>&1 ); chk "committed w/ explicit base, no tests -> fail" "$?" "1"
   ( TD_BASE="$scaffold" run_check >/dev/null 2>&1 ); chk "TD_BASE honoured -> fail" "$?" "1"
 
-  # THE EXPLOIT that shipped: delete the suite, commit, gate must not certify it.
   { echo 'from src.scheduler import S'; echo 'def test_ops():';
     for i in $(seq 1 12); do echo "    assert S().op$i() == $i"; done; } > tests/t.py
   git add -A >/dev/null 2>&1; git commit -qm "add suite" >/dev/null 2>&1
@@ -271,11 +184,8 @@ selftest() {
   git add -A >/dev/null 2>&1; git commit -qm "gut the suite" >/dev/null 2>&1
   ( run_check "$withtests" >/dev/null 2>&1 ); chk "suite gutted in a commit -> fail" "$?" "1"
 
-  # A local branch name must never be auto-selected as the baseline: that is what resolved
-  # to HEAD and produced the fail-open.
   ( run_check >/dev/null 2>&1 ); chk "local branch never auto-used as base" "$?" "1"
 
-  # no git base at all -> refuse, never silently pass
   local bare; bare="$(mktemp -d)"; cd "$bare" && git init -q .
   ( run_check >/dev/null 2>&1 ); chk "no base to compare -> refuse" "$?" "1"
 

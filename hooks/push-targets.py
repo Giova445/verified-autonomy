@@ -2,7 +2,6 @@
 import subprocess
 import sys
 
-
 def split_commands(scan):
     out, cur = [], []
     for tok in scan.replace("&&", " ; ").replace("||", " ; ").replace("|", " ; ").split():
@@ -13,7 +12,6 @@ def split_commands(scan):
             cur.append(tok)
     out.append(cur)
     return [c for c in out if c]
-
 
 def push_targets(argv, current):
     positionals = [a for a in argv if not a.startswith("-")]
@@ -32,7 +30,6 @@ def push_targets(argv, current):
             targets.append(dst)
     return targets
 
-
 def pr_base(root, number):
     cmd = ["gh", "pr", "view"] + ([number] if number else []) + ["--json", "baseRefName", "-q", ".baseRefName"]
     try:
@@ -40,7 +37,6 @@ def pr_base(root, number):
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return p.stdout.strip() if p.returncode == 0 else ""
-
 
 def main():
     if len(sys.argv) >= 2 and sys.argv[1] == "--pr-base":
@@ -54,7 +50,6 @@ def main():
                 found += push_targets(words[i + 2:], current)
     print(" ".join(dict.fromkeys(found)))
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

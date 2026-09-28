@@ -1,39 +1,14 @@
 #!/usr/bin/env bash
-# escalate — the fix-loop budget, as executable state instead of prose.
-#
-# skills/executing-plans says "rounds 1-3 resume the same implementer, 4-5 a fresh one
-# a model tier up, 6 stop." That is a policy no one enforces: the round counter lived in
-# the context window, and the context window does not survive compaction. An agent that
-# forgets it is on attempt 5 starts again at attempt 1, forever.
-#
-# So the counter lives on disk and the agent ASKS for the ruling. This is a state machine,
-# not an orchestrator — a shell script cannot dispatch a subagent. It answers one question:
-# "given what has already been tried on this task, what am I allowed to do next?"
-#
-# Usage:
-#   escalate advise <task-id> <task-n>                      what to do for the NEXT attempt
-#   escalate record <task-id> <task-n> --signature <sha>    log a failed attempt
-#   escalate record <task-id> <task-n> --gate <name>        ...computing the signature here
-#   escalate reset  <task-id> <task-n>                      clear the task after success
-#   escalate signature [--gate <name>]                      print the current failure signature
-#   escalate selftest                                       prove the ladder actually fires
-#
-# `advise` prints ONE line, parseable and readable:
-#   ROUND=2 ACTION=retry-same MODEL=inherit REASON="attempt 2 of 3 with the same implementer"
-#
-# Exit: 0 keep going | 1 stop (budget or thrash) | 2 refused (bad args, unreadable state)
 set -uo pipefail
 
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 WORK="$ROOT/.claude/work"
-MAX_ROUNDS="${ESCALATE_MAX_ROUNDS:-6}"   # round 6 is the stop, so 5 attempts are funded
-TIER_UP_AT="${ESCALATE_TIER_UP_AT:-4}"   # first round that gets a fresh implementer
+MAX_ROUNDS="${ESCALATE_MAX_ROUNDS:-6}"
+TIER_UP_AT="${ESCALATE_TIER_UP_AT:-4}"
 
 say() { printf '%s\n' "$*" >&2; }
 out() { printf '%s\n' "$*"; }
 
-# A misconfigured ladder is a silent policy hole: ESCALATE_TIER_UP_AT=9 with MAX_ROUNDS=6
-# means the model tier-up never happens and nobody notices. Refuse instead.
 case "$MAX_ROUNDS" in ''|*[!0-9]*) say "ESCALATE_MAX_ROUNDS must be an integer"; exit 2 ;; esac
 case "$TIER_UP_AT" in ''|*[!0-9]*) say "ESCALATE_TIER_UP_AT must be an integer"; exit 2 ;; esac
 if [ "$TIER_UP_AT" -lt 2 ] || [ "$TIER_UP_AT" -ge "$MAX_ROUNDS" ]; then
@@ -41,12 +16,9 @@ if [ "$TIER_UP_AT" -lt 2 ] || [ "$TIER_UP_AT" -ge "$MAX_ROUNDS" ]; then
   exit 2
 fi
 
-# ---------------------------------------------------------------- argument hygiene
 need_task() {
   TASK_ID="${1:-}"; TASK_N="${2:-}"
   [ -n "$TASK_ID" ] && [ -n "$TASK_N" ] || { say "usage: escalate $CMD <task-id> <task-n>"; exit 2; }
-  # The task-id becomes a filename. A '/' or '..' would let one task's counter be written
-  # over another agent's state file — or over anything else under .claude/.
   case "$TASK_ID" in
     .*|*..*|*[!A-Za-z0-9._-]*) say "refusing task-id '$TASK_ID': use [A-Za-z0-9._-], no leading dot"; exit 2 ;;
   esac
@@ -55,11 +27,6 @@ need_task() {
   FILE="$WORK/$TASK_ID.attempts.json"
 }
 
-# ---------------------------------------------------------------- failure signature
-# (failing gate, changed-file set, diff shape). Two attempts that hash the same touched the
-# same files by the same amount and still failed the same gate — the "fix" moved nothing.
-# Exact numstat, not bucketed: fuzzing the line counts makes FALSE thrash stops more likely,
-# and a false stop costs one report while a missed thrash costs the whole budget.
 signature() {
   local gate="${1:-}" shape
   shape="$(
@@ -67,17 +34,12 @@ signature() {
       git -C "$ROOT" diff --numstat HEAD 2>/dev/null || git -C "$ROOT" diff --numstat 2>/dev/null
       git -C "$ROOT" diff --numstat --cached 2>/dev/null
     } | awk 'NF>=3 {print $3"\t"$1"\t"$2}' | sort -u
-    # Untracked files have no numstat but absolutely change the diff shape.
     git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null | sed 's/$/\tnew\tnew/' | sort
   )"
   printf 'gate=%s\n%s\n' "$gate" "$shape" |
     python3 -c 'import hashlib,sys;print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:16])'
 }
 
-# ---------------------------------------------------------------- state I/O
-# Prints "<attempts> <dup_at> <dup_of>". Exit 3 means the state is present but unreadable.
-# A MISSING file is a legitimate zero; a CORRUPT file is not, and must never be read as one —
-# that would hand a task on attempt 5 a fresh budget and loop it forever.
 read_state() {
   python3 -c '
 import json,os,sys
@@ -120,11 +82,10 @@ t["attempts"].append({"n":len(t["attempts"])+1,"signature":sig,"gate":gate,
                       "at":datetime.datetime.now(datetime.timezone.utc).isoformat()})
 tmp=p+".tmp"
 with open(tmp,"w") as f: json.dump(d,f,indent=2)
-os.replace(tmp,p)  # atomic: a half-written counter is an unreadable counter
+os.replace(tmp,p)
 print(len(t["attempts"]))' "$FILE" "$TASK_ID" "$TASK_N" "$1" "${2:-}"
 }
 
-# ---------------------------------------------------------------- the ladder
 blocked_report_hint() {
   say "Write a BLOCKED report and hand off:"
   say "  (1) the failing gate, its command, exit code and stderr"
@@ -137,8 +98,6 @@ rule() {
   local count="$1" dup_at="$2" dup_of="$3" round
   round=$((count + 1))
 
-  # Highest-value branch. An identical signature means the previous fix changed nothing the
-  # gate can see. Burning the remaining rounds on it buys three more identical failures.
   if [ "$dup_at" -gt 0 ]; then
     out "ROUND=$round ACTION=stop REASON=\"thrash — identical failure signature repeated, the last fix had no effect\""
     say "attempt $dup_at reproduced the signature of attempt $dup_of exactly: same gate, same"
@@ -168,7 +127,6 @@ rule() {
 advise() {
   local st code
   st="$(read_state)"; code=$?
-  # Fail closed. Unreadable state is not round 1.
   if [ $code -ne 0 ] || [ -z "$st" ]; then
     out "ROUND=? ACTION=stop REASON=\"attempt state unreadable — refusing to advise\""
     say "REFUSING TO ADVISE: ${FILE#$ROOT/} exists but could not be parsed."
@@ -180,7 +138,6 @@ advise() {
   rule "$1" "$2" "$3"
 }
 
-# ---------------------------------------------------------------- entrypoint
 CMD="${1:-}"; shift 2>/dev/null || true
 
 case "$CMD" in
@@ -199,8 +156,6 @@ case "$CMD" in
       esac
     done
     [ -z "$SIG" ] && [ -n "$GATE" ] && SIG="$(signature "$GATE")"
-    # An empty signature would compare equal to the next empty one and fake a thrash stop —
-    # or, worse, be stored and make every attempt look identical. Refuse to record it.
     if [ -z "$SIG" ]; then
       say "refusing: no signature. Pass --signature <sha> or --gate <name> so one can be computed."
       say "Thrash detection is the point of this file; an attempt with no signature is invisible to it."
@@ -230,8 +185,6 @@ d.setdefault("tasks",{}).pop(tn,None)
 tmp=p+".tmp"
 with open(tmp,"w") as f: json.dump(d,f,indent=2)
 os.replace(tmp,p)' "$FILE" "$TASK_N" || {
-      # Refuse rather than overwrite: clearing a corrupt file would also clear the evidence
-      # of why it went corrupt, and hands back a full budget on the way out.
       say "REFUSING TO RESET: ${FILE#$ROOT/} is unreadable. Inspect it by hand."
       exit 2
     }
@@ -253,7 +206,6 @@ os.replace(tmp,p)' "$FILE" "$TASK_N" || {
     fld(){ printf '%s' "$1" | sed -n "s/.*$2=\([^ ]*\).*/\1/p"; }
 
     echo "escalate self-test: $tmp"
-    # the ladder, one rung at a time — distinct signatures so thrash never fires
     o="$(e advise T 1)"; chk "no state -> round 1 retry-same" "$(fld "$o" ROUND)/$(act "$o")" "1/retry-same"
     for i in 1 2 3 4 5; do
       o="$(e record T 1 --signature "sig-$i")"; c=$?
@@ -267,14 +219,11 @@ os.replace(tmp,p)' "$FILE" "$TASK_N" || {
     printf '%s' "$o" | grep -q "budget exhausted" && r=yes || r=no
     chk "stop names the budget as the reason" "$r" "yes"
 
-    # per-task isolation: task 2 must not inherit task 1's spent budget
     o="$(e advise T 2)"; chk "sibling task is independent" "$(fld "$o" ROUND)/$(act "$o")" "1/retry-same"
 
-    # reset clears
     e reset T 1 >/dev/null; o="$(e advise T 1)"; c=$?
     chk "reset clears the counter" "$(fld "$o" ROUND)/$(act "$o")/$c" "1/retry-same/0"
 
-    # THRASH: same signature twice must stop immediately, not spend rounds 3-5
     e record T 3 --signature dup-me >/dev/null
     o="$(e record T 3 --signature dup-me)"; c=$?
     chk "repeated signature -> immediate stop" "$(act "$o")/$c" "stop/1"
@@ -282,7 +231,6 @@ os.replace(tmp,p)' "$FILE" "$TASK_N" || {
     chk "stop is reported as thrash, not budget" "$r" "yes"
     o="$(e advise T 3)"; chk "thrash stop is sticky across calls" "$(act "$o")" "stop"
 
-    # fail-closed
     printf '{"tasks":{"1":{"attempts":[' > "$tmp/.claude/work/BAD.attempts.json"
     o="$(e advise BAD 1)"; c=$?
     chk "corrupt state -> refuse to advise" "$(act "$o")/$c" "stop/2"
@@ -297,7 +245,6 @@ os.replace(tmp,p)' "$FILE" "$TASK_N" || {
     e advise T abc >/dev/null 2>&1; chk "non-numeric task-n -> refuse" "$?" "2"
     ESCALATE_TIER_UP_AT=9 e advise T 1 >/dev/null 2>&1; chk "unreachable tier-up -> refuse" "$?" "2"
 
-    # signature is a function of the tree, not of the clock
     a="$(cd "$tmp" && CLAUDE_PROJECT_DIR="$tmp" bash "$SELF" signature --gate unit)"
     b="$(cd "$tmp" && CLAUDE_PROJECT_DIR="$tmp" bash "$SELF" signature --gate unit)"
     chk "signature is stable for an unchanged tree" "$([ "$a" = "$b" ] && echo same)" "same"

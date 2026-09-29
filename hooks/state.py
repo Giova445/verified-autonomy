@@ -1,0 +1,800 @@
+#!/usr/bin/env python3
+import hashlib
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import time
+
+CONFIG_REL = ".claude/gates.json"
+CHECKS_REL = ".claude/checks"
+COUNTED_CONFIG = (CONFIG_REL, ".claude/acceptance.json")
+NOISE_SUFFIXES = (".pyc", ".db-wal", ".db-shm", ".rvf", ".rvf.lock")
+NOISE_FILES = ("ruvector.db",)
+FILE_CAP = 1 << 20
+MAX_INPUT = 1 << 20
+STALE_LOCK_SECONDS = 1000
+DEFAULT_GATE_TIMEOUT = 300.0
+DEFAULT_MAX_BLOCKS = 3
+DEFAULT_BUDGET = 800.0
+
+def say(text):
+    sys.stderr.write(text.rstrip("\n") + "\n")
+
+def allow(message=None):
+    if message:
+        print(json.dumps({"systemMessage": message}))
+    return 0
+
+def remove(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+def read_text(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+def load_json(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+def write_atomic(path, text):
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except OSError:
+        remove(tmp)
+        raise
+
+def clean_id(value, limit=128):
+    return re.sub(r"[^A-Za-z0-9_-]", "", str(value or ""))[:limit]
+
+def env_number(name, default, cast=float):
+    try:
+        value = cast(os.environ.get(name, ""))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+def parse_object(buf):
+    try:
+        data = json.loads(buf.decode("utf-8", "replace"))
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+def read_input(limit=2.0):
+    import select
+    buf, end = b"", time.monotonic() + limit
+    try:
+        while len(buf) < MAX_INPUT and not os.isatty(0):
+            if not select.select([0], [], [], max(end - time.monotonic(), 0))[0]:
+                break
+            chunk = os.read(0, 65536)
+            if not chunk:
+                break
+            buf += chunk
+            if parse_object(buf) is not None:
+                break
+    except (OSError, ValueError):
+        pass
+    return parse_object(buf) or {}
+
+def git_run(root, *args):
+    return subprocess.run(["git", "-C", root] + list(args), stdin=subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=120)
+
+def git(root, *args):
+    proc = git_run(root, *args)
+    if proc.returncode != 0:
+        raise RuntimeError("git %s failed" % " ".join(args))
+    return proc.stdout
+
+def is_tracked(root, rel):
+    try:
+        return bool(git(root, "ls-files", "--", rel).strip())
+    except Exception:
+        return False
+
+def project_root(data=None):
+    root = os.environ.get("VERIFY_ROOT") or os.environ.get("CLAUDE_PROJECT_DIR")
+    if root:
+        return root
+    cwd = (data or {}).get("cwd") or os.getcwd()
+    try:
+        return git(cwd, "rev-parse", "--show-toplevel").decode().strip() or cwd
+    except Exception:
+        return cwd
+
+def is_harness_path(rel):
+    rel = rel.replace("\\", "/")
+    if rel.startswith("./"):
+        rel = rel[2:]
+    parts = rel.split("/")
+    if "__pycache__" in parts or parts[-1] == ".DS_Store" or rel.endswith(NOISE_SUFFIXES):
+        return True
+    if rel in COUNTED_CONFIG or rel.startswith(CHECKS_REL + "/"):
+        return False
+    if len(parts) > 1 and parts[0].startswith(".") and parts[0] != ".github":
+        return True
+    return rel in NOISE_FILES
+
+def sha_of_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+def file_token(path):
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return "gone"
+    if stat.S_ISLNK(st.st_mode):
+        return "link"
+    if not stat.S_ISREG(st.st_mode):
+        return "special"
+    mark = "x" if st.st_mode & 0o111 else "-"
+    if st.st_size > FILE_CAP:
+        return "%s%d:%d" % (mark, st.st_size, st.st_mtime_ns)
+    try:
+        return mark + sha_of_file(path)
+    except OSError:
+        return "unreadable"
+
+def tokenize(root, rels):
+    return {rel: file_token(os.path.join(root, rel)) for rel in rels}
+
+def nul_list(raw):
+    return [x.decode("utf-8", "surrogateescape") for x in raw.split(b"\0") if x]
+
+def head_state(root):
+    proc = git_run(root, "rev-parse", "--verify", "-q", "HEAD")
+    if proc.returncode == 0:
+        return proc.stdout.decode().strip()
+    if proc.returncode == 1:
+        git(root, "rev-parse", "--git-dir")
+        return "unborn"
+    raise RuntimeError("no git head")
+
+def tracked_changes(root, head):
+    base = ["diff", "--name-only", "--no-renames", "--relative", "-z"]
+    if head == "unborn":
+        return set(nul_list(git(root, *base, "--cached"))) | set(nul_list(git(root, *base)))
+    return set(nul_list(git(root, *base, "HEAD")))
+
+def config_files(root):
+    found = list(COUNTED_CONFIG)
+    for dirpath, dirs, names in os.walk(os.path.join(root, CHECKS_REL)):
+        dirs[:] = sorted(d for d in dirs if d != "__pycache__")
+        for name in sorted(names):
+            rel = os.path.relpath(os.path.join(dirpath, name), root).replace(os.sep, "/")
+            if not is_harness_path(rel):
+                found.append(rel)
+    return found
+
+def runner_tokens():
+    here = os.path.dirname(os.path.abspath(__file__))
+    up = os.path.dirname(here)
+    paths = [os.path.join(here, "state.py"), os.path.join(here, "stop-gate.sh"),
+             os.path.join(up, "bin", "verify"), os.path.join(up, "bin", "scope"),
+             os.path.join(up, "benchmark", "gates", "acceptance.py"),
+             os.path.join(up, "gates", "acceptance.py")]
+    return {"runner:" + os.path.basename(p): file_token(p) for p in paths if os.path.isfile(p)}
+
+def compute_fingerprint(root):
+    head = head_state(root)
+    changed = tracked_changes(root, head)
+    others = set(nul_list(git(root, "ls-files", "--others", "--exclude-standard", "-z"))) - changed
+    rels = [r for r in sorted(changed) if not is_harness_path(r)]
+    rels += [r for r in sorted(others)
+             if not is_harness_path(r) and not os.path.islink(os.path.join(root, r))]
+    entries = {**tokenize(root, rels), **tokenize(root, config_files(root)), **runner_tokens()}
+    digest = hashlib.sha256(head.encode())
+    for key in sorted(entries):
+        digest.update(("\0%s\0%s" % (key, entries[key])).encode("utf-8", "surrogateescape"))
+    return digest.hexdigest()
+
+def fingerprint(root):
+    try:
+        return compute_fingerprint(root)
+    except Exception:
+        return "uncacheable-" + os.urandom(8).hex()
+
+def armed(root):
+    cfg = os.path.join(root, CONFIG_REL)
+    try:
+        if os.path.getsize(cfg) > 0:
+            return True
+    except OSError:
+        pass
+    return is_tracked(root, CONFIG_REL)
+
+def cmd_stdin():
+    data = read_input()
+    print("SID='%s'" % clean_id(data.get("session_id")))
+    print("EVENT='%s'" % clean_id(data.get("hook_event_name"), 32))
+    return 0
+
+def cmd_baseline():
+    data = read_input()
+    sid = clean_id(data.get("session_id"))
+    root = project_root(data)
+    if not sid or not armed(root):
+        return 0
+    directory = os.path.join(root, ".claude", ".sessions")
+    try:
+        os.makedirs(directory, exist_ok=True)
+        write_atomic(os.path.join(directory, sid), fingerprint(root) + "\n")
+    except OSError:
+        pass
+    return 0
+
+class Persist(Exception):
+    pass
+
+class Ctx:
+    def __init__(self, hook):
+        self.hook = hook
+        self.root = project_root()
+        self.claude = os.path.join(self.root, ".claude")
+        self.evidence = os.path.join(self.claude, "evidence")
+        self.config = os.path.join(self.root, CONFIG_REL)
+        self.attempts_path = os.path.join(self.claude, ".gate-attempts")
+        self.judged_path = os.path.join(self.claude, ".gate-judged")
+        self.lock_path = os.path.join(self.claude, ".gate-lock")
+        self.sid = clean_id(os.environ.get("VERIFY_SESSION_ID"))
+        self.home = os.environ.get("VERIFY_HOME") or os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin")
+        self.max_blocks = int(env_number("GATE_MAX_BLOCKS", DEFAULT_MAX_BLOCKS, int))
+        self.gate_timeout = env_number("GATE_TIMEOUT", DEFAULT_GATE_TIMEOUT)
+        self.cache = os.environ.get("VERIFY_CACHE", "1") != "0"
+        started = env_number("VERIFY_START", time.time())
+        self.deadline = started + env_number("VERIFY_BUDGET", DEFAULT_BUDGET) if hook else None
+
+    def remaining(self):
+        return None if self.deadline is None else self.deadline - time.time()
+
+ACTIVE = []
+
+def kill_group(proc, sig=9):
+    try:
+        os.killpg(proc.pid, sig)
+    except OSError:
+        pass
+
+def install_signal_handlers():
+    import signal
+
+    def stop(signum, _frame):
+        for proc in ACTIVE:
+            kill_group(proc)
+        sys.exit(128 + signum)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+def lock_is_stale(path):
+    try:
+        age = time.time() - os.stat(path).st_mtime
+    except OSError:
+        return False
+    text = read_text(os.path.join(path, "pid")).strip()
+    if not text.isdigit():
+        return age > 10
+    return not pid_alive(int(text)) or age > STALE_LOCK_SECONDS
+
+def acquire_lock(ctx):
+    import shutil
+    try:
+        os.makedirs(ctx.claude, exist_ok=True)
+    except OSError as exc:
+        raise Persist(ctx.claude) from exc
+    while True:
+        try:
+            os.mkdir(ctx.lock_path)
+        except FileExistsError:
+            if lock_is_stale(ctx.lock_path):
+                shutil.rmtree(ctx.lock_path, ignore_errors=True)
+                continue
+            left = ctx.remaining()
+            if left is not None and left <= 0:
+                return False
+            time.sleep(0.2)
+            continue
+        except OSError as exc:
+            raise Persist(ctx.lock_path) from exc
+        try:
+            write_atomic(os.path.join(ctx.lock_path, "pid"), str(os.getpid()))
+        except OSError:
+            pass
+        return True
+
+def release_lock(ctx):
+    import shutil
+    if read_text(os.path.join(ctx.lock_path, "pid")).strip() in ("", str(os.getpid())):
+        shutil.rmtree(ctx.lock_path, ignore_errors=True)
+
+def get_attempts(ctx):
+    parts = read_text(ctx.attempts_path).split(None, 1)
+    if not parts or not parts[0].isdigit():
+        return 0
+    return int(parts[0]) if (parts[1].strip() if len(parts) > 1 else "") == ctx.sid else 0
+
+def set_attempts(ctx, count):
+    write_atomic(ctx.attempts_path, "%d %s\n" % (count, ctx.sid))
+
+def read_judged(ctx):
+    parts = read_text(ctx.judged_path).split()
+    return (parts[0], parts[1]) if len(parts) >= 2 else None
+
+def set_judged(ctx, fp, verdict):
+    write_atomic(ctx.judged_path, "%s %s\n" % (fp, verdict))
+
+def open_items(ctx):
+    bundle = load_json(os.path.join(ctx.evidence, "latest.json"))
+    if not isinstance(bundle, dict):
+        return "see .claude/evidence"
+    names = [g.get("gate", "?") for g in bundle.get("gates", []) if not g.get("skipped") and g.get("exit_code") != 0]
+    if not names and bundle.get("product") == "absent":
+        names.append("no product expectations declared")
+    elif not names and bundle.get("product") == "open":
+        product = load_json(os.path.join(ctx.evidence, "product.json")) or {}
+        names += ["%s [%s]" % (o.get("name"), o.get("verdict")) for o in product.get("outcomes", [])
+                  if o.get("verdict") != "holds"]
+    if not names and bundle.get("error"):
+        names.append(bundle["error"])
+    return ", ".join(names) or "see .claude/evidence"
+
+def clear_attempts(ctx):
+    owner = read_text(ctx.attempts_path).split(None, 1)[1:]
+    if not owner or owner[0].strip() == ctx.sid:
+        remove(ctx.attempts_path)
+
+def cached(ctx, fp):
+    if not ctx.cache or fp.startswith("uncacheable-"):
+        return None
+    if ctx.sid and read_text(os.path.join(ctx.claude, ".sessions", ctx.sid)).strip() == fp:
+        clear_attempts(ctx)
+        return 0
+    judged = read_judged(ctx)
+    if not judged or judged[0] != fp:
+        return None
+    clear_attempts(ctx)
+    if judged[1] == "green":
+        return 0
+    label, since = ("NO VERDICT", "the last check") if judged[1] == "noverdict" else ("still red", "the refusal")
+    return allow("verified-autonomy: %s (%s); stop allowed because nothing changed since %s"
+                 % (label, open_items(ctx), since))
+
+def tail_lines(path, count=30):
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - 65536))
+            data = fh.read()
+    except OSError:
+        return []
+    return data.decode("utf-8", "replace").splitlines()[-count:]
+
+def run_gate(root, cmd, limit):
+    import tempfile
+    fd, path = tempfile.mkstemp(prefix="va-gate-")
+    started, timed_out = time.monotonic(), False
+    try:
+        with os.fdopen(fd, "wb") as out:
+            proc = subprocess.Popen(["bash", "-o", "pipefail", "-c", cmd], cwd=root, stdin=subprocess.DEVNULL,
+                                    stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+            ACTIVE.append(proc)
+            try:
+                code = proc.wait(timeout=limit)
+            except subprocess.TimeoutExpired:
+                code, timed_out = None, True
+            kill_group(proc)
+            proc.wait()
+            ACTIVE.remove(proc)
+        code = code if code is None or code >= 0 else 128 - code
+        return {"code": code, "timed_out": timed_out, "sha": sha_of_file(path),
+                "ms": int((time.monotonic() - started) * 1000), "tail": tail_lines(path)}
+    finally:
+        remove(path)
+
+def valid_gate(gate):
+    return isinstance(gate, dict) and isinstance(gate.get("name"), str) and isinstance(gate.get("cmd"), str)
+
+def load_gates(ctx, tier):
+    try:
+        present = os.path.getsize(ctx.config) > 0
+    except OSError:
+        present = False
+    if not present:
+        if is_tracked(ctx.root, CONFIG_REL):
+            return None, "gate config .claude/gates.json is tracked but missing or empty"
+        return None, "no .claude/gates.json declares the %s gates" % tier
+    data = load_json(ctx.config)
+    if not isinstance(data, dict):
+        return None, "gate config is unparseable"
+    gates = data.get(tier, [])
+    if not isinstance(gates, list) or not all(valid_gate(g) for g in gates):
+        return None, "gate list is unreadable"
+    if tier == "full" and not gates:
+        return None, "tier 'full' declares no gates"
+    return gates, None
+
+def scope_skipped(ctx, gates):
+    scope = os.path.join(ctx.home, "scope")
+    if os.environ.get("VERIFY_SCOPE", "1") == "0" or not os.access(scope, os.X_OK):
+        return set()
+    if not any(isinstance(g.get("surface"), list) and g["surface"] for g in gates):
+        return set()
+    try:
+        proc = subprocess.run([sys.executable, scope, "skip", ctx.root], stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return set(proc.stdout.decode("utf-8", "replace").splitlines())
+
+def failure_block(name, cmd, code, tail):
+    head = "\u2500\u2500 GATE FAILED: %s\n   command : %s\n   exit    : %s" % (name, cmd, code)
+    return head + "".join("\n   \u2502 " + line for line in tail)
+
+def run_tier(ctx, tier):
+    gates, error = load_gates(ctx, tier)
+    out = {"gates": [], "blocks": [], "errors": [error] if error else [], "timed_out": [],
+           "skipped": 0, "budget": False, "declared": len(gates or [])}
+    skipped = scope_skipped(ctx, gates or []) if tier == "full" else set()
+    for gate in gates or []:
+        name, cmd = gate["name"], gate["cmd"]
+        if cmd == "" or cmd == ":" or cmd.startswith(("echo ", " ")):
+            say("  \u2717 %s: placeholder command (%s), not a gate" % (name, cmd))
+            out["errors"].append("gate '%s' is a placeholder" % name)
+            continue
+        if name in skipped:
+            say("  \u2298 %s: scoped out, nothing in the diff touches its declared surface" % name)
+            out["gates"].append({"gate": name, "command": cmd, "skipped": True,
+                                 "reason": "no changed file matches the declared surface of this gate",
+                                 "executed_by": "harness"})
+            out["skipped"] += 1
+            continue
+        left = ctx.remaining()
+        if left is not None and left <= 0:
+            out["budget"] = True
+            break
+        limit = ctx.gate_timeout if left is None else min(ctx.gate_timeout, left)
+        result = run_gate(ctx.root, cmd, limit)
+        entry = {"gate": name, "command": cmd, "exit_code": result["code"],
+                 "stdout_sha256": result["sha"], "duration_ms": result["ms"], "executed_by": "harness"}
+        if result["timed_out"]:
+            budget_hit = left is not None and left < ctx.gate_timeout
+            reason = "hook budget exhausted" if budget_hit else "no answer after %ds" % limit
+            say("  \u2717 %s (NO VERDICT: %s)" % (name, reason))
+            out["gates"].append({**entry, "timed_out": True, "timeout_s": int(limit)})
+            if budget_hit:
+                out["budget"] = True
+                break
+            out["timed_out"].append({"name": name, "limit": int(limit)})
+            continue
+        out["gates"].append(entry)
+        if result["code"] == 0:
+            say("  \u2713 %s (%dms)" % (name, result["ms"]))
+        else:
+            say("  \u2717 %s (exit %s)" % (name, result["code"]))
+            out["blocks"].append(failure_block(name, cmd, result["code"], result["tail"]))
+    return out
+
+def tier_verdict(tier):
+    if tier["errors"]:
+        refusing = ("REFUSING TO CERTIFY: %s.\nFix .claude/gates.json: a gate set that cannot be read is not "
+                    "a passing gate set." % "; ".join(tier["errors"]))
+        return "config", "\n\n".join(tier["blocks"] + [refusing])
+    if tier["blocks"]:
+        return "red", "\n\n".join(tier["blocks"] + ["Fix the code, not the test."])
+    if tier["budget"]:
+        return "noverdict", "NO VERDICT: hook budget exhausted, so the gates that did not finish are unproven."
+    if tier["timed_out"]:
+        first = tier["timed_out"][0]
+        return "noverdict", ("NO VERDICT: gate '%s' gave no answer after %ds, so it is unproven, not green."
+                             % (first["name"], first["limit"]))
+    return None, ""
+
+def accept_py(ctx):
+    here = ctx.home
+    for path in (os.path.join(here, "..", "benchmark", "gates", "acceptance.py"),
+                 os.path.join(here, "..", "gates", "acceptance.py"),
+                 os.path.join(ctx.claude, "gates", "acceptance.py")):
+        if os.path.isfile(path):
+            return os.path.normpath(path)
+    return None
+
+def run_acceptance(ctx, script, results):
+    left = ctx.remaining()
+    with open(os.path.join(ctx.evidence, "product.txt"), "wb") as log:
+        proc = subprocess.Popen([sys.executable, script, ".", "--results", results], cwd=ctx.root,
+                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                                start_new_session=True)
+        ACTIVE.append(proc)
+        try:
+            proc.wait(timeout=None if left is None else max(left, 1))
+            return True
+        except subprocess.TimeoutExpired:
+            kill_group(proc, 15)
+            time.sleep(3)
+            kill_group(proc)
+            proc.wait()
+            return False
+        finally:
+            ACTIVE.remove(proc)
+
+def product_half(ctx, tier=None):
+    if tier and (tier["errors"] or tier["blocks"] or tier["timed_out"] or tier["budget"]):
+        return {"status": "not run", "msg": ""}
+    script = accept_py(ctx)
+    if script is None:
+        return {"status": "open", "msg": "product : CANNOT RUN - acceptance.py is neither beside bin/verify "
+                                         "nor in .claude/gates/"}
+    results = os.path.join(ctx.evidence, "product.json")
+    remove(results)
+    if not run_acceptance(ctx, script, results):
+        return {"status": "noverdict", "msg": "NO VERDICT: the product check did not finish in the time "
+                                              "the hook has, so the product is unproven."}
+    proc = subprocess.run([sys.executable, script, "--summarize", results], stdin=subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+    lines = proc.stdout.decode("utf-8", "replace").splitlines()
+    return {"status": lines[0] if lines else "open", "msg": "\n".join(lines[1:])}
+
+def decide(tier, prod):
+    kind, text = tier_verdict(tier)
+    if kind:
+        return kind, text
+    if prod["status"] == "noverdict":
+        return "noverdict", prod["msg"]
+    if prod["status"] != "held":
+        return "product", prod["msg"] + "\nEngineering gates are green; the product is not established, so this is not done."
+    return "green", prod["msg"]
+
+def write_bundle(ctx, tier, prod, kind):
+    import datetime
+    try:
+        sha = git(ctx.root, "rev-parse", "HEAD").decode().strip()
+    except Exception:
+        sha = "unknown"
+    gates = tier["gates"]
+    error = "; ".join(tier["errors"]) or ("hook budget exhausted" if tier["budget"] else "")
+    executed = [g for g in gates if not g.get("skipped")]
+    green = bool(gates) and all(g.get("exit_code") == 0 for g in executed) and not error \
+        and prod["status"] in ("held", "not run")
+    bundle = {"commit_sha": sha, "product": prod["status"], "verdict": kind,
+              "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "gates": gates, "all_green": green,
+              "trust": "self-reported by the process under test; not a receipt", "verified_by": "producer"}
+    if error:
+        bundle["error"] = error
+    elif not gates:
+        bundle["error"] = "no gates executed"
+    write_atomic(os.path.join(ctx.evidence, "latest.json"), json.dumps(bundle, indent=2))
+
+def ensure_evidence(ctx):
+    try:
+        os.makedirs(ctx.evidence, exist_ok=True)
+        return True
+    except OSError as exc:
+        if ctx.hook:
+            raise Persist(ctx.evidence) from exc
+        say("warning: cannot write %s; no evidence is kept" % ctx.evidence)
+        return False
+
+def open_assumptions(ctx):
+    lines = read_text(os.path.join(ctx.evidence, "assumptions.jsonl")).splitlines()
+    return [l for l in lines if re.search(r'"status"\s*:\s*"open"', l)][:5]
+
+def evaluate(ctx):
+    writable = ensure_evidence(ctx)
+    tier = run_tier(ctx, "full")
+    prod = product_half(ctx, tier)
+    kind, text = decide(tier, prod)
+    if writable:
+        try:
+            write_bundle(ctx, tier, prod, kind)
+        except OSError as exc:
+            if ctx.hook:
+                raise Persist(ctx.evidence) from exc
+    return kind, text, tier
+
+def green_report(ctx, tier, text):
+    if tier["skipped"]:
+        say("GATES GREEN for what ran: %d gate(s) scoped out and unexecuted, not green.\n"
+            "   Those gates are unproven for this change. Run VERIFY_SCOPE=0 bin/verify done to execute every one."
+            % tier["skipped"])
+    else:
+        say("ALL GATES GREEN - evidence: .claude/evidence/latest.json")
+    import glob
+    shots = " Screenshots: .claude/evidence/shots/" if glob.glob(os.path.join(ctx.evidence, "shots", "*.png")) else ""
+    say("DONE - %s; engineering gates green.%s" % (text, shots))
+
+def persist_message(path, names=""):
+    name = re.sub(r"\.\d+\.tmp$", "", os.path.basename(str(path or "")))
+    note = "; gates were red (%s)" % names if names else ""
+    return "NO VERDICT: state cannot be persisted (%s)%s; the stop is allowed without a verdict" % (name, note)
+
+def mark(ctx, fp, verdict, attempts=None):
+    if attempts is None:
+        clear_attempts(ctx)
+    else:
+        set_attempts(ctx, attempts)
+    set_judged(ctx, fp, verdict)
+
+def record(ctx, kind, text, tier, fp, attempts):
+    verdict = kind if kind in ("green", "noverdict") else "refused"
+    try:
+        mark(ctx, fp, verdict, attempts + 1 if verdict == "refused" else None)
+    except OSError as exc:
+        return allow(persist_message(exc.filename or ctx.claude, "" if verdict == "green" else open_items(ctx)))
+    if verdict == "green":
+        green_report(ctx, tier, text)
+        return 0
+    if verdict == "noverdict":
+        return allow(text)
+    say("%s\nAttempt %d/%d." % (text.rstrip("\n"), attempts + 1, ctx.max_blocks))
+    return 2
+
+def blocked_report(ctx, fp, attempts):
+    try:
+        mark(ctx, fp, "refused", attempts + 1)
+    except OSError as exc:
+        return allow(persist_message(exc.filename or ctx.claude, open_items(ctx)))
+    say("Attempt limit reached (%d/%d). Still red: %s.\n"
+        "Write a BLOCKED report now: the failing gate with its command, exit code and output; what you tried "
+        "and why each attempt failed; the decision that needs a person; your recommendation.\n"
+        "This is the last refusal: your next stop is allowed."
+        % (ctx.max_blocks, ctx.max_blocks, open_items(ctx)))
+    return 2
+
+def after_report(ctx, fp):
+    try:
+        mark(ctx, fp, "refused")
+    except OSError:
+        clear_attempts(ctx)
+    return allow("verified-autonomy: still red (%s); stop allowed after %d blocked attempts and the blocked report"
+                 % (open_items(ctx), ctx.max_blocks))
+
+def judge_hook(ctx, fp):
+    attempts = get_attempts(ctx)
+    if attempts > ctx.max_blocks:
+        return after_report(ctx, fp)
+    if attempts == ctx.max_blocks:
+        return blocked_report(ctx, fp, attempts)
+    ensure_evidence(ctx)
+    open_lines = open_assumptions(ctx)
+    if open_lines:
+        text = "Open assumptions in .claude/evidence/assumptions.jsonl. Resolve them by reading the code " \
+               "or asking; do not infer.\n" + "\n".join("  " + l for l in open_lines)
+        stub = {"gates": [], "errors": ["open assumptions in .claude/evidence/assumptions.jsonl"], "budget": False}
+        try:
+            write_bundle(ctx, stub, {"status": "not run", "msg": ""}, "assumptions")
+        except OSError as exc:
+            raise Persist(ctx.evidence) from exc
+        return record(ctx, "assumptions", text, None, fp, attempts)
+    kind, text, tier = evaluate(ctx)
+    return record(ctx, kind, text, tier, fingerprint(ctx.root), attempts)
+
+def hook_done(ctx):
+    fp = fingerprint(ctx.root)
+    early = cached(ctx, fp)
+    if early is not None:
+        return early
+    if not acquire_lock(ctx):
+        return allow("NO VERDICT: hook budget exhausted while another check was running")
+    try:
+        fp = fingerprint(ctx.root)
+        early = cached(ctx, fp)
+        return early if early is not None else judge_hook(ctx, fp)
+    finally:
+        release_lock(ctx)
+
+def manual_done(ctx):
+    kind, text, tier = evaluate(ctx)
+    if kind != "green":
+        say(text)
+        return 1
+    green_report(ctx, tier, text)
+    try:
+        set_judged(ctx, fingerprint(ctx.root), "green")
+    except OSError:
+        pass
+    return 0
+
+def cmd_done(ctx):
+    if not ctx.hook:
+        return manual_done(ctx)
+    try:
+        return hook_done(ctx)
+    except Persist as exc:
+        return allow(persist_message(exc))
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return allow("NO VERDICT: the gate runner failed (%s); stop allowed without a verdict" % exc)
+
+def cmd_tier(ctx, name):
+    say("%s gates:" % name)
+    ensure_evidence(ctx)
+    tier = run_tier(ctx, name)
+    kind, text = tier_verdict(tier)
+    if name == "full":
+        try:
+            write_bundle(ctx, tier, {"status": "not run", "msg": ""}, kind or "green")
+        except OSError:
+            say("warning: evidence not written")
+    if kind:
+        say(text)
+        return 1
+    if not tier["declared"]:
+        say("%s: no gates declared" % name)
+        return 0
+    if tier["skipped"]:
+        say("%s: GREEN for what ran, %d gate(s) scoped out and UNEXECUTED" % (name, tier["skipped"]))
+    else:
+        say("%s: GREEN" % name)
+    return 0
+
+def cmd_product(ctx):
+    ensure_evidence(ctx)
+    prod = product_half(ctx)
+    say(prod["msg"])
+    return 0 if prod["status"] == "held" else 1
+
+def cmd_verify(argv):
+    args = argv[2:]
+    names = [a for a in args if not a.startswith("--")]
+    sub = names[0] if names else "done"
+    ctx = Ctx("--hook" in args)
+    install_signal_handlers()
+    if sub == "fingerprint":
+        print(fingerprint(ctx.root))
+        return 0
+    if sub == "product":
+        return cmd_product(ctx)
+    if sub in ("fast", "full"):
+        return cmd_tier(ctx, sub)
+    if sub == "done":
+        return cmd_done(ctx)
+    say("usage: verify {preflight|fast|full|done [--hook]|product|fingerprint}")
+    return 1
+
+def main(argv):
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(errors="backslashreplace")
+    cmd = argv[1] if len(argv) > 1 else ""
+    if cmd == "stdin":
+        return cmd_stdin()
+    if cmd == "baseline":
+        return cmd_baseline()
+    if cmd == "verify":
+        return cmd_verify(argv)
+    say("usage: state.py {stdin|baseline|verify ...}")
+    return 2
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

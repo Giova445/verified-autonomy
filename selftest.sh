@@ -156,6 +156,7 @@ chk "deny: pytest || true blocked"         "$(deny 'pytest -q || true')" "2"
 chk "deny: grep || true allowed"           "$(deny 'grep -c x f || true')" "0"
 chk "deny: reset --hard blocked"           "$(deny 'git reset --hard HEAD')" "2"
 chk "deny: ordinary command allowed"       "$(deny 'npm test')" "0"
+: > "$tmp/.claude/forbidden-trailers"
 chk "deny: commit with a co-author blocked"  "$(deny 'git commit -m x -m Co-Authored-By: a <a@b>')" "2"
 chk "deny: plain commit allowed"            "$(deny 'git commit -m fix')" "0"
 chk "deny: grepping for the trailer beside a commit allowed" "$(deny "git commit -m fix && git log --format=%B | grep -i co-authored-by:")" "0"
@@ -207,6 +208,8 @@ suite "discover"        python3 "$PLUGIN/bin/discover"        selftest
 suite "scope"           python3 "$PLUGIN/bin/scope"           selftest
 suite "commit-message"  python3 "$PLUGIN/hooks/commit-message.py" --self-test
 suite "inert-mask"      python3 "$PLUGIN/hooks/inert-mask.py" --self-test
+suite "push-targets"    python3 "$PLUGIN/hooks/push-targets.py" --self-test
+suite "deny-cases"      python3 "$PLUGIN/tests/deny-cases.py"
 suite "pin-check"       python3 "$PLUGIN/.github/ci/pin-check.py"               --self-test
 suite "trailer-check"   python3 "$PLUGIN/benchmark/gates/trailer-check.py"      --self-test
 suite "acceptance"      python3 "$PLUGIN/benchmark/gates/acceptance.py"         --self-test

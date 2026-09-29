@@ -36,7 +36,7 @@ EXPECTED_RULES = {"pip-unpinned", "npm-unpinned", "npx-floating", "go-latest",
 
 SKIP_MARKER = "pin-check: allow"
 
-SELF = frozenset({"benchmark/gates/pin-check.py", "benchmark/gates/corpus-pin.txt"})
+SELF = frozenset({".github/ci/pin-check.py"})
 
 def _inert_before(body):
     spans, quote, start, cut = [], None, 0, None

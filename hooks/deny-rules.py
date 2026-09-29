@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import importlib.util
 import json
+import fnmatch
 import os
 import posixpath
 import re
@@ -283,15 +284,31 @@ DATA_CMDS = frozenset("echo printf grep egrep fgrep rg ag ack git gh curl jq yq 
 SNAP_LONG = ("--updateSnapshot", "--update-snapshots", "--update-snapshot", "--snapshot-update")
 
 
-def secret_read(name, args):
-    if name not in READERS:
+def secret_patterns(root):
+    path = os.path.join(root or "", ".claude", "protected-files")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            globs = [l.strip() for l in fh if l.strip() and not l.lstrip().startswith("#")]
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return SECRET_RES
+    return [re.compile(fnmatch.translate(g)) for g in globs] or SECRET_RES
+
+
+def is_secret(arg, pats):
+    return any(p.search(arg) or p.match(posixpath.basename(arg)) for p in pats)
+
+
+def secret_read(name, args, pats):
+    if name not in READERS or not pats:
         return None
     pos = [a for a in args if not a.startswith("-")]
     if name in PATTERN_FIRST and not {"-e", "-f", "--regexp", "--file"} & set(args):
         pos = pos[1:]
     if name in DEST_LAST:
         pos = pos[:-1]
-    return next((a for a in pos if any(p.search(a) for p in SECRET_RES)), None)
+    return next((a for a in pos if is_secret(a, pats)), None)
 
 
 def rm_target(w, at_root, force):
@@ -471,8 +488,9 @@ def expanded(argv, env):
 
 
 def judge(cmd, stdin, ctx, depth):
+    pats = secret_patterns(ctx.root)
     for r in cmd.redirs:
-        if r.op == "<" and any(p.search(r.word.text) for p in SECRET_RES):
+        if r.op == "<" and pats and is_secret(r.word.text, pats):
             raise Deny("reading a secret file: " + r.word.text)
     argv = command_argv(cmd.words)
     record_writes(cmd, argv, stdin, ctx)
@@ -491,7 +509,7 @@ def judge(cmd, stdin, ctx, depth):
         return
     for script in shell_scripts(name, args, stdin):
         check(script, ctx.fork(), depth + 1)
-    secret = secret_read(name, args)
+    secret = secret_read(name, args, pats)
     if secret:
         raise Deny("reading a secret file: " + secret)
     if name == "git":

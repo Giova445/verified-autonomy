@@ -1,7 +1,7 @@
 {
   "name": "verified-autonomy",
   "description": "Refuses to let a coding agent stop while a changed repo fails its gates or its product contract; read-only turns cost nothing.",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "license": "MIT",
   "keywords": [
     "gates",

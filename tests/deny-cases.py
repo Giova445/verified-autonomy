@@ -61,6 +61,8 @@ REPO_FILES = {
     "badjson": {".claude/settings.json": "{not json"},
     "custom": {".claude/forbidden-trailers": "Signed-off-by\n"},
     "nobranches": {".claude/protected-branches": "# nothing is protected here\n"},
+    "secrets": {".claude/protected-files": "# built-in list\n"},
+    "secrets-custom": {".claude/protected-files": ".env.production\n"},
 }
 REPO_BRANCH = {"main": "main"}
 

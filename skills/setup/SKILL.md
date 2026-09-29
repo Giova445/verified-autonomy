@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Arms verified-autonomy in the current repo end to end, with no manual steps. Use when the repo has no .claude/gates.json or no .claude/acceptance.json, when the Stop hook says "no product expectations are declared", or when the user asks to set up, arm, install or "make this autonomous".
+description: Arms verified-autonomy in the current repo: installs the runner, arms the tests that pass, and writes the product outcomes the person or ticket states. Use when the user asks to set up or arm verified-autonomy, or when `./bin/verify` says "no product expectations are declared".
 ---
 
 # Setup
@@ -21,7 +21,7 @@ print((e or sorted(glob.glob(c+"/plugins/cache/%s/%s/*"%(k,k)),key=lambda p:[int
 git switch -c chore/arm-verified-autonomy && bash "$VA/kit/install.sh" .
 ```
 
-`$VA` is the version whose hooks are loaded (`installPath` in `installed_plugins.json`), else the
+`$VA` is the installed version (`installPath` in `installed_plugins.json`), else the
 highest cached. The installer arms gates from the commands that pass today; a `.new` beside an
 existing `gates.json` or `bin/verify` is merged by hand (keep every existing entry, then delete it).
 A command that fails on a clean checkout is inherited debt: leave it out, report it.
@@ -30,8 +30,9 @@ A command that fails on a clean checkout is inherited debt: leave it out, report
 
 `mkdir -p .claude/evidence && python3 "$VA/bin/discover" . > .claude/evidence/discover.json` prints facts
 only (scripts, Makefile/Procfile/compose commands, frameworks, pages, endpoints, e2e specs, docs);
-choose the start command yourself. Then read the README, `docs/`, open issues, recent PRs and the
-user's request: expectations live there.
+choose the start command yourself. Expectations come from the person and the ticket, not from
+you: take them from the user's request, open issues and the README, quote the source in each
+`expect`, and if none states what users must see, ask one question listing the journeys you propose.
 
 ## 3. Write the contract
 

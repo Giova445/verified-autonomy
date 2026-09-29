@@ -3,169 +3,61 @@ set -uo pipefail
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 PLUGIN="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 pass=0; fail=0
-chk(){ if [ "$2" = "$3" ]; then printf '  ok    %-46s (%s)\n' "$1" "$3"; pass=$((pass+1));
-       else printf '  FAIL  %-46s want=%s got=%s\n' "$1" "$3" "$2"; fail=$((fail+1)); fi; }
-deny(){ printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \
-  | CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/deny-dangerous.sh" >/dev/null 2>&1; echo $?; }
+chk(){ if [ "$2" = "$3" ]; then printf '  ok    %-52s (%s)\n' "$1" "$3"; pass=$((pass+1));
+       else printf '  FAIL  %-52s want=%s got=%s\n' "$1" "$3" "$2"; fail=$((fail+1)); fi; }
+verify(){ CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/bin/verify" "$@" 2>&1; }
 
 echo "self-test: $ROOT"
 
-tmp="$(mktemp -d)"; ( cd "$tmp" && git init -q . && git config user.email t@t && git config user.name t )
-CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
-chk "no gates.json -> stop hook stays out of the way" "$?" "0"
-out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
-printf '%s' "$out" | grep -q "verified-autonomy:setup" && r=hint || r="${out:+other}"
-chk "unarmed git repo -> one hint pointing at setup" "$r" "hint"
-nongit="$(mktemp -d)"; out="$(CLAUDE_PROJECT_DIR="$nongit" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
-chk "not a git repo -> no context injected" "${out:+nonempty}" ""
-rmdir "$nongit"
+chk "the plugin registers no hooks" "$(ls "$PLUGIN/hooks" | tr '\n' ' ')" "state.py "
 
-mkdir -p "$tmp/.claude"
-printf '{"full":[{"name":"probe","cmd":"exit 1"}]}' > "$tmp/.claude/gates.json"
-CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
-chk "red gate -> Stop hook exit 2 (refuses)" "$?" "2"
+tmp="$(mktemp -d)"
+( cd "$tmp" && git init -q . && git config user.email t@t && git config user.name t && mkdir -p .claude \
+  && echo a > app.txt && git add -A && git commit -qm init ) >/dev/null 2>&1
 
-rm -f "$tmp/.claude/.gate-attempts"
-printf '{"full":[{"name":"probe","cmd":"true"}]}' > "$tmp/.claude/gates.json"
-out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null 2>&1)"; rc=$?
+out="$(verify product)"; rc=$?
 printf '%s' "$out" | grep -q "no product expectations are declared" && r="$rc named" || r="$rc silent"
-chk "green gates, no contract -> refuses, says why" "$r" "2 named"
+chk "no contract -> product check fails and says why" "$r" "1 named"
 
-rm -f "$tmp/.claude/.gate-attempts"
-printf '{"outcomes":[{"name":"Search results","expect":"searching a name lists only matching items","check":"exit 1"}]}' > "$tmp/.claude/acceptance.json"
-out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null 2>&1)"; rc=$?
-printf '%s' "$out" | grep -q "Search results: searching a name lists only matching items" && r="$rc named" || r="$rc silent"
-chk "green gates, open expectation -> refuses, names it" "$r" "2 named"
-
-rm -f "$tmp/.claude/.gate-attempts"
-printf '{"outcomes":[{"name":"Search results","expect":"searching a name lists only matching items","check":"exit 0","control":"exit 1"}]}' > "$tmp/.claude/acceptance.json"
-out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null 2>&1)"; rc=$?
-printf '%s' "$out" | grep -q "1 product expectation(s) hold" && r="$rc reported" || r="$rc silent"
-chk "green gates, expectations hold -> allows" "$r" "0 reported"
-
-rm -f "$tmp/.claude/.gate-attempts"
 printf '{"full":[{"name":"probe","cmd":"exit 1"}]}' > "$tmp/.claude/gates.json"
-for i in 1 2 3; do echo "$i" > "$tmp/work.txt"; CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; done
-echo 4 > "$tmp/work.txt"
-out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null 2>&1)"
-printf '%s' "$out" | grep -q "Attempt limit reached (3/3)" && r=yes || r=no
-chk "three blocked stops -> blocked report, not a fourth retry" "$r" "yes"
-CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; a=$?
-echo 5 > "$tmp/work.txt"
-CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; b=$?
-chk "after the report the stop is allowed, then gating resumes once the repo changes" "$a $b" "0 2"
-rm -f "$tmp/work.txt" "$tmp/.claude/.gate-attempts" "$tmp/.claude/.gate-judged"
+out="$(verify done)"; rc=$?
+printf '%s' "$out" | grep -q "probe" && r="$rc named" || r="$rc silent"
+chk "red gate -> done fails and names the gate" "$r" "1 named"
 
-lp="$(mktemp -d)"
-( cd "$lp" && git init -q . && git config user.email t@t && git config user.name t && mkdir -p .claude \
-  && printf '{"full":[{"name":"red","cmd":"exit 1"}]}' > .claude/gates.json && echo a > a \
-  && git add -A && git commit -qm init ) >/dev/null 2>&1
-stops(){ local n="$1" change="$2" seq="" i; for i in $(seq 1 "$n"); do
-  [ "$change" = yes ] && echo "$i" >> "$lp/a"
-  CLAUDE_PROJECT_DIR="$lp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; seq="$seq$?"; done; printf '%s' "$seq"; }
-chk "unchanged repo: the loop ends at the first identical refusal" "$(stops 6 no)" "200000"
-rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-judged"
-chk "a repo changed before every stop still ends at the breaker" "$(stops 5 yes)" "22220"
-rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-judged"
-mkdir -p "$lp/.claude-flow"; seq=""
-for i in 1 2; do echo "$i" >> "$lp/.claude-flow/log"; echo "$i" > "$lp/agentdb.rvf"
-  CLAUDE_PROJECT_DIR="$lp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; seq="$seq$?"; done
-chk "agent-tooling writes between stops are not progress" "$seq" "20"
-rm -f "$lp/.claude/.gate-attempts" "$lp/.claude/.gate-judged"
-printf 'printf "run\\n" >> .claude/runs\n' > "$lp/.claude/count.sh"
-printf '{"full":[{"name":"count","cmd":"sh .claude/count.sh"}]}' > "$lp/.claude/gates.json"
-printf '{"outcomes":[{"name":"o","expect":"e","check":"exit 0","control":"exit 1"}]}' > "$lp/.claude/acceptance.json"
-rm -f "$lp/.claude/runs"
-for i in 1 2 3; do CLAUDE_PROJECT_DIR="$lp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; done
-a="$(grep -c run "$lp/.claude/runs")"
-echo more >> "$lp/a"
-CLAUDE_PROJECT_DIR="$lp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; rc=$?
-chk "green once, unchanged stops reuse it; a change runs the gates again" "$a $(grep -c run "$lp/.claude/runs") $rc" "1 2 0"
-find "$lp" -maxdepth 0 -exec rm -rf {} +
-rm -f "$tmp/.claude/.gate-attempts"
 printf '{"full":[{"name":"probe","cmd":"true"}]}' > "$tmp/.claude/gates.json"
-out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
-printf '%s' "$out" | grep -q "verified-autonomy" && r=yes || r=no
-chk "gates.json present -> context injected" "$r" "yes"
+printf '{"outcomes":[{"name":"Search results","expect":"searching a name lists only matching items","check":"exit 1"}]}' > "$tmp/.claude/acceptance.json"
+out="$(verify done)"; rc=$?
+printf '%s' "$out" | grep -q "Search results: searching a name lists only matching items" && r="$rc named" || r="$rc silent"
+chk "open expectation -> done fails and names it" "$r" "1 named"
 
-fc(){ printf '%s' "$2" > "$tmp/.claude/gates.json"; rm -rf "$tmp/.claude/evidence" "$tmp/.claude/.gate-attempts"
-      CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/bin/verify" done >/dev/null 2>&1
-      chk "$1" "$?" "1"; }
+printf '{"outcomes":[{"name":"Search results","expect":"searching a name lists only matching items","check":"exit 0","control":"exit 1"}]}' > "$tmp/.claude/acceptance.json"
+out="$(verify done)"; rc=$?
+printf '%s' "$out" | grep -q "1 product expectation(s) hold" && r="$rc reported" || r="$rc silent"
+chk "expectations hold -> done passes and reports it" "$r" "0 reported"
+
+printf 'printf "run\\n" >> .claude/runs\n' > "$tmp/.claude/count.sh"
+printf '{"full":[{"name":"count","cmd":"sh .claude/count.sh"}]}' > "$tmp/.claude/gates.json"
+for i in 1 2 3; do verify done >/dev/null; done
+chk "every run executes: nothing is cached" "$(grep -c run "$tmp/.claude/runs")" "3"
+
+fc(){ printf '%s' "$2" > "$tmp/.claude/gates.json"; verify done >/dev/null; chk "$1" "$?" "1"; }
 fc "unparseable config -> refuse"   '{"full":[{"name":"u","cmd":"exit 0"},]}'
 fc "empty full tier -> refuse"      '{"full":[]}'
 fc "placeholder gate -> refuse"     '{"full":[{"name":"u","cmd":"echo TODO"}]}'
-printf '{"full":[{"name":"u","cmd":"exit 0"}]}' > "$tmp/.claude/gates.json"
-rm -rf "$tmp/.claude/evidence" "$tmp/.claude/.gate-attempts"
-CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/bin/verify" done >/dev/null 2>&1
-chk "valid green config -> certifies" "$?" "0"
-
-( cd "$tmp" && git add -A >/dev/null 2>&1 && git commit -qm gates >/dev/null 2>&1 )
-mv "$tmp/.claude/gates.json" "$tmp/.claude/gates.bak"
-CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
-chk "tracked config deleted -> blocks" "$?" "2"
-mv "$tmp/.claude/gates.bak" "$tmp/.claude/gates.json"
-printf '{"full":[{"name":"u","cmd":"exit 1"}]}' > "$tmp/.claude/gates.json"
-mkdir -p "$tmp/bin"; printf '#!/bin/sh\nexit 0\n' > "$tmp/bin/verify"; chmod +x "$tmp/bin/verify"
-rm -f "$tmp/.claude/.gate-attempts"
-CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1
-chk "stubbed bin/verify ignored" "$?" "2"
-rm -rf "$tmp/bin"
 
 sc="$(mktemp -d)"; mkdir -p "$sc/.claude" "$sc/web" "$sc/api"
 ( cd "$sc" && git init -q . && git config user.email t@t && git config user.name t )
 printf '%s' '{"full":[{"name":"fe","cmd":"true","surface":["web/**"]},{"name":"be","cmd":"true","surface":["api/**"]}]}' > "$sc/.claude/gates.json"
+printf '{"outcomes":[{"name":"o","expect":"e","check":"exit 0","control":"exit 1"}]}' > "$sc/.claude/acceptance.json"
 echo x > "$sc/web/a.txt"; echo y > "$sc/api/b.txt"
 ( cd "$sc" && git add -A >/dev/null 2>&1 && git commit -qm init >/dev/null 2>&1 )
 echo c >> "$sc/web/a.txt"
 o="$(CLAUDE_PROJECT_DIR="$sc" bash "$PLUGIN/bin/verify" done 2>&1)"
 printf '%s' "$o" | grep -q "scoped out" && r=yes || r=no
-chk "scope: untouched gate is skipped" "$r" "yes"
+chk "scope: a gate whose surface is untouched is skipped" "$r" "yes"
 printf '%s' "$o" | grep -q "ALL GATES GREEN" && r=yes || r=no
 chk "scope: a scoped pass is not ALL GATES GREEN" "$r" "no"
 find "$sc" -maxdepth 0 -exec rm -rf {} +
-
-ss="$(mktemp -d)"
-( cd "$ss" && git init -q . && git config user.email t@t && git config user.name t && mkdir -p .claude \
-  && printf '{"full":[{"name":"probe","cmd":"true"}]}' > .claude/gates.json && echo a > app.txt \
-  && git add -A && git commit -qm init ) >/dev/null 2>&1
-printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" python3 "$PLUGIN/hooks/state.py" baseline >/dev/null 2>&1
-out="$(printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/stop-gate.sh" 2>&1)"; rc=$?
-chk "no contract, turn changed nothing -> stop allowed, silently" "$rc${out:+ said}" "0"
-echo b >> "$ss/app.txt"
-printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/stop-gate.sh" >/dev/null 2>&1
-chk "no contract, session changed the repo -> refuses" "$?" "2"
-printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/session-start.sh" >/dev/null 2>&1
-rm -f "$ss/.claude/.gate-attempts" "$ss/.claude/.gate-judged"
-printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/stop-gate.sh" >/dev/null 2>&1
-chk "a restart after compaction keeps the first baseline" "$?" "2"
-find "$ss" -maxdepth 0 -exec rm -rf {} +
-
-ro="$(mktemp -d)"
-( cd "$ro" && git init -q . && git config user.email t@t && git config user.name t && mkdir -p .claude \
-  && printf 'printf "run\\n" >> .claude/runs; exit 1\n' > .claude/red.sh \
-  && printf '{"full":[{"name":"red","cmd":"sh .claude/red.sh"}]}' > .claude/gates.json && echo a > a \
-  && git add -A && git commit -qm init ) >/dev/null 2>&1
-printf '{"session_id":"ro"}' | CLAUDE_PROJECT_DIR="$ro" python3 "$PLUGIN/hooks/state.py" baseline >/dev/null 2>&1
-seq=""; for i in 1 2 3; do printf '{"session_id":"ro"}' | CLAUDE_PROJECT_DIR="$ro" bash "$PLUGIN/hooks/stop-gate.sh" >/dev/null 2>&1; seq="$seq$?"; done
-chk "a read-only session on a red repo stops at once, running no gate" "$seq $(cat "$ro/.claude/runs" 2>/dev/null | wc -l | tr -d ' ')" "000 0"
-find "$ro" -maxdepth 0 -exec rm -rf {} +
-
-chk "deny: push to main"                   "$(deny 'git push origin main')" "2"
-chk "deny: force push own branch allowed"  "$(deny 'git push --force origin feature/x')" "0"
-chk "deny: pytest || true blocked"         "$(deny 'pytest -q || true')" "2"
-chk "deny: grep || true allowed"           "$(deny 'grep -c x f || true')" "0"
-chk "deny: reset --hard blocked"           "$(deny 'git reset --hard HEAD')" "2"
-chk "deny: ordinary command allowed"       "$(deny 'npm test')" "0"
-: > "$tmp/.claude/forbidden-trailers"
-chk "deny: commit with a co-author blocked"  "$(deny 'git commit -m x -m Co-Authored-By: a <a@b>')" "2"
-chk "deny: plain commit allowed"            "$(deny 'git commit -m fix')" "0"
-chk "deny: grepping for the trailer beside a commit allowed" "$(deny "git commit -m fix && git log --format=%B | grep -i co-authored-by:")" "0"
-
-out="$(VERIFIED_AUTONOMY_UNATTENDED=1 CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
-a="$(printf '%s' "$out" | grep -c '<unattended>')"
-out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
-b="$(printf '%s' "$out" | grep -c '<unattended>')"
-chk "unattended guidance only when opted in" "$a $b" "1 0"
 
 inst="$tmp/inst"; mkdir -p "$inst"
 ( cd "$inst" && git init -q . && git config user.email t@t && git config user.name t \
@@ -174,7 +66,6 @@ inst="$tmp/inst"; mkdir -p "$inst"
 chk "installer adds only .gitignore lines not already ignored" "$(tail -n +2 "$inst/.gitignore" | tr '\n' ' ')" ""
 bash "$inst/.claude/selftest.sh" >/dev/null 2>&1
 chk "the installed self-test passes in the installed layout" "$?" "0"
-
 find "$tmp" -maxdepth 0 -exec rm -rf {} +
 
 suite() {
@@ -183,33 +74,28 @@ suite() {
   out="$("$@" 2>&1)"; rc=$?
   n="$(printf '%s' "$out" | grep -oE '\([0-9]+ checks' | tail -1 | tr -dc '0-9')"
   if [ "$rc" -eq 0 ] && [ -n "$n" ]; then
-    printf '  ok    %-46s (%s checks)\n' "$label" "$n"; pass=$((pass+1))
+    printf '  ok    %-52s (%s checks)\n' "$label" "$n"; pass=$((pass+1))
   elif [ "$rc" -eq 2 ] || [ "$rc" -eq 75 ]; then
-    printf '  NOTRUN %-45s exit=%s - could not run; nothing verified\n' "$label" "$rc"; fail=$((fail+1))
+    printf '  NOTRUN %-51s exit=%s - could not run; nothing verified\n' "$label" "$rc"; fail=$((fail+1))
     printf '%s\n' "$out" | head -2 | sed 's/^/          /'
   else
-    printf '  FAIL  %-46s exit=%s counted=%s\n' "$label" "$rc" "${n:-none}"; fail=$((fail+1))
+    printf '  FAIL  %-52s exit=%s counted=%s\n' "$label" "$rc" "${n:-none}"; fail=$((fail+1))
     printf '%s\n' "$out" | grep -E 'FAIL|NOT RUN' | sed 's/^/          /'
   fi
 }
 
 leak="$(git -C "$PLUGIN" grep -n -I -E '(/Users/|/home/)[A-Za-z0-9_.-]+/' -- . ':!selftest.sh' 2>/dev/null | head -3)"
 chk "no absolute machine paths in tracked files" "${leak:-none}" "none"
-chk "skills: only gate and setup ship" "$(ls "$PLUGIN/skills" | tr '\n' ' ')" "gate setup "
+chk "skills: only prove and setup ship" "$(ls "$PLUGIN/skills" | tr '\n' ' ')" "prove setup "
 chk "docs: only how-it-works ships" "$(ls "$PLUGIN/docs" | tr '\n' ' ')" "how-it-works.md "
 missing=""; for v in $(sed -n '/^## Optional settings/,/^## Updating/p' "$PLUGIN/README.md" | grep -oE '`[A-Z][A-Z_]+' | tr -d '`' | sort -u); do grep -rqw "$v" "$PLUGIN/bin" "$PLUGIN/hooks" "$PLUGIN/benchmark/gates" || missing="$missing $v"; done
 chk "every setting the README names exists in the code" "${missing:-none}" "none"
 
 echo
-suite "stop-sequences"  bash    "$PLUGIN/tests/stop-sequences.sh"
 suite "arm"             bash    "$PLUGIN/bin/arm"             selftest
 suite "install"         bash    "$PLUGIN/kit/install.sh"      --self-test
 suite "discover"        python3 "$PLUGIN/bin/discover"        selftest
 suite "scope"           python3 "$PLUGIN/bin/scope"           selftest
-suite "commit-message"  python3 "$PLUGIN/hooks/commit-message.py" --self-test
-suite "inert-mask"      python3 "$PLUGIN/hooks/inert-mask.py" --self-test
-suite "push-targets"    python3 "$PLUGIN/hooks/push-targets.py" --self-test
-suite "deny-cases"      python3 "$PLUGIN/tests/deny-cases.py"
 suite "pin-check"       python3 "$PLUGIN/.github/ci/pin-check.py"               --self-test
 suite "trailer-check"   python3 "$PLUGIN/benchmark/gates/trailer-check.py"      --self-test
 suite "acceptance"      python3 "$PLUGIN/benchmark/gates/acceptance.py"         --self-test

@@ -1,34 +1,35 @@
 # Verified Autonomy
 
-A Claude Code plugin that makes "done" something the harness proves, not something the agent
-claims. When an agent tries to end a turn in a repo it changed, a `Stop` hook runs the repo's
-engineering gates and its product contract, and refuses while either is red. The refusal names
-each open expectation in the user's words. A turn that only read code, or changed nothing, is
-not judged: no gate runs and no app starts. What it does and does not protect against is in
+A small tool that proves a change works for its user before you open a PR. It runs the repo's
+tests that passed when the repo was armed, then the product outcomes a person declared, each
+checked against the running app (a real browser, an HTTP call, or the CLI). It runs no hooks:
+nothing happens until you or the agent run it, normally once before a PR and in CI.
+
+It used to enforce this on every turn through a Stop hook. Measured on real sessions, that cost
+hours, looped, refused agents for work they did not own, and caught no real product defect, so
+it was removed. What is left is the part other tools do not do: declared, user-visible outcomes,
+each with a control that must fail, checked against the running app. Details and limits:
 [docs/how-it-works.md](docs/how-it-works.md).
 
 ## Install
-
-In Claude Code:
 
 ```
 /plugin marketplace add Giova445/verified-autonomy
 /plugin install verified-autonomy@verified-autonomy
 ```
 
-Restart Claude Code. In a repo that is not armed no gate runs, though the deny rules still
-apply. Then, in the repo, say:
+Then, in a repo, say "set up verified-autonomy". The `setup` skill arms the test commands that
+pass today, writes `.claude/acceptance.json` from the outcomes you or the ticket state, proves
+each against the running app, and commits on a branch. It never merges.
 
-> set up verified-autonomy
+Before a PR, say "prove it" (the `prove` skill), or run:
 
-The `setup` skill works on a branch. It arms only lint, typecheck and test commands that pass
-today, writes `.claude/acceptance.json` (the journeys a user would call the product), proves
-each against the running product, and commits. It never merges.
+```bash
+./bin/verify done      # tests, then product outcomes
+./bin/verify product   # product outcomes only
+```
 
-## What the agent sees
-
-The `Stop` hook runs `bin/verify done`, and the agent can run `./bin/verify done` itself. A
-failed gate prints its command, exit code and last lines. Each product outcome gets one verdict:
+## Verdicts
 
 | Verdict | Meaning |
 |---|---|
@@ -41,14 +42,7 @@ failed gate prints its command, exit code and last lines. Each product outcome g
 | `WRONG BUILD` | the environment runs another commit |
 | `REFUSED` | the outcome lacks a name, an `expect` or a `check` |
 
-After three refusals in a row the agent is asked for a blocked report, then the stop is allowed.
-
-## What it writes
-
-`.claude/gates.json` lists the engineering gates, each already passing once in the repo. A gate
-with a `surface` (a list of globs) runs only when the diff touches it.
-
-`.claude/acceptance.json`, the product contract:
+## The contract
 
 ```json
 {
@@ -67,31 +61,24 @@ with a `surface` (a list of globs) runs only when the diff touches it.
 }
 ```
 
-- `start`, `ready`: the harness starts the app on a free `$PORT`, waits for `ready`, runs the
-  outcomes, and stops the app. Its log is `.claude/evidence/server-<env>.log`.
+- `start`, `ready`: the harness starts the app on a free `$PORT` (with
+  `BASE_URL=http://localhost:$PORT`), waits for `ready`, runs the outcomes, and stops the app.
 - `check` exits 0 when the outcome holds and 75 when it cannot run. Any other exit is a failure.
-- `control` (optional) is a variant that must fail, proving the check can tell broken from
-  working.
+- `control` is a variant that must fail, proving the check can tell broken from working.
 - `needs` lists environment variables an outcome or environment requires.
-- `drive.mjs` drives a real browser from a JSON list of steps and saves a screenshot to
-  `.claude/evidence/shots/`.
-- A remote environment can declare a `provenance` probe that prints the deployed commit.
+- `drive.mjs` drives a real browser from a JSON list of steps that wait for the page; a plain
+  Playwright test or `curl -fsS` works just as well.
 
 ## Optional settings
 
 | Setting | Effect |
 |---|---|
-| `.claude/protected-branches` | branches agents may not push or merge into (default `main`, `master`) |
-| `GATE_MAX_BLOCKS` | refusals before the blocked report (default 3) |
-| `.claude/protected-files` | opt-in: files agents may not read, one glob per line (empty file means `.env*`, ssh keys, cloud and package-registry credentials) |
-| `.claude/forbidden-trailers` | opt-in: commit trailers to refuse, one per line (empty file means `Co-Authored-By`) |
-| `GATE_TIMEOUT`, `VERIFY_BUDGET` | seconds for one gate (default 300) and for a whole stop (default 800); past them the verdict is NO VERDICT |
+| `GATE_TIMEOUT` | seconds for one test gate (default 300); past it the verdict is NO VERDICT |
 | `ACCEPT_TIMEOUT`, `ACCEPT_READY_TIMEOUT`, `ACCEPT_BUDGET` | seconds for one check (120), for the app to become ready (120), for the whole contract (600) |
 | `ACCEPT_NAV_TIMEOUT` | milliseconds `drive.mjs` waits for a page to load (default 30000) |
-| `VERIFY_CACHE=0` | judge even when nothing changed since the last verdict |
 | `VERIFY_SCOPE=0` | run gates whose surface the diff does not touch |
 | `PLAYWRIGHT_PATH` | where `drive.mjs` finds Playwright when it is not in the repo |
-| `VERIFIED_AUTONOMY_UNATTENDED=1` | adds guidance against ending a turn early |
+| `.claude/forbidden-trailers` | opt-in: commit trailers the `co-author` gate refuses, one per line |
 
 ## Updating
 
@@ -102,24 +89,6 @@ for d in ~/.claude*/; do
   CLAUDE_CONFIG_DIR="$d" claude plugin update verified-autonomy@verified-autonomy
 done
 ```
-
-Restart Claude Code. To refresh a repo's copy of the runner, say "set up verified-autonomy"
-again. It keeps every existing gate and outcome.
-
-## Troubleshooting
-
-| You see | Meaning | Do |
-|---|---|---|
-| `no product expectations are declared` | the repo has no `.claude/acceptance.json` | say "set up verified-autonomy" |
-| `REFUSING TO CERTIFY` | `.claude/gates.json` is unreadable, empty, or holds a placeholder command | fix the file |
-| `CANNOT RUN` | the check exited 75 or the app never became ready | read `.claude/evidence/server-<env>.log`; fix `start` and `ready` |
-| `BLOCKED` | a variable named in `needs` is not set | set it |
-| `WRONG BUILD` | the environment runs a different commit | deploy this commit, then re-run |
-| asked for a blocked report | three refusals in a row | the agent writes it; the next stop is allowed |
-| a stop is allowed and no gate ran | nothing changed since the turn began or since the last verdict | none; gates run again when the repo changes |
-| a routine command is blocked | a deny rule matched | the message names the rule; push a feature branch, not a protected one |
-
-Superpowers teaches an agent good process. This plugin only checks the result. Run both.
 
 ## License
 

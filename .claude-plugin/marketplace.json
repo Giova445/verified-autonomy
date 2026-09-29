@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "verified-autonomy",
-  "description": "Refuses to let a coding agent stop while a changed repo fails its gates or its product contract; read-only turns cost nothing.",
+  "description": "Proves a change works for its user before a PR: declared outcomes checked against the running app, each with a control that must fail. No hooks.",
   "owner": {
     "name": "Giova445",
     "url": "https://github.com/Giova445"
@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "verified-autonomy",
-      "description": "Refuses to let a coding agent stop while a changed repo fails its gates or its product contract; read-only turns cost nothing.",
+      "description": "Proves a change works for its user before a PR: declared outcomes checked against the running app, each with a control that must fail. No hooks.",
       "source": "./",
       "category": "workflow"
     }

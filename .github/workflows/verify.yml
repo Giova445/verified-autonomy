@@ -33,40 +33,23 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          cat > "$RUNNER_TEMP/probe.py" <<'PY'
-          import socket, sys, time
-          slow = 0
-          for label, f in (("getfqdn(127.0.0.1)", lambda: socket.getfqdn("127.0.0.1")), ("getfqdn()", lambda: socket.getfqdn())):
-              t = time.time(); r = f(); d = time.time() - t
-              print("   %-20s %6.2fs %r" % (label, d, r), flush=True)
-              slow += d > 2
-          sys.exit(1 if slow else 0)
-          PY
-          probe() { echo "probe after: $1"; python3 "$RUNNER_TEMP/probe.py"; }
-          echo "hostname=$(hostname) short=$(hostname -s)"; cat /etc/hosts | grep -v '^#'
-          probe "nothing"
-          echo "::group::hosts entry"
-          echo "127.0.0.1 $(hostname) $(hostname -s)" | sudo tee -a /etc/hosts
-          probe "hosts entry" && fixed=hosts
+          bounded() { perl -e 'alarm 12; exec @ARGV' "$@"; echo "   rc=$? (142 = still stalled after 12 s)"; }
+          fq() { bounded python3 -c "import socket,time; t=time.time(); r=socket.getfqdn('127.0.0.1'); print('   getfqdn(127.0.0.1) %.2fs %r' % (time.time()-t, r))"; }
+          iface=$(route -n get default | awk '/interface:/{print $2}'); svc=$(networksetup -listallhardwareports | awk -v d="$iface" '/Hardware Port/{p=substr($0,16)} /Device: /{if($2==d)print p}')
+          echo "iface=$iface service=$svc"; networksetup -getdnsservers "$svc"; scutil --dns | grep -E "nameserver|domain|resolver"
+          echo "::group::packets during a stalled reverse lookup"
+          sudo tcpdump -i "$iface" -n -l -tttt -c 60 'port 53 or port 5353' > "$RUNNER_TEMP/dump.txt" 2>&1 & tp=$!
+          sleep 1; fq; sleep 1; sudo kill $tp 2>/dev/null; sleep 1; head -40 "$RUNNER_TEMP/dump.txt"
           echo "::endgroup::"
-          if [ -z "$fixed" ]; then
-            echo "::group::flush resolver"
-            sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder; sleep 2
-            probe "flush + HUP mDNSResponder" && fixed=flush
-            echo "::endgroup::"
-          fi
-          if [ -z "$fixed" ]; then
-            echo "::group::scutil hostname"
-            sudo scutil --set HostName localhost; sudo scutil --set LocalHostName localhost; sudo scutil --set ComputerName localhost
-            probe "hostname localhost" && fixed=scutil
-            echo "::endgroup::"
-          fi
-          echo "remedy that worked: ${fixed:-none}"
+          echo "::group::remedy: dns 127.0.0.1"
+          sudo networksetup -setdnsservers "$svc" 127.0.0.1; fq
+          echo "::endgroup::"
+          echo "::group::remedy: dns 1.1.1.1"
+          sudo networksetup -setdnsservers "$svc" 1.1.1.1 8.8.8.8; fq
+          echo "::endgroup::"
+          sudo networksetup -setdnsservers "$svc" empty
           echo "::group::product-live"
           bash tests/product-live.sh 2>&1 | while IFS= read -r l; do printf '[%4ss] %s\n' "$SECONDS" "$l"; done
-          echo "::endgroup::"
-          echo "::group::acceptance self-test"
-          python3 benchmark/gates/acceptance.py --self-test | grep -E "FAIL|SELF-TEST"
           echo "::endgroup::"
       - name: Self-test
         if: runner.os != 'macOS'

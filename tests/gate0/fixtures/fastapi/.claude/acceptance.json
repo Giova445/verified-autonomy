@@ -1,0 +1,24 @@
+{
+  "environments": {
+    "local": {
+      "start": "python3 -m uvicorn app.main:app --host 127.0.0.1 --port $PORT",
+      "ready": "/health"
+    }
+  },
+  "outcomes": [
+    {
+      "name": "search lists only the matching customer's orders",
+      "expect": "Asking the orders API for a customer's name returns that customer's orders and no one else's",
+      "env": "local",
+      "check": "python3 .claude/checks/orders_api.py search \"$BASE_URL\" alice \"Alice Nguyen\"",
+      "control": "python3 .claude/checks/orders_api.py search \"$BASE_URL\" zed \"Alice Nguyen\""
+    },
+    {
+      "name": "an order id finds its order or is not found",
+      "expect": "Asking for order 1002 returns Bob Ferreira's order, and asking for an order that does not exist is a 404",
+      "env": "local",
+      "check": "python3 .claude/checks/orders_api.py detail \"$BASE_URL\" 1002 200 \"Bob Ferreira\" && python3 .claude/checks/orders_api.py detail \"$BASE_URL\" 9999 404",
+      "control": "python3 .claude/checks/orders_api.py detail \"$BASE_URL\" 9999 200"
+    }
+  ]
+}

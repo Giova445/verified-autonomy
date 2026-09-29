@@ -1,0 +1,25 @@
+{
+  "environments": {
+    "local": {
+      "build": "CIRCLE_NODE_TOTAL=1 npm run build",
+      "start": "npm run start -- -p $PORT",
+      "ready": "/"
+    }
+  },
+  "outcomes": [
+    {
+      "name": "search narrows the orders list",
+      "expect": "Typing a customer's name into Search lists that customer's orders and no one else's",
+      "env": "local",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/search-narrows.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/search-narrows-noop.json"
+    },
+    {
+      "name": "a search with no match says so",
+      "expect": "Typing a name nobody has ordered under empties the list and shows a message that names what was typed",
+      "env": "local",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/search-empty.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/search-empty-silent.json"
+    }
+  ]
+}

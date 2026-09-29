@@ -1,0 +1,5 @@
+[
+  { "visible": ".order", "timeout": 10000 },
+  { "fill": { "selector": "#search", "value": "zzz" } },
+  { "hidden": "#empty", "timeout": 1500 }
+]

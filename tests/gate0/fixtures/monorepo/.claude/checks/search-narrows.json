@@ -1,0 +1,7 @@
+[
+  { "visible": ".order", "timeout": 10000 },
+  { "count": { "selector": ".order", "equals": 5 } },
+  { "fill": { "selector": "#search", "value": "alice" } },
+  { "count": { "selector": ".order", "equals": 2 } },
+  { "count": { "selector": ".order:not(:has-text(\"Alice Nguyen\"))", "equals": 0 } }
+]

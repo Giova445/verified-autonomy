@@ -1,0 +1,5 @@
+[
+  { "visible": ".order", "timeout": 10000 },
+  { "fill": { "selector": "#search", "value": "alice" } },
+  { "count": { "selector": ".order", "equals": 5 }, "timeout": 1500 }
+]

@@ -1,0 +1,14 @@
+{
+  "name": "orders-nextjs",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "build": "next build --webpack",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "16.3.7",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}

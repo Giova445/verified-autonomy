@@ -1,0 +1,25 @@
+{
+  "environments": {
+    "local": {
+      "build": "cd apps/web && npm run build",
+      "start": "cd apps/web && npm run start",
+      "ready": "/"
+    }
+  },
+  "outcomes": [
+    {
+      "name": "search narrows the orders list",
+      "expect": "Typing a customer's name into Search lists that customer's orders and no one else's",
+      "env": "local",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/search-narrows.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/search-narrows-noop.json"
+    },
+    {
+      "name": "the total follows the search",
+      "expect": "The total under the list adds up the orders shown: $880 for everyone, $515 after searching Alice",
+      "env": "local",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/total-follows-search.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/total-stays-put.json"
+    }
+  ]
+}

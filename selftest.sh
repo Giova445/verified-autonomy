@@ -46,6 +46,41 @@ out="$(VERIFY_MEMORY_MB=100 verify full)"
 printf '%s' "$out" | grep -q "during gate 'hog', over the 100 MB budget" && r=named || r="silent: $(printf '%s' "$out" | grep memory)"
 chk "memory: a step over VERIFY_MEMORY_MB is named" "$r" "named"
 
+rl="$(mktemp -d)"; mkdir -p "$rl/.claude"
+( cd "$rl" && git init -q . && git config user.email t@t && git config user.name t && echo a > app.txt && git add -A && git commit -qm init ) >/dev/null 2>&1
+printf '{"full":[{"name":"nap","cmd":"sleep 1"}]}' > "$rl/.claude/gates.json"
+printf '{"outcomes":[{"name":"Search results","expect":"searching a name lists only matching items","check":"exit 0","control":"exit 1"}]}' > "$rl/.claude/acceptance.json"
+rverify(){ CLAUDE_PROJECT_DIR="$rl" bash "$PLUGIN/bin/verify" "$@" 2>&1; }
+runlog="$rl/.claude/evidence/runs.jsonl"
+rec(){ python3 - "$runlog" "$1" "$2" <<'PY'
+import datetime, json, sys
+rec = json.loads(open(sys.argv[1]).read().splitlines()[int(sys.argv[2])])
+print(eval(sys.argv[3]))
+PY
+}
+rverify done >/dev/null; rc=$?
+chk "run log: one run appends exactly one line" "$(wc -l < "$runlog" | tr -d ' ')" "1"
+chk "run log: the line holds the declared fields" "$(rec 0 '" ".join(sorted(rec))')" "commit exit_code gates peak_memory_mb product started_at subcommand tree verdict wall_ms"
+chk "run log: it records the exit code, verdict and subcommand" "$rc $(rec 0 'rec["verdict"] + " " + rec["subcommand"]')" "0 green done"
+chk "run log: commit is HEAD and tree is the fingerprint" "$(rec 0 'rec["commit"] + " " + rec["tree"]')" "$(git -C "$rl" rev-parse HEAD) $(rverify fingerprint)"
+chk "run log: started_at is a UTC ISO time" "$(rec 0 'datetime.datetime.fromisoformat(rec["started_at"]).utcoffset() == datetime.timedelta(0)')" "True"
+chk "run log: the gate and the product verdicts are this run's" "$(rec 0 '"%s %s %s | %s %s" % (rec["gates"][0]["name"], rec["gates"][0]["exit_code"], rec["gates"][0]["skipped"], rec["product"]["status"], [(o["name"], o["verdict"]) for o in rec["product"]["outcomes"]])')" "nap 0 False | held [('Search results', 'holds')]"
+chk "run log: wall_ms is plausible for a gate that sleeps 1 s" "$(rec 0 '1000 <= rec["gates"][0]["duration_ms"] <= rec["wall_ms"] < 10000')" "True"
+chk "run log: peak memory is a measured number" "$(rec 0 'type(rec["peak_memory_mb"]).__name__ + " " + str(rec["peak_memory_mb"] > 0)')" "int True"
+first="$(head -1 "$runlog")"
+printf '{"full":[{"name":"nap","cmd":"exit 3"}]}' > "$rl/.claude/gates.json"
+rverify done >/dev/null; rc=$?
+chk "run log: a second run appends a second line and keeps the first" "$(wc -l < "$runlog" | tr -d ' ') $([ "$(head -1 "$runlog")" = "$first" ] && echo kept)" "2 kept"
+chk "run log: a red run logs exit code 1, verdict red and the gate's exit 3" "$rc $(rec 1 '"%s %s %s" % (rec["exit_code"], rec["verdict"], rec["gates"][0]["exit_code"])')" "1 1 red 3"
+chk "run log: a run that skips the product check logs none, not an older product.json" "$(rec 1 'rec["product"]')" "{'status': 'not run', 'outcomes': []}"
+VERIFY_MEMORY_MB=0 rverify full >/dev/null
+chk "run log: with the meter off, peak memory is null" "$(rec 2 'rec["peak_memory_mb"]')" "None"
+rm -f "$runlog"; mkdir "$runlog"
+printf '{"full":[{"name":"ok","cmd":"true"}]}' > "$rl/.claude/gates.json"
+out="$(rverify full)"; rc=$?
+chk "run log: an unwritable log warns in one line and does not change the run" "$rc $(printf '%s\n' "$out" | grep -c 'run log not written')" "0 1"
+find "$rl" -maxdepth 0 -exec rm -rf {} +
+
 fc(){ printf '%s' "$2" > "$tmp/.claude/gates.json"; verify done >/dev/null; chk "$1" "$?" "1"; }
 fc "unparseable config -> refuse"   '{"full":[{"name":"u","cmd":"exit 0"},]}'
 fc "empty full tier -> refuse"      '{"full":[]}'
@@ -63,6 +98,8 @@ printf '%s' "$o" | grep -q "scoped out" && r=yes || r=no
 chk "scope: a gate whose surface is untouched is skipped" "$r" "yes"
 printf '%s' "$o" | grep -q "ALL GATES GREEN" && r=yes || r=no
 chk "scope: a scoped pass is not ALL GATES GREEN" "$r" "no"
+runlog="$sc/.claude/evidence/runs.jsonl"
+chk "run log: a scoped-out gate is logged as skipped, with no exit code" "$(rec 0 '" | ".join("%s %s %s" % (g["name"], g["exit_code"], g["skipped"]) for g in rec["gates"])')" "fe 0 False | be None True"
 find "$sc" -maxdepth 0 -exec rm -rf {} +
 
 inst="$tmp/inst"; mkdir -p "$inst"

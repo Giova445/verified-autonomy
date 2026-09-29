@@ -36,7 +36,7 @@ Before a PR, say "prove it" (the `prove` skill), or run:
 | `holds` | the check passed, and its control, if any, failed |
 | `FAILS` | the check ran and the product did not do it |
 | `NOT PROVEN` | the control passed too, so the check cannot tell broken from working |
-| `CANNOT RUN` | the check exited 75, or the app would not start |
+| `CANNOT RUN` | the check exited 75, the app would not start, or the app stopped during the run |
 | `BLOCKED` | an outcome declares a credential in `needs` and it is not set |
 | `NO VERDICT` | the check ran out of time |
 | `WRONG BUILD` | the environment runs another commit |
@@ -63,6 +63,10 @@ Before a PR, say "prove it" (the `prove` skill), or run:
 
 - `start`, `ready`: the harness starts the app on a free `$PORT` (with
   `BASE_URL=http://localhost:$PORT`), waits for `ready`, runs the outcomes, and stops the app.
+  `start` stays in the foreground: the harness watches that process, and an outcome it finds
+  dead is CANNOT RUN, never FAILS or holds. A port already answering before `start` is CANNOT
+  RUN too, unless the environment declares `"reuse": true`. Environments with no `start`, or
+  with `reuse`, are not watched.
 - `build`: optional, run before `start`. It is skipped when a gate that just passed ran the same
   command, or when this exact tree was already built. A production build (`build`, then the
   production `start`) uses a fraction of a dev server's memory; prefer it.

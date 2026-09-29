@@ -1,0 +1,16 @@
+{
+  "outcomes": [
+    {
+      "name": "list --search prints only that customer's orders",
+      "expect": "Running `orders list --search alice` prints Alice Nguyen's two orders, one per line, and no other customer's",
+      "check": "sh .claude/checks/list.sh alice 2",
+      "control": "sh .claude/checks/list.sh alice 5"
+    },
+    {
+      "name": "total adds up the orders it is given",
+      "expect": "Running `orders total` prints Total: 880.00, and with `--search alice` prints Total: 515.00",
+      "check": "sh .claude/checks/total.sh '' 'Total: 880.00' && sh .claude/checks/total.sh alice 'Total: 515.00'",
+      "control": "sh .claude/checks/total.sh alice 'Total: 880.00'"
+    }
+  ]
+}

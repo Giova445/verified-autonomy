@@ -188,7 +188,7 @@ def build(env, root, name, extra, values, left):
             fh.write(key + "\n")
     return True, "built"
 
-def boot(env, root, name, extra, left):
+def boot(env, root, name, extra, left, procs):
     if not env.get("start"):
         return True, ""
     if not env.get("ready"):
@@ -203,10 +203,15 @@ def boot(env, root, name, extra, left):
     built = build(env, root, name, extra, values, left)
     if not built[0]:
         return built
+    if not env.get("reuse") and answering(extra["PORT"]):
+        return False, ("something is accepting connections on port %s just before `start`, so `start` could not bind it and "
+                       "whatever answers would be checked instead of this build. Stop it, or declare \"reuse\": true "
+                       "if that is this build" % extra["PORT"])
     with open(os.path.join(root, EVIDENCE, "server-%s.log" % clean(name)), "w") as log:
         p = subprocess.Popen(start, shell=True, cwd=root, stdin=subprocess.DEVNULL, stdout=log,
                              stderr=subprocess.STDOUT, env=dict(os.environ, **extra), start_new_session=True)
     SERVERS.append(p)
+    procs[name] = p
     LIVE.add(p.pid)
     record_servers(root)
     wait = min(limit("ACCEPT_READY_TIMEOUT", 120), left())
@@ -226,10 +231,17 @@ def bring_up(name, env, ctx):
             s.bind(("127.0.0.1", 0))
             port = int(env.get("port") or s.getsockname()[1])
         extra = {"PORT": str(port), "BASE_URL": "http://localhost:%d" % port}
-    up = boot(env, ctx["root"], name, extra, ctx["left"])
+    up = boot(env, ctx["root"], name, extra, ctx["left"], ctx["procs"])
     if extra and up[0]:
         extra = dict(extra, BASE_URL=answering(extra["PORT"]) or extra["BASE_URL"])
     ctx["resolved"][name] = (up, provenance(env, ctx["root"], extra) if up[0] else None, extra)
+
+def stopped(ctx, name):
+    p = ctx["procs"].get(name)
+    if p is None or p.poll() is None:
+        return None
+    how = "was killed by signal %d" % -p.returncode if p.returncode < 0 else "exited %d" % p.returncode
+    return "its `start` %s (see %s)" % (how, os.path.join(EVIDENCE, "server-%s.log" % clean(name)))
 
 def malformed(o):
     if not isinstance(o, dict):
@@ -263,6 +275,9 @@ def judge(o, ctx, shot, log):
         return res("CANNOT RUN", "environment '%s' did not come up: %s" % (name, up[1]))
     if not prov[0]:
         return res("WRONG BUILD", "environment '%s': %s" % (name, prov[1]))
+    gone = stopped(ctx, name)
+    if gone:
+        return res("CANNOT RUN", "environment '%s' stopped before this outcome ran: %s, so there was no app to check" % (name, gone))
     values = dict(env.get("vars") or {}, port=extra.get("PORT", ""), base_url=extra.get("BASE_URL", ""))
     used = [0]
 
@@ -273,6 +288,9 @@ def judge(o, ctx, shot, log):
         return code, tail(out)
 
     code, said = attempt("check", o["check"], {"ACCEPT_SHOT": shot})
+    gone = stopped(ctx, name)
+    if gone:
+        return res("CANNOT RUN", "the app stopped during the check (environment '%s': %s), so nothing was learned about the deliverable%s" % (name, gone, said))
     if code is None:
         return res("NO VERDICT", "check still running at %ds" % used[0])
     if code == CANNOT_RUN:
@@ -335,7 +353,7 @@ def report_run(root, results_path):
     os.makedirs(os.path.join(root, EVIDENCE, "shots"), exist_ok=True)
     reap_stale(root)
     budget, began = limit("ACCEPT_BUDGET", 600), time.time()
-    ctx = {"envs": envs, "root": root, "resolved": {}, "budget": int(budget), "left": lambda: began + budget - time.time()}
+    ctx = {"envs": envs, "root": root, "resolved": {}, "procs": {}, "budget": int(budget), "left": lambda: began + budget - time.time()}
     print("deliverable contract: %d outcome(s)\n" % len(outcomes))
     results = []
     for o, slug in zip(outcomes, slugs(outcomes, envs)):
@@ -483,7 +501,7 @@ def selftest():
     chk("a lone all-digit short sha that prefixes HEAD is a revision; a lone date is not",
         revision("running 1234567", fake) == "1234567" and revision('{"built":"20260928"}', fake) is None)
     with socket.socket() as srv:
-        srv.bind(("127.0.0.1", 0)); srv.listen(1)
+        srv.bind(("127.0.0.1", 0)); srv.listen(16)
         base, ok = answering(srv.getsockname()[1]), False
         if base:
             host, port = base[len("http://"):].rsplit(":", 1)
@@ -571,6 +589,46 @@ def selftest():
     chk("something already serving is CANNOT RUN unless reuse is declared, and is never restarted",
         verdicts(run) == ["CANNOT RUN"] and "already serving" in run[1] and not os.path.exists(os.path.join(run[2], "started")))
 
+    LISTEN = ("import os, socket, time\ns = socket.socket()\ns.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+              "s.bind(('127.0.0.1', int(os.environ['PORT'])))\ns.listen(8)\nopen('up', 'w').close()\ntime.sleep(60)\n")
+    PROBE = ("import os, socket, sys\ntry:\n    socket.create_connection(('127.0.0.1', int(os.environ['PORT'])), timeout=1).close()\n"
+             "except OSError:\n    sys.exit(1)\n")
+    STOP = ("import os, signal, subprocess, sys, time\nos.kill(int(open('pid').read()), signal.SIGKILL)\n"
+            "for _ in range(50):\n    if subprocess.call([sys.executable, 'probe.py']) != 0:\n        sys.exit(0)\n    time.sleep(0.1)\nsys.exit(1)\n")
+    LOCAL = {"start": "echo start >> hits; echo $$ > pid; exec python3 listen.py", "ready": "test -f up"}
+    OCCUPY = "python3 listen.py >/dev/null 2>&1 & echo $! > occupier.pid; until python3 probe.py; do sleep 0.1; done"
+
+    def watched(name, outcomes, environment=None):
+        d = repo(name)
+        for fname, body in (("listen.py", LISTEN), ("probe.py", PROBE), ("stop.py", STOP)):
+            with open(os.path.join(d, fname), "w") as fh:
+                fh.write(body)
+        return go(name, {"environments": {"local": environment or LOCAL}, "outcomes": outcomes})
+
+    run = watched("dies-between", [out("python3 probe.py", "python3 stop.py; exit 1", env="local"),
+                                   out("python3 probe.py", "exit 1", env="local", name="b"), out("python3 probe.py", "exit 1", env="local", name="c")])
+    chk("an app that dies between outcomes leaves the next ones CANNOT RUN, never FAILS; the one whose control took it down still holds",
+        verdicts(run) == ["holds", "CANNOT RUN", "CANNOT RUN"] and run[0] == 1 and "stopped before this outcome ran" in run[1])
+    run = watched("dies-during", [out("python3 probe.py && python3 stop.py && python3 probe.py", "exit 1", env="local")])
+    chk("an app that dies during its check is CANNOT RUN, never FAILS",
+        verdicts(run) == ["CANNOT RUN"] and "the app stopped during the check" in run[1] and "killed by signal 9" in run[1])
+    run = watched("dies-after", [out("python3 probe.py && python3 stop.py", "python3 probe.py", env="local")])
+    chk("an app that dies after its check passed is CANNOT RUN, never holds, and the run is not green",
+        verdicts(run) == ["CANNOT RUN"] and run[0] == 1 and "the app stopped during the check" in run[1])
+    run = watched("taken", [out("python3 probe.py", "exit 1", env="local")], dict(LOCAL, build=OCCUPY))
+    sh("kill $(cat occupier.pid)", run[2], timeout=5)
+    chk("a port taken during `build` is CANNOT RUN, and `start` never runs beside the occupier",
+        verdicts(run) == ["CANNOT RUN"] and "accepting connections" in run[1] and not os.path.exists(os.path.join(run[2], "hits")))
+    run = go("unwatched", {"environments": {"local": {"start": "touch started", "ready": "exit 0", "reuse": True}, "ext": {"port": 45912}},
+                           "outcomes": [out("exit 0", "exit 1", env="local"), out('test "$PORT" = 45912', "exit 1", env="ext", name="p")]})
+    chk("a `reuse` environment and one with no `start` are not watched: nothing is started, and both still hold",
+        verdicts(run) == ["holds", "holds"] and not os.path.exists(os.path.join(run[2], "started")))
+    run = watched("reuse-taken", [out("python3 probe.py", "exit 1", env="local")],
+                  dict(LOCAL, build=OCCUPY, reuse=True, start="echo start >> hits; exec sleep 60"))
+    sh("kill $(cat occupier.pid)", run[2], timeout=5)
+    chk("a `reuse` environment is not refused for a port that answers after `build`: its `start` still runs",
+        verdicts(run) == ["holds"] and os.path.exists(os.path.join(run[2], "hits")))
+
     def built(tree=None, passed=None, build="echo b >> builds; test -f fail-build && exit 4; true"):
         env = {"VERIFY_TREE": tree or "", "VERIFY_PASSED": json.dumps(passed or [])}
         run = go("build", {"environments": {"local": {"build": build, "start": "test -f fail-build || touch up; exec sleep 60",
@@ -597,7 +655,7 @@ def selftest():
         and any("Search results: lists only matches" in l for l in st[1]) and summarize(go("absent", None)[3])[0] == "absent")
 
     shutil.rmtree(tmp, ignore_errors=True)
-    expected = 34
+    expected = 40
     print("\nSELF-TEST %s" % ("PASSED  (%d checks)" % expected if passed == ran == expected else "FAILED  (%d of %d checks)" % (passed, expected)))
     return 0 if passed == ran == expected else 1
 

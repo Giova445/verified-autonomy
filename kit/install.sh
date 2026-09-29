@@ -102,8 +102,6 @@ update_gitignore() {
     echo "  not a git repository: .gitignore left alone"
     return 0
   fi
-  add_ignore '.claude/.gate-*' .claude/.gate-attempts .claude/.gate-judged .claude/.gate-stalled
-  add_ignore '.claude/.sessions/' .claude/.sessions/session
   add_ignore '.claude/evidence/' .claude/evidence/latest.json
   [ -f .claude/gates.json.new ] && add_ignore '.claude/gates.json.new' .claude/gates.json.new
   for f in ${NEW_FILES[@]+"${NEW_FILES[@]}"}; do add_ignore "$f" "$f"; done
@@ -165,8 +163,8 @@ self_test() {
 
   fixture open '' ''
   run open . >/dev/null
-  [ "$(cat "$root/open/.gitignore")" = "$(printf '.claude/.gate-*\n.claude/.sessions/\n.claude/evidence/')" ]
-  chk "gitignore gets the state paths when nothing ignores them" $?
+  [ "$(cat "$root/open/.gitignore")" = ".claude/evidence/" ]
+  chk "gitignore gets the evidence path when nothing ignores it" $?
 
   run plain . >/dev/null
   [ "$(cat "$root/plain/.gitignore")" = ".claude/*" ] && [ ! -e "$root/plain/bin/verify.new" ]

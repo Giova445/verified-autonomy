@@ -118,6 +118,7 @@ chk "a slow-starting server that forks a worker holds, and no worker outlives th
 rss="$(awk '/maximum resident set size/{printf "%.1f MB", $1/1048576} /Maximum resident set size/{printf "%.1f MB", $NF/1024}' "$report")"
 printf '        harness peak memory for that run: %s\n' "${rss:-not measured}"
 
+[ -z "${PLAYWRIGHT_PATH:-}" ] && [ -d "$PLUGIN/node_modules/playwright" ] && export PLAYWRIGHT_PATH="$PLUGIN/node_modules/playwright"
 if [ -n "${LIVE_SKIP_BROWSER:-}" ]; then
   printf '  skip  browser checks (LIVE_SKIP_BROWSER is set)\n'
 elif ! PLAYWRIGHT_PATH="${PLAYWRIGHT_PATH:-}" node -e 'require(process.env.PLAYWRIGHT_PATH || "playwright")' 2>/dev/null; then

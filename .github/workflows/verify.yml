@@ -47,4 +47,4 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           git fetch --no-tags --depth=50 origin "${{ github.base_ref }}"
-          git diff --unified=0 "origin/${{ github.base_ref }}...HEAD" | python3 benchmark/gates/pin-check.py
+          git diff --unified=0 "origin/${{ github.base_ref }}...HEAD" | python3 .github/ci/pin-check.py

@@ -483,7 +483,7 @@ def selftest():
     chk("a lone all-digit short sha that prefixes HEAD is a revision; a lone date is not",
         revision("running 1234567", fake) == "1234567" and revision('{"built":"20260928"}', fake) is None)
     with socket.socket() as srv:
-        srv.bind(("127.0.0.1", 0)); srv.listen(1)
+        srv.bind(("127.0.0.1", 0)); srv.listen(16)
         base, ok = answering(srv.getsockname()[1]), False
         if base:
             host, port = base[len("http://"):].rsplit(":", 1)

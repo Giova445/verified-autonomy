@@ -264,10 +264,10 @@ all_candidates() {
   policy_candidates "$d"
 }
 
-PASS_FAST=(); PASS_FULL=(); N_CAND=0; N_PASS=0; N_SUBST=0; N_UNKNOWN=0
+PASS_FAST=(); PASS_FULL=(); N_CAND=0; N_PASS=0; N_SUBST=0; N_UNKNOWN=0; N_TESTS=0
 probe_all() {
   local d="$1" quiet="${2:-}" tier name cmd body surf probe rc verdict key seen="$NL" snap t0 secs dup
-  PASS_FAST=(); PASS_FULL=(); N_CAND=0; N_PASS=0; N_SUBST=0; N_UNKNOWN=0
+  PASS_FAST=(); PASS_FULL=(); N_CAND=0; N_PASS=0; N_SUBST=0; N_UNKNOWN=0; N_TESTS=0
   snap="$(mktemp "${TMPDIR:-/tmp}/arm-snap.XXXXXX")"
   guard snap "$d" "$snap"
   while IFS="$SEP" read -r tier name cmd body surf probe; do
@@ -294,8 +294,9 @@ probe_all() {
         else
           N_SUBST=$((N_SUBST + 1))
         fi
-        [ "$tier" = fast ] && PASS_FAST+=("$name$SEP$cmd$SEP$surf")
-        PASS_FULL+=("$name$SEP$cmd$SEP$surf")
+        if [ "$tier" = fast ]; then PASS_FAST+=("$name$SEP$cmd$SEP$surf")
+        else PASS_FULL+=("$name$SEP$cmd$SEP$surf"); fi
+        [ "$tier" = full ] && N_TESTS=$((N_TESTS + 1))
       elif [ "$rc" -eq 124 ]; then
         N_UNKNOWN=$((N_UNKNOWN + 1))
         verdict="NO VERDICT (still running at ${PROBE_TIMEOUT}s; raise ARM_TIMEOUT to probe longer)"
@@ -305,6 +306,7 @@ probe_all() {
     fi
     [ -n "$quiet" ] || printf '  %-6s %-22s %-46s %s\n' "$tier" "$name" "$cmd" "$verdict"
   done < <(all_candidates "$d")
+  if [ "$N_TESTS" -eq 0 ] && [ "${#PASS_FAST[@]}" -gt 0 ]; then PASS_FULL=("${PASS_FAST[@]}" ${PASS_FULL[@]+"${PASS_FULL[@]}"}); fi
   rm -f "$snap"
 }
 
@@ -375,7 +377,7 @@ do_write() {
   return 0
 }
 
-EXPECTED_CONTROLS=20
+EXPECTED_CONTROLS=21
 selftest() {
   local tmp="${TMPDIR:-/tmp}/arm-selftest.$$" ok=0 ran=0 self
   self="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/$(basename "${BASH_SOURCE[0]:-$0}")"
@@ -505,12 +507,17 @@ PY
 
   pkg "$tmp/tiers" '{"scripts":{"lint":"exit 0","typecheck":"sh -c \"exit 0\"","test":"sh -c \"exit 00\""}}'
   bash "$self" write "$tmp/tiers" >/dev/null 2>&1
-  [ "$(gate_names "$tmp/tiers" fast)|$(gate_names "$tmp/tiers" full)" = "js-lint,js-typecheck|js-lint,js-typecheck,js-test" ]
-  chk "lint and typecheck run at done: they are in full as well as fast" $?
+  [ "$(gate_names "$tmp/tiers" fast)|$(gate_names "$tmp/tiers" full)" = "js-lint,js-typecheck|js-test" ]
+  chk "with a passing test, lint and typecheck stay in fast: a stop runs only the tests" $?
+
+  pkg "$tmp/lintonly" '{"scripts":{"lint":"exit 0"}}'
+  bash "$self" write "$tmp/lintonly" >/dev/null 2>&1
+  [ "$(gate_names "$tmp/lintonly" full)" = "js-lint" ]
+  chk "with no passing test, lint is what a stop runs" $?
 
   pkg "$tmp/dup" '{"scripts":{"lint":"exit 0","typecheck":"exit 0","test":"sh -c \"exit 0\""}}'
   bash "$self" write "$tmp/dup" >/dev/null 2>&1
-  [ "$(gate_names "$tmp/dup" full)" = "js-lint,js-test" ]
+  [ "$(gate_names "$tmp/dup" fast)|$(gate_names "$tmp/dup" full)" = "js-lint|js-test" ]
   chk "a command that repeats an earlier gate is not armed twice" $?
 
   mkrepo "$tmp/policy"; mkdir -p "$tmp/policy/.claude"

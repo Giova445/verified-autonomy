@@ -80,6 +80,7 @@ copy_runtime() {
   for f in acceptance.py drive.mjs trailer-check.py; do
     place_own "$SRC/benchmark/gates/$f" ".claude/gates/$f"
   done
+  place_own "$SRC/hooks/state.py" ".claude/hooks/state.py"
   place_own "$KIT/selftest.sh" ".claude/selftest.sh"
 }
 
@@ -151,10 +152,10 @@ self_test() {
   fixture plain
   run plain . >/dev/null
   listing="$( cd "$root/plain" && find bin .claude -type f | LC_ALL=C sort | tr '\n' ' ' )"
-  want=".claude/bin/verify .claude/gates.json .claude/gates/acceptance.py .claude/gates/drive.mjs .claude/gates/trailer-check.py .claude/selftest.sh bin/verify "
-  [ -f "$SRC/bin/scope" ] && want=".claude/bin/scope .claude/bin/verify .claude/gates.json .claude/gates/acceptance.py .claude/gates/drive.mjs .claude/gates/trailer-check.py .claude/selftest.sh bin/scope bin/verify "
+  want=".claude/bin/verify .claude/gates.json .claude/gates/acceptance.py .claude/gates/drive.mjs .claude/gates/trailer-check.py .claude/hooks/state.py .claude/selftest.sh bin/verify "
+  [ -f "$SRC/bin/scope" ] && want=".claude/bin/scope .claude/bin/verify .claude/gates.json .claude/gates/acceptance.py .claude/gates/drive.mjs .claude/gates/trailer-check.py .claude/hooks/state.py .claude/selftest.sh bin/scope bin/verify "
   [ "$listing" = "$want" ]
-  chk "only the runtime is copied (no hooks, agents, AGENTS.md or arm), in a path with a space" $?
+  chk "only the runtime is copied (the runner helper, no hooks, agents, AGENTS.md or arm), in a path with a space" $?
 
   [ ! -e "$root/plain/.claude/settings.json" ] && [ ! -e "$root/plain/.claude/forbidden-trailers" ]
   chk "by default no attribution setting and no forbidden-trailers are written" $?

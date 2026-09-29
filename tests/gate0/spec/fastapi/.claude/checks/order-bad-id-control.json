@@ -1,0 +1,8 @@
+{
+  "requests": [
+    {
+      "path": "/api/orders/1004",
+      "status_class": 4
+    }
+  ]
+}

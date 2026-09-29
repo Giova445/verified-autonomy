@@ -1,0 +1,14 @@
+{
+  "requests": [
+    {
+      "path": "/api/orders?q=webcam",
+      "status": 200,
+      "body": []
+    },
+    {
+      "path": "/api/orders?q=headset",
+      "status": 200,
+      "body": []
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "requests": [
+    {
+      "path": "/api/orders?q=zzq",
+      "status": 200,
+      "body": [
+        {
+          "id": 1001,
+          "customer": "Alice Nguyen",
+          "item": "Standing desk",
+          "total": 480
+        },
+        {
+          "id": 1003,
+          "customer": "Alice Nguyen",
+          "item": "Desk mat",
+          "total": 35
+        }
+      ]
+    }
+  ]
+}

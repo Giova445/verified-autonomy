@@ -16,10 +16,15 @@ FIXTURE_LIST="cli fastapi monorepo nextjs signin"
 if [ -n "${G4_ONLY:-}" ]; then FIXTURE_LIST="$G4_ONLY"; fi
 
 ensure_tmp
-MISSED_LOG="$TMP/missed.tsv"
-NOSIGNAL_LOG="$TMP/nosignal.tsv"
+OUT_DIR="${G4_OUT:-$TMP}"
+mkdir -p "$OUT_DIR" || { echo "cannot create G4_OUT=$OUT_DIR"; exit 2; }
+OUT_DIR="$(cd "$OUT_DIR" && pwd -P)"
+MISSED_LOG="$OUT_DIR/missed.tsv"
+NOSIGNAL_LOG="$OUT_DIR/nosignal.tsv"
+RESULTS_LOG="$OUT_DIR/results.tsv"
 : > "$MISSED_LOG"
 : > "$NOSIGNAL_LOG"
+printf 'fixture\tid\tkind\tmarked\tpeak_mb\tcategory\tdetail\n' > "$RESULTS_LOG"
 
 classify(){
   python3 - "$1" <<'PY'
@@ -114,6 +119,7 @@ print(e['category'] + '\t' + e['statement'] + '\t' + ('break' if e['breaks_run']
       echo "  WARN $id: $(head -1 "$out.guard")"
     fi
     printf '  %-8s %-9s %-6s peak %s MB\n' "$id" "$kind" "$marked" "$peak"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$fixture" "$id" "$kind" "$marked" "$peak" "$category" "$detail" >> "$RESULTS_LOG"
 
     f_total=$((f_total+1))
     printf '%s\t%s\n' "$category" "$kind" >> "$cat_log"
@@ -179,6 +185,11 @@ if [ -s "$NOSIGNAL_LOG" ]; then
   while IFS=$'\t' read -r fixture id category statement detail marked; do
     printf '  %-10s %-8s %-5s [%s] %s -- %s\n' "$fixture" "$id" "$marked" "$category" "$statement" "$detail"
   done < "$NOSIGNAL_LOG"
+fi
+
+if [ -n "${G4_OUT:-}" ]; then
+  echo
+  echo "per-fault results kept in $OUT_DIR (results.tsv, missed.tsv, nosignal.tsv)"
 fi
 
 finish "G4 FAULTS"

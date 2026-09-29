@@ -1,0 +1,10 @@
+{
+  "check": [
+    {"args": ["total", "--search", "zed"], "exit": 0, "stdout_lines": ["Total: 0.00"], "stderr_lines": []},
+    {"args": ["total", "--search", "xyzzy"], "exit": 0, "stdout_lines": ["Total: 0.00"], "stderr_lines": []}
+  ],
+  "control": [
+    {"args": ["total", "--search", "bob"], "exit": 0, "stdout_lines": ["Total: 0.00"], "stderr_lines": []},
+    {"args": ["total", "--search", "alice"], "exit": 0, "stdout_lines": ["Total: 0.00"], "stderr_lines": []}
+  ]
+}

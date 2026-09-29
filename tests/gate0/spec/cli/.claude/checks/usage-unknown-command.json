@@ -1,0 +1,12 @@
+{
+  "check": [
+    {"args": ["frobnicate"], "exit": "nonzero", "stdout_lines": [], "stderr_lines": ["usage: orders {list|total} [--search NAME]"]},
+    {"args": ["lists"], "exit": "nonzero", "stdout_lines": [], "stderr_lines": ["usage: orders {list|total} [--search NAME]"]},
+    {"args": ["frobnicate", "--search", "alice"], "exit": "nonzero", "stdout_lines": [], "stderr_lines": ["usage: orders {list|total} [--search NAME]"]}
+  ],
+  "control": [
+    {"args": ["list"], "exit": "nonzero", "stdout_lines": [], "stderr_lines": ["usage: orders {list|total} [--search NAME]"]},
+    {"args": ["total"], "exit": "nonzero", "stdout_lines": [], "stderr_lines": ["usage: orders {list|total} [--search NAME]"]},
+    {"args": ["list", "--search", "alice"], "exit": "nonzero", "stdout_lines": [], "stderr_lines": ["usage: orders {list|total} [--search NAME]"]}
+  ]
+}

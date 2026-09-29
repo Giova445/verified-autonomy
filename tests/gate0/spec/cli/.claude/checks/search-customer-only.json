@@ -1,0 +1,16 @@
+{
+  "check": [
+    {"args": ["list", "--search", "desk"], "exit": 0, "stdout_lines": ["No orders match desk"], "stderr_lines": []},
+    {"args": ["list", "--search", "webcam"], "exit": 0, "stdout_lines": ["No orders match webcam"], "stderr_lines": []},
+    {"args": ["list", "--search", "1004"], "exit": 0, "stdout_lines": ["No orders match 1004"], "stderr_lines": []},
+    {"args": ["list", "--search", "95"], "exit": 0, "stdout_lines": ["No orders match 95"], "stderr_lines": []},
+    {"args": ["total", "--search", "desk"], "exit": 0, "stdout_lines": ["Total: 0.00"], "stderr_lines": []}
+  ],
+  "control": [
+    {"args": ["list", "--search", "bob"], "exit": 0, "stdout_lines": ["No orders match bob"], "stderr_lines": []},
+    {"args": ["list", "--search", "chidi"], "exit": 0, "stdout_lines": ["No orders match chidi"], "stderr_lines": []},
+    {"args": ["list", "--search", "okafor"], "exit": 0, "stdout_lines": ["No orders match okafor"], "stderr_lines": []},
+    {"args": ["list", "--search", "dana"], "exit": 0, "stdout_lines": ["No orders match dana"], "stderr_lines": []},
+    {"args": ["total", "--search", "alice"], "exit": 0, "stdout_lines": ["Total: 0.00"], "stderr_lines": []}
+  ]
+}

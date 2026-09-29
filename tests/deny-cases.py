@@ -174,14 +174,22 @@ def robustness(repos, base, tally):
         f.write("\nthis is not python\n")
     code, err, _ = run_hook(bash_payload("ls", repo), env, repo, os.path.join(broken, "deny-dangerous.sh"))
     tally.check("a broken rules file fails closed with a reason", code == 2 and "deny hook error" in err, "exit %d %r" % (code, err[:160]))
+    code, err, _ = run_hook(other, env, repo, os.path.join(broken, "deny-dangerous.sh"))
+    tally.check("a broken rules file never blocks a non-Bash tool", code == 0, "exit %d %r" % (code, err[:160]))
+    code, err, _ = run_hook("not json", env, repo, os.path.join(broken, "deny-dangerous.sh"))
+    tally.check("a broken rules file with unreadable input fails closed", code == 2 and "deny hook error" in err, "exit %d %r" % (code, err[:160]))
     os.remove(os.path.join(broken, "deny-rules.py"))
     code, err, _ = run_hook(bash_payload("ls", repo), env, repo, os.path.join(broken, "deny-dangerous.sh"))
     tally.check("a missing rules file fails closed with a reason", code == 2 and "deny hook error" in err, "exit %d %r" % (code, err[:160]))
+    code, err, _ = run_hook(other, env, repo, os.path.join(broken, "deny-dangerous.sh"))
+    tally.check("a missing rules file never blocks a non-Bash tool", code == 0 and err == "", "exit %d %r" % (code, err[:160]))
     empty = os.path.join(base, "no-python")
     os.makedirs(empty, exist_ok=True)
-    p = subprocess.run([shutil.which("bash"), HOOK], input=bash_payload("ls", repo), text=True, capture_output=True,
-                       env=dict(env, PATH=empty), cwd=repo, timeout=30)
-    tally.check("no python3 on PATH fails closed with a reason", p.returncode == 2 and "deny hook error" in p.stderr, "exit %d %r" % (p.returncode, p.stderr[:160]))
+    for label, payload, want in (("Bash", bash_payload("ls", repo), 2), ("a non-Bash tool", other, 0)):
+        p = subprocess.run([shutil.which("bash"), HOOK], input=payload, text=True, capture_output=True,
+                           env=dict(env, PATH=empty), cwd=repo, timeout=30)
+        tally.check("no python3 on PATH: %s exits %d" % (label, want), p.returncode == want and (want == 0 or "deny hook error" in p.stderr),
+                    "exit %d %r" % (p.returncode, p.stderr[:160]))
     log = os.path.join(base, "gh.log")
     env_log = dict(env, FAKE_GH_LOG=log)
     for cmd in ("git push origin feature/x", "gh pr view 99", "gh pr create --title x", "ls"):

@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 if [[ ${BASH_SOURCE[0]} == */* ]]; then HERE="${BASH_SOURCE[0]%/*}"; else HERE="."; fi
-RULES="$HERE/deny-rules.py"
+IFS= read -r -d '' INPUT
 
-if [ ! -f "$RULES" ]; then
-  echo "deny hook error: $RULES is missing, so no command can be judged. The command was not run." >&2
+fail_closed() {
+  if [[ $INPUT =~ \"tool_name\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" && ${BASH_REMATCH[1]} != Bash ]]; then
+    exit 0
+  fi
+  echo "deny hook error: $1. The command was not run." >&2
   exit 2
-fi
+}
 
-python3 -I -S -B "$RULES"
+[ -f "$HERE/deny-rules.py" ] || fail_closed "$HERE/deny-rules.py is missing, so no command can be judged"
+
+printf '%s' "$INPUT" | python3 -I -S -B "$HERE/deny-rules.py"
 rc=$?
 case "$rc" in
   0) exit 0 ;;
   2) exit 2 ;;
-  *)
-    echo "deny hook error: the rules engine failed (exit $rc, is python3 installed?). The command was not run." >&2
-    exit 2
-    ;;
+  *) fail_closed "the rules engine failed (exit $rc, is python3 installed?)" ;;
 esac

@@ -7,12 +7,12 @@ import { join, resolve, isAbsolute } from "node:path";
 
 const require_ = createRequire(import.meta.url);
 
-const EXPECTED_CONTROLS = 31;
+const EXPECTED_CONTROLS = 32;
 const CANNOT_RUN = 75;
 const DEFAULT_TIMEOUT = 5000;
 const SETTLE_MS = 800;
 const POLL_MS = 50;
-const ENV_ERROR = /ERR_(CONNECTION_REFUSED|CONNECTION_RESET|CONNECTION_CLOSED|CONNECTION_TIMED_OUT|EMPTY_RESPONSE|NAME_NOT_RESOLVED|ADDRESS_UNREACHABLE|INTERNET_DISCONNECTED)|Timeout \d+ms exceeded/;
+const ENV_ERROR = /ERR_(CONNECTION_REFUSED|CONNECTION_RESET|CONNECTION_CLOSED|CONNECTION_ABORTED|CONNECTION_TIMED_OUT|SOCKET_NOT_CONNECTED|EMPTY_RESPONSE|NAME_NOT_RESOLVED|ADDRESS_UNREACHABLE|INTERNET_DISCONNECTED)|Timeout \d+ms exceeded/;
 
 class EnvError extends Error {}
 
@@ -414,6 +414,11 @@ async function selftest() {
   const resetRc = await run(`http://127.0.0.1:${resetter.address().port}/`, [{ visible: "body" }]);
   resetter.close();
   chk("a connection that is reset is CANNOT RUN (75)", resetRc === CANNOT_RUN);
+  const gotoFailing = (message) => ({ goto: async () => { throw new Error(`page.goto: net::${message} at http://x/`); } });
+  const classified = async (message) => navigate(gotoFailing(message), "http://x/", 1).then(() => "none", (e) => e instanceof EnvError ? "environment" : "product");
+  chk("a socket that is not connected or a connection that is aborted is an environment error; a certificate error is not",
+    [await classified("ERR_SOCKET_NOT_CONNECTED"), await classified("ERR_CONNECTION_ABORTED"), await classified("ERR_CERT_AUTHORITY_INVALID")].join(" ") ===
+    "environment environment product");
   chk("a name that does not resolve is CANNOT RUN (75)",
     await run("http://no-such-host.invalid/", [{ visible: "body" }]) === CANNOT_RUN);
   const noChromium = { chromium: { launch: async () => { throw new Error("Executable doesn't exist at /nowhere"); } } };

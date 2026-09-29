@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "verified-autonomy",
-  "description": "Mechanical enforcement for autonomous coding agents \u2014 14 workflow skills, each stating what enforces it.",
+  "description": "Refuses to let a coding agent stop while a changed repo fails its gates or its product contract; read-only turns cost nothing.",
   "owner": {
     "name": "Giova445",
     "url": "https://github.com/Giova445"
@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "verified-autonomy",
-      "description": "The agent cannot claim done while gates are red. Stop-hook gating, destructive-command deny-list, cheat detection, blast radius, pressure testing.",
+      "description": "Refuses to let a coding agent stop while a changed repo fails its gates or its product contract; read-only turns cost nothing.",
       "source": "./",
       "category": "workflow"
     }

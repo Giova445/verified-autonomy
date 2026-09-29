@@ -2,20 +2,32 @@
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup|clear|compact",
+        "matcher": "startup|clear|compact|resume",
         "hooks": [
           {
             "type": "command",
             "shell": "bash",
             "async": false,
+            "timeout": 10,
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10,
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/state.py\" baseline"
           }
         ]
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|Write|Edit|NotebookEdit",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -26,17 +38,6 @@
       }
     ],
     "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "timeout": 900,
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/stop-gate.sh\""
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
       {
         "hooks": [
           {

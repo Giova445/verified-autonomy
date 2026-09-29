@@ -1,16 +1,14 @@
 {
   "name": "verified-autonomy",
-  "description": "Mechanical enforcement for autonomous coding agents: the agent cannot claim done while gates are red. Stop-hook gating, destructive-command deny-list, cheat detection, blast radius, and pressure testing.",
-  "version": "0.6.4",
+  "description": "Refuses to let a coding agent stop while a changed repo fails its gates or its product contract; read-only turns cost nothing.",
+  "version": "0.7.0",
   "license": "MIT",
   "keywords": [
     "gates",
     "verification",
-    "enforcement",
     "hooks",
-    "autonomy",
-    "tdd",
-    "ci"
+    "acceptance-testing",
+    "autonomy"
   ],
   "author": {
     "name": "Giova445",

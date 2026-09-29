@@ -48,7 +48,7 @@ printf '{"full":[{"name":"probe","cmd":"exit 1"}]}' > "$tmp/.claude/gates.json"
 for i in 1 2 3; do echo "$i" > "$tmp/work.txt"; CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; done
 echo 4 > "$tmp/work.txt"
 out="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null 2>&1)"
-printf '%s' "$out" | grep -q "CIRCUIT BREAKER after 3" && r=yes || r=no
+printf '%s' "$out" | grep -q "Attempt limit reached (3/3)" && r=yes || r=no
 chk "three blocked stops -> blocked report, not a fourth retry" "$r" "yes"
 CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/stop-gate.sh" </dev/null >/dev/null 2>&1; a=$?
 echo 5 > "$tmp/work.txt"
@@ -128,10 +128,9 @@ ss="$(mktemp -d)"
 ( cd "$ss" && git init -q . && git config user.email t@t && git config user.name t && mkdir -p .claude \
   && printf '{"full":[{"name":"probe","cmd":"true"}]}' > .claude/gates.json && echo a > app.txt \
   && git add -A && git commit -qm init ) >/dev/null 2>&1
-printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/session-start.sh" >/dev/null 2>&1
+printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" python3 "$PLUGIN/hooks/state.py" baseline >/dev/null 2>&1
 out="$(printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/stop-gate.sh" 2>&1)"; rc=$?
-printf '%s' "$out" | grep -q "has not changed this repo" && r="$rc said" || r="$rc silent"
-chk "no contract, session changed nothing -> stop allowed, said why" "$r" "0 said"
+chk "no contract, turn changed nothing -> stop allowed, silently" "$rc${out:+ said}" "0"
 echo b >> "$ss/app.txt"
 printf '{"session_id":"s1"}' | CLAUDE_PROJECT_DIR="$ss" bash "$PLUGIN/hooks/stop-gate.sh" >/dev/null 2>&1
 chk "no contract, session changed the repo -> refuses" "$?" "2"
@@ -146,7 +145,7 @@ ro="$(mktemp -d)"
   && printf 'printf "run\\n" >> .claude/runs; exit 1\n' > .claude/red.sh \
   && printf '{"full":[{"name":"red","cmd":"sh .claude/red.sh"}]}' > .claude/gates.json && echo a > a \
   && git add -A && git commit -qm init ) >/dev/null 2>&1
-printf '{"session_id":"ro"}' | CLAUDE_PROJECT_DIR="$ro" bash "$PLUGIN/hooks/session-start.sh" >/dev/null 2>&1
+printf '{"session_id":"ro"}' | CLAUDE_PROJECT_DIR="$ro" python3 "$PLUGIN/hooks/state.py" baseline >/dev/null 2>&1
 seq=""; for i in 1 2 3; do printf '{"session_id":"ro"}' | CLAUDE_PROJECT_DIR="$ro" bash "$PLUGIN/hooks/stop-gate.sh" >/dev/null 2>&1; seq="$seq$?"; done
 chk "a read-only session on a red repo stops at once, running no gate" "$seq $(cat "$ro/.claude/runs" 2>/dev/null | wc -l | tr -d ' ')" "000 0"
 find "$ro" -maxdepth 0 -exec rm -rf {} +
@@ -157,13 +156,10 @@ chk "deny: pytest || true blocked"         "$(deny 'pytest -q || true')" "2"
 chk "deny: grep || true allowed"           "$(deny 'grep -c x f || true')" "0"
 chk "deny: reset --hard blocked"           "$(deny 'git reset --hard HEAD')" "2"
 chk "deny: ordinary command allowed"       "$(deny 'npm test')" "0"
+: > "$tmp/.claude/forbidden-trailers"
 chk "deny: commit with a co-author blocked"  "$(deny 'git commit -m x -m Co-Authored-By: a <a@b>')" "2"
 chk "deny: plain commit allowed"            "$(deny 'git commit -m fix')" "0"
 chk "deny: grepping for the trailer beside a commit allowed" "$(deny "git commit -m fix && git log --format=%B | grep -i co-authored-by:")" "0"
-( cd "$tmp" && git commit -q --allow-empty -m init )
-o="$(bash "$PLUGIN/bin/arm" detect "$tmp" 2>&1)"
-printf '%s' "$o" | grep -q 'co-author .*passes' && r=yes || r=no
-chk "arm: co-author gate armed in a git repo"  "$r" "yes"
 
 out="$(VERIFIED_AUTONOMY_UNATTENDED=1 CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/hooks/session-start.sh" 2>/dev/null)"
 a="$(printf '%s' "$out" | grep -c '<unattended>')"
@@ -175,8 +171,8 @@ inst="$tmp/inst"; mkdir -p "$inst"
 ( cd "$inst" && git init -q . && git config user.email t@t && git config user.name t \
   && printf '.claude/*\n' > .gitignore && git add -A && git commit -qm init ) >/dev/null 2>&1
 ( cd "$inst" && ARM_TIMEOUT=30 bash "$PLUGIN/kit/install.sh" . ) >/dev/null 2>&1
-chk "installer adds only .gitignore lines not already ignored" "$(tail -n +2 "$inst/.gitignore" | tr '\n' ' ')" "AGENTS.md.new "
-bash "$inst/.claude/hooks/selftest.sh" >/dev/null 2>&1
+chk "installer adds only .gitignore lines not already ignored" "$(tail -n +2 "$inst/.gitignore" | tr '\n' ' ')" ""
+bash "$inst/.claude/selftest.sh" >/dev/null 2>&1
 chk "the installed self-test passes in the installed layout" "$?" "0"
 
 find "$tmp" -maxdepth 0 -exec rm -rf {} +
@@ -188,8 +184,8 @@ suite() {
   n="$(printf '%s' "$out" | grep -oE '\([0-9]+ checks' | tail -1 | tr -dc '0-9')"
   if [ "$rc" -eq 0 ] && [ -n "$n" ]; then
     printf '  ok    %-46s (%s checks)\n' "$label" "$n"; pass=$((pass+1))
-  elif [ "$rc" -eq 2 ]; then
-    printf '  NOTRUN %-45s exit=2 — could not run; nothing verified\n' "$label"; fail=$((fail+1))
+  elif [ "$rc" -eq 2 ] || [ "$rc" -eq 75 ]; then
+    printf '  NOTRUN %-45s exit=%s - could not run; nothing verified\n' "$label" "$rc"; fail=$((fail+1))
     printf '%s\n' "$out" | head -2 | sed 's/^/          /'
   else
     printf '  FAIL  %-46s exit=%s counted=%s\n' "$label" "$rc" "${n:-none}"; fail=$((fail+1))
@@ -199,28 +195,27 @@ suite() {
 
 leak="$(git -C "$PLUGIN" grep -n -I -E '(/Users/|/home/)[A-Za-z0-9_.-]+/' -- . ':!selftest.sh' 2>/dev/null | head -3)"
 chk "no absolute machine paths in tracked files" "${leak:-none}" "none"
+chk "skills: only gate and setup ship" "$(ls "$PLUGIN/skills" | tr '\n' ' ')" "gate setup "
+chk "docs: only how-it-works ships" "$(ls "$PLUGIN/docs" | tr '\n' ' ')" "how-it-works.md "
+missing=""; for v in $(sed -n '/^## Optional settings/,/^## Updating/p' "$PLUGIN/README.md" | grep -oE '`[A-Z][A-Z_]+' | tr -d '`' | sort -u); do grep -rqw "$v" "$PLUGIN/bin" "$PLUGIN/hooks" "$PLUGIN/benchmark/gates" || missing="$missing $v"; done
+chk "every setting the README names exists in the code" "${missing:-none}" "none"
 
 echo
-suite "ledger"          bash    "$PLUGIN/bin/ledger"          selftest
-suite "escalate"        bash    "$PLUGIN/bin/escalate"        selftest
-suite "worktree-guard"  bash    "$PLUGIN/bin/worktree-guard"  selftest
-suite "orchestration"   bash    "$PLUGIN/tests/orchestration-test.sh"
-suite "test-delta"      bash    "$PLUGIN/bin/test-delta"      selftest
-suite "holdout"         bash    "$PLUGIN/bin/holdout"         selftest
-suite "mutate-changed"  bash    "$PLUGIN/bin/mutate-changed"  selftest
-suite "ambiguity"       bash    "$PLUGIN/bin/ambiguity"       selftest
+suite "stop-sequences"  bash    "$PLUGIN/tests/stop-sequences.sh"
 suite "arm"             bash    "$PLUGIN/bin/arm"             selftest
+suite "install"         bash    "$PLUGIN/kit/install.sh"      --self-test
 suite "discover"        python3 "$PLUGIN/bin/discover"        selftest
-suite "arm-surface"     python3 "$PLUGIN/bin/arm-surface.py"  --self-test
 suite "scope"           python3 "$PLUGIN/bin/scope"           selftest
 suite "commit-message"  python3 "$PLUGIN/hooks/commit-message.py" --self-test
 suite "inert-mask"      python3 "$PLUGIN/hooks/inert-mask.py" --self-test
-suite "pin-check"       python3 "$PLUGIN/benchmark/gates/pin-check.py"          --self-test
+suite "push-targets"    python3 "$PLUGIN/hooks/push-targets.py" --self-test
+suite "deny-cases"      python3 "$PLUGIN/tests/deny-cases.py"
+suite "pin-check"       python3 "$PLUGIN/.github/ci/pin-check.py"               --self-test
 suite "trailer-check"   python3 "$PLUGIN/benchmark/gates/trailer-check.py"      --self-test
-suite "identity"        python3 "$PLUGIN/benchmark/gates/identity-preflight.py" --self-test
 suite "acceptance"      python3 "$PLUGIN/benchmark/gates/acceptance.py"         --self-test
 suite "drive"           node    "$PLUGIN/benchmark/gates/drive.mjs"             --self-test
-suite "kit self-test"    bash    "$PLUGIN/kit/selftest.sh"
+suite "product-live"    bash    "$PLUGIN/tests/product-live.sh"
+suite "kit self-test"   bash    "$PLUGIN/kit/selftest.sh"
 
 echo
 if [ "$fail" -eq 0 ]; then echo "SELF-TEST PASSED  ($pass checks)"; exit 0

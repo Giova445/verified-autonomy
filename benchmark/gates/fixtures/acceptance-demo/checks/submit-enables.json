@@ -2,5 +2,5 @@
   { "disabled": "#submit" },
   { "fill": { "selector": "#email", "value": "a@b.co" } },
   { "fill": { "selector": "#password", "value": "hunter2" } },
-  { "enabled": "#submit" }
+  { "enabled": "#submit", "timeout": 1500 }
 ]

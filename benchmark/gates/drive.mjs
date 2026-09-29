@@ -1,11 +1,25 @@
 import { createRequire } from "node:module";
+import { createServer } from "node:http";
+import { createServer as createTcpServer } from "node:net";
 import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, readdirSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, isAbsolute } from "node:path";
 
 const require_ = createRequire(import.meta.url);
 
-const EXPECTED_CONTROLS = 12;
+const EXPECTED_CONTROLS = 25;
+const CANNOT_RUN = 75;
+const DEFAULT_TIMEOUT = 5000;
+const SETTLE_MS = 800;
+const POLL_MS = 50;
+const ENV_ERROR = /ERR_(CONNECTION_REFUSED|CONNECTION_RESET|CONNECTION_CLOSED|CONNECTION_TIMED_OUT|EMPTY_RESPONSE|NAME_NOT_RESOLVED|ADDRESS_UNREACHABLE|INTERNET_DISCONNECTED)|Timeout \d+ms exceeded/;
+
+class EnvError extends Error {}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const firstLine = (e) => String(e?.message ?? e).split("\n")[0];
+const navTimeout = () => Number(process.env.ACCEPT_NAV_TIMEOUT) || 30000;
+const done = (detail) => ({ ok: true, detail });
 
 function loadPlaywright(cwd = process.cwd()) {
   const roots = [];
@@ -16,56 +30,52 @@ function loadPlaywright(cwd = process.cwd()) {
     if (d.isDirectory() && d.name !== "node_modules" && !d.name.startsWith("."))
       roots.push(join(cwd, d.name, "node_modules", "playwright"));
   }
-
   for (const r of roots) {
     try { return require_(r); } catch { /* try the next */ }
   }
   return null;
 }
 
-const ASSERTIONS = {
-  async visible(page, arg) {
-    const n = await page.locator(arg).count();
-    if (n === 0) return { ok: false, detail: `no element matches ${arg}` };
-    const vis = await page.locator(arg).first().isVisible();
-    return { ok: vis, detail: vis ? `${arg} is visible` : `${arg} exists but is not visible` };
-  },
+const missing = (sel) => ({ ok: false, detail: `no element matches ${sel}` });
+
+async function onElement(page, sel, judge) {
+  if (await page.locator(sel).count() === 0) return missing(sel);
+  return judge(page.locator(sel).first());
+}
+
+const CHECKS = {
+  visible: (page, arg) => onElement(page, arg, async (el) => {
+    const on = await el.isVisible();
+    return { ok: on, detail: on ? `${arg} is visible` : `${arg} exists but is not visible` };
+  }),
   async hidden(page, arg) {
-    const n = await page.locator(arg).count();
-    if (n === 0) return { ok: true, detail: `${arg} is absent` };
-    const vis = await page.locator(arg).first().isVisible();
-    return { ok: !vis, detail: vis ? `${arg} is visible and should not be` : `${arg} is hidden` };
+    if (await page.locator(arg).count() === 0) return done(`${arg} is absent`);
+    const on = await page.locator(arg).first().isVisible();
+    return { ok: !on, detail: on ? `${arg} is visible and should not be` : `${arg} is hidden` };
   },
-  async text(page, arg) {
-    const { selector, equals, contains } = arg;
-    if (await page.locator(selector).count() === 0)
-      return { ok: false, detail: `no element matches ${selector}` };
-    const got = (await page.locator(selector).first().textContent() || "").trim();
+  text: (page, { selector, equals, contains }) => onElement(page, selector, async (el) => {
+    const got = ((await el.textContent()) || "").trim();
     if (equals !== undefined)
       return { ok: got === equals, detail: `${selector} text is ${JSON.stringify(got)}, expected ${JSON.stringify(equals)}` };
     if (contains !== undefined)
       return { ok: got.includes(contains), detail: `${selector} text is ${JSON.stringify(got)}, expected to contain ${JSON.stringify(contains)}` };
-    return { ok: false, detail: "text assertion needs 'equals' or 'contains'" };
-  },
-  async enabled(page, arg) {
-    if (await page.locator(arg).count() === 0)
-      return { ok: false, detail: `no element matches ${arg}` };
-    const on = await page.locator(arg).first().isEnabled();
+    return { ok: false, final: true, detail: "text assertion needs 'equals' or 'contains'" };
+  }),
+  enabled: (page, arg) => onElement(page, arg, async (el) => {
+    const on = await el.isEnabled();
     return { ok: on, detail: on ? `${arg} is enabled` : `${arg} is disabled and should not be` };
-  },
-  async disabled(page, arg) {
-    if (await page.locator(arg).count() === 0)
-      return { ok: false, detail: `no element matches ${arg}` };
-    const off = await page.locator(arg).first().isDisabled();
+  }),
+  disabled: (page, arg) => onElement(page, arg, async (el) => {
+    const off = await el.isDisabled();
     return { ok: off, detail: off ? `${arg} is disabled` : `${arg} is enabled and should not be` };
-  },
-  async count(page, arg) {
-    const got = await page.locator(arg.selector).count();
-    return { ok: got === arg.equals, detail: `${arg.selector} matched ${got}, expected ${arg.equals}` };
+  }),
+  async count(page, { selector, equals }) {
+    const got = await page.locator(selector).count();
+    return { ok: got === equals, detail: `${selector} matched ${got}, expected ${equals}` };
   },
   async consoleClean(page, _arg, ctx) {
     const errs = ctx.consoleErrors;
-    return { ok: errs.length === 0, detail: errs.length ? `${errs.length} console error(s): ${errs[0]}` : "no console errors" };
+    return { ok: errs.length === 0, final: true, detail: errs.length ? `${errs.length} console error(s): ${errs[0]}` : "no console errors" };
   },
   async noOverflow(page, arg) {
     const width = arg?.width || 375;
@@ -74,22 +84,7 @@ const ASSERTIONS = {
       document.documentElement.scrollWidth > document.documentElement.clientWidth);
     return { ok: !over, detail: over ? `content overflows horizontally at ${width}px` : `no horizontal overflow at ${width}px` };
   },
-  async fill(page, arg) {
-    const { selector, value } = arg;
-    if (await page.locator(selector).count() === 0)
-      return { ok: false, detail: `cannot fill ${selector} — no element matches` };
-    await page.locator(selector).first().fill(String(value ?? ""));
-    return { ok: true, detail: `filled ${selector}` };
-  },
-  async click(page, arg) {
-    if (await page.locator(arg).count() === 0)
-      return { ok: false, detail: `cannot click ${arg} — no element matches` };
-    await page.locator(arg).first().click();
-    return { ok: true, detail: `clicked ${arg}` };
-  },
-  async focusable(page, arg) {
-    if (await page.locator(arg).count() === 0)
-      return { ok: false, detail: `no element matches ${arg}` };
+  focusable: (page, arg) => onElement(page, arg, async () => {
     const reached = await page.evaluate((sel) => {
       const el = document.querySelector(sel);
       if (!el) return false;
@@ -97,56 +92,156 @@ const ASSERTIONS = {
       return document.activeElement === el;
     }, arg);
     return { ok: reached, detail: reached ? `${arg} takes focus` : `${arg} cannot take focus` };
+  }),
+  async url(page, { equals, contains }) {
+    const now = new URL(page.url());
+    const shown = equals?.startsWith("/") ? now.pathname + now.search : now.href;
+    if (equals !== undefined) return { ok: shown === equals, detail: `url is ${shown}, expected ${equals}` };
+    if (contains !== undefined) return { ok: now.href.includes(contains), detail: `url is ${now.href}, expected to contain ${contains}` };
+    return { ok: false, final: true, detail: "url assertion needs 'equals' or 'contains'" };
   },
 };
 
+const isStable = (kind, arg) =>
+  kind === "hidden" || kind === "consoleClean" || kind === "noOverflow" || (kind === "count" && arg?.equals === 0);
+
+async function navigate(page, url, timeout) {
+  try {
+    const resp = await page.goto(url, { waitUntil: "load", timeout });
+    if (resp && !resp.ok() && /^https?:/.test(url)) return { ok: false, detail: `HTTP ${resp.status()} from ${url}` };
+    return done(`opened ${url}`);
+  } catch (e) {
+    if (ENV_ERROR.test(firstLine(e))) throw new EnvError(firstLine(e));
+    throw e;
+  }
+}
+
+const ACTIONS = {
+  async fill(page, { selector, value }, { timeout }) {
+    await page.locator(selector).first().fill(String(value ?? ""), { timeout });
+    return done(`filled ${selector}`);
+  },
+  async click(page, arg, { timeout }) {
+    await page.locator(arg).first().click({ timeout });
+    return done(`clicked ${arg}`);
+  },
+  async press(page, arg, { timeout }) {
+    const { selector, key } = typeof arg === "string" ? { key: arg } : arg;
+    if (selector) await page.locator(selector).first().press(key, { timeout });
+    else await page.keyboard.press(key);
+    return done(`pressed ${key}${selector ? ` on ${selector}` : ""}`);
+  },
+  async goto(page, arg, { timeout, base }) {
+    return navigate(page, new URL(arg, base).href, timeout);
+  },
+  async waitFor(page, arg, { timeout }) {
+    const { selector, state = "visible" } = typeof arg === "string" ? { selector: arg } : arg;
+    await page.locator(selector).first().waitFor({ state, timeout });
+    return done(`${selector} is ${state}`);
+  },
+};
+
+async function settle(evaluate, timeout, stableFor) {
+  const start = Date.now();
+  let since = null;
+  let last = { ok: false, detail: "never evaluated" };
+  for (;;) {
+    try { last = await evaluate(); } catch (e) { last = { ok: false, detail: `assertion threw: ${firstLine(e)}` }; }
+    const now = Date.now();
+    if (last.ok) {
+      since ??= now;
+      if (now - since >= stableFor) return last;
+    } else {
+      if (last.final) return last;
+      since = null;
+    }
+    if (now - start >= timeout && since === null) return { ok: false, detail: `${last.detail} (after ${timeout} ms)` };
+    await sleep(POLL_MS);
+  }
+}
+
+async function runStep(page, step, ctx) {
+  if (!step || typeof step !== "object" || Array.isArray(step)) return { ok: false, detail: "step is not an object", kind: "step" };
+  const kinds = Object.keys(step).filter((k) => k !== "timeout" && k !== "settle");
+  const kind = kinds[0];
+  if (kinds.length !== 1) return { ok: false, detail: `a step needs exactly one action or assertion, got ${JSON.stringify(Object.keys(step))}`, kind: "step" };
+  const timeout = Number(step.timeout ?? DEFAULT_TIMEOUT);
+  if (!(timeout > 0)) return { ok: false, detail: "timeout must be a positive number of milliseconds", kind };
+  const arg = step[kind];
+  if (kind in ACTIONS) {
+    try { return { ...(await ACTIONS[kind](page, arg, { timeout, base: ctx.base })), kind, action: true }; }
+    catch (e) {
+      if (e instanceof EnvError) throw e;
+      return { ok: false, detail: `cannot ${kind}: ${firstLine(e)}`, kind, action: true };
+    }
+  }
+  if (!(kind in CHECKS)) return { ok: false, detail: `unknown assertion ${JSON.stringify(kind)}`, kind };
+  const stableFor = isStable(kind, arg) ? (step.settle ?? SETTLE_MS) : 0;
+  return { ...(await settle(() => CHECKS[kind](page, arg, ctx), timeout, stableFor)), kind };
+}
+
 function fail(msg, code = 2) { console.error(msg); process.exit(code); }
 
-async function drive(target, checks) {
-  const pw = loadPlaywright();
-  if (!pw) fail("drive: playwright is not resolvable. Set PLAYWRIGHT_PATH or install it. " +
-                "Refusing to report on a page this cannot open.", 2);
-
-  const browser = await pw.chromium.launch();
-  const ctx = { consoleErrors: [] };
-  const page = await browser.newPage();
-  page.on("console", (m) => { if (m.type() === "error") ctx.consoleErrors.push(m.text()); });
-  page.on("pageerror", (e) => ctx.consoleErrors.push(String(e)));
-
+async function drive(target, checks, pw = loadPlaywright()) {
+  if (!pw) {
+    console.log("  CANNOT RUN  playwright is not resolvable. Set PLAYWRIGHT_PATH or install it (npm i -D playwright)");
+    return CANNOT_RUN;
+  }
+  const url = /^https?:|^file:/.test(target)
+    ? target
+    : "file://" + (isAbsolute(target) ? target : resolve(process.cwd(), target));
+  const ctx = { consoleErrors: [], base: url };
+  let browser;
   let failures = 0;
-  let unreachable = false;
   try {
-    const url = /^https?:|^file:/.test(target)
-      ? target
-      : "file://" + (isAbsolute(target) ? target : resolve(process.cwd(), target));
-    const resp = await page.goto(url, { waitUntil: "load" });
-    if (resp && !resp.ok() && /^https?:/.test(url)) {
-      console.log(`  FAIL  page load — HTTP ${resp.status()} from ${url}`);
+    browser = await pw.chromium.launch();
+    const page = await browser.newPage();
+    page.on("console", (m) => { if (m.type() === "error") ctx.consoleErrors.push(m.text()); });
+    page.on("pageerror", (e) => ctx.consoleErrors.push(String(e)));
+    const first = await navigate(page, url, navTimeout());
+    if (!first.ok) { console.log(`  FAIL  page load: ${first.detail}`); failures++; }
+    for (let i = 0; first.ok && i < checks.length; i++) {
+      const r = await runStep(page, checks[i], ctx);
+      console.log(`  ${r.ok ? "ok  " : "FAIL"}  ${r.kind}: ${r.detail}`);
+      if (r.ok) continue;
       failures++;
-    }
-    for (const c of checks) {
-      const [kind] = Object.keys(c);
-      const fn = ASSERTIONS[kind];
-      if (!fn) { console.log(`  FAIL  unknown assertion ${JSON.stringify(kind)}`); failures++; continue; }
-      let r;
-      try { r = await fn(page, c[kind], ctx); }
-      catch (e) { r = { ok: false, detail: `assertion threw: ${e.message}` }; }
-      console.log(`  ${r.ok ? "ok  " : "FAIL"}  ${kind}: ${r.detail}`);
-      if (!r.ok) failures++;
+      if (r.action && i + 1 < checks.length) { console.log(`  skip  ${checks.length - i - 1} step(s) after the failed ${r.kind}`); break; }
     }
     if (process.env.ACCEPT_SHOT) {
-      await page.screenshot({ path: process.env.ACCEPT_SHOT, fullPage: true });
-      console.log(`  shot  ${process.env.ACCEPT_SHOT}`);
+      try {
+        await page.screenshot({ path: process.env.ACCEPT_SHOT, fullPage: true });
+        console.log(`  shot  ${process.env.ACCEPT_SHOT}`);
+      } catch (e) { console.log(`  note  no screenshot: ${firstLine(e)}`); }
     }
   } catch (e) {
-    unreachable = /ERR_CONNECTION_REFUSED|ERR_NAME_NOT_RESOLVED|ERR_ADDRESS_UNREACHABLE|ERR_CONNECTION_RESET/.test(e.message);
-    console.log(`  ${unreachable ? "CANNOT RUN" : "FAIL"}  could not drive ${target}: ${e.message.split("\n")[0]}`);
-    failures++;
+    const environment = e instanceof EnvError || !browser;
+    console.log(`  ${environment ? "CANNOT RUN" : "FAIL"}  could not ${browser ? "drive" : "launch a browser for"} ${target}: ${firstLine(e)}`);
+    return environment ? CANNOT_RUN : 1;
   } finally {
-    await browser.close();
+    await browser?.close().catch(() => {});
   }
-  if (unreachable) return 2;
   return failures === 0 ? 0 : 1;
+}
+
+const PAGES = {
+  "/list.html": `<ul id="l"></ul><script>fetch("/slow.json").then(r=>r.json()).then(a=>{l.innerHTML=a.map(x=>'<li class="item">'+x+'</li>').join("")})</script>`,
+  "/error-later.html": `<h1>ok</h1><script>setTimeout(()=>document.body.insertAdjacentHTML("beforeend",'<p class="error">boom</p>'),400)</script>`,
+  "/login.html": `<input id="email"><button id="go">Go</button><script>go.onclick=()=>setTimeout(()=>{location.href="/done.html"},400)</script>`,
+  "/done.html": `<h1 id="done">Done</h1>`,
+  "/keys.html": `<input id="k"><p id="pressed" hidden>yes</p><script>k.onkeydown=e=>{if(e.key==="Enter")pressed.hidden=false}</script>`,
+  "/late.html": `<script>setTimeout(()=>document.body.insertAdjacentHTML("beforeend",'<p id="late">x</p>'),5600)</script>`,
+};
+
+function fixtureServer() {
+  const server = createServer((req, res) => {
+    if (req.url === "/hang") return;
+    if (req.url === "/slow.json") return void setTimeout(() => { res.setHeader("content-type", "application/json"); res.end('["a","b","c"]'); }, 400);
+    const page = PAGES[req.url];
+    res.statusCode = page ? 200 : 404;
+    res.setHeader("content-type", "text/html");
+    res.end(page ?? "missing");
+  });
+  return new Promise((ok) => server.listen(0, "127.0.0.1", () => ok(server)));
 }
 
 async function selftest() {
@@ -162,15 +257,16 @@ async function selftest() {
     `<h1 id="t">Sign in</h1><form><input id="u"><button type="submit">Go</button></form>`);
 
   const run = async (file, checks) => await drive(file, checks);
+  const fast = 300;
 
   chk("disabled holds on the whole artifact", await run(whole, [{ disabled: "button" }]) === 0);
-  chk("disabled FAILS on the broken artifact", await run(broken, [{ disabled: "button" }]) === 1);
+  chk("disabled FAILS on the broken artifact", await run(broken, [{ disabled: "button", timeout: fast }]) === 1);
 
   chk("text equals discriminates",
     await run(whole, [{ text: { selector: "#t", equals: "Sign in" } }]) === 0 &&
-    await run(whole, [{ text: { selector: "#t", equals: "Register" } }]) === 1);
+    await run(whole, [{ text: { selector: "#t", equals: "Register", }, timeout: fast }]) === 1);
 
-  chk("a selector that matches nothing fails", await run(whole, [{ visible: "#nope" }]) === 1);
+  chk("a selector that matches nothing fails", await run(whole, [{ visible: "#nope", timeout: fast }]) === 1);
 
   const noisy = join(tmp, "noisy.html");
   writeFileSync(noisy, `<h1>x</h1><script>throw new Error("boom")</script>`);
@@ -182,9 +278,9 @@ async function selftest() {
   writeFileSync(wide, `<div style="width:2000px;height:10px"></div>`);
   chk("noOverflow discriminates a page that overflows on mobile",
     await run(whole, [{ noOverflow: { width: 375 } }]) === 0 &&
-    await run(wide, [{ noOverflow: { width: 375 } }]) === 1);
+    await run(wide, [{ noOverflow: { width: 375 }, timeout: fast }]) === 1);
 
-  chk("an unopenable target fails rather than passing",
+  chk("a missing local file still FAILS: the artifact itself is absent",
     await run(join(tmp, "does-not-exist.html"), [{ visible: "h1" }]) === 1);
 
   const live = join(tmp, "live.html");
@@ -194,17 +290,17 @@ async function selftest() {
      <script>${wire}</script>`;
   writeFileSync(live, form(
     `const f=()=>{go.disabled=!(u.value&&p.value)};u.oninput=f;p.oninput=f;`));
-  writeFileSync(stuck, form(``)); // the bug: nothing ever re-enables it
-  const fillBoth = [
+  writeFileSync(stuck, form(``));
+  const fillBoth = (timeout) => [
     { fill: { selector: "#u", value: "a@b.c" } },
     { fill: { selector: "#p", value: "hunter2" } },
-    { enabled: "#go" },
+    { enabled: "#go", timeout },
   ];
   chk("an interaction-gated outcome discriminates two pages that paint identically",
-    await run(live, fillBoth) === 0 && await run(stuck, fillBoth) === 1);
+    await run(live, fillBoth(fast)) === 0 && await run(stuck, fillBoth(fast)) === 1);
 
   chk("a fill against a missing selector fails",
-    await run(live, [{ fill: { selector: "#nope", value: "x" } }]) === 1);
+    await run(live, [{ fill: { selector: "#nope", value: "x" }, timeout: fast }]) === 1);
 
   const mono = join(tmp, "mono", "web", "node_modules", "playwright");
   mkdirSync(mono, { recursive: true });
@@ -217,14 +313,71 @@ async function selftest() {
   chk("Playwright installed one directory down is found",
     found !== null && (found.monorepoCopy === true || typeof found.chromium === "object"));
 
-  chk("a server that is not running is CANNOT RUN (exit 2), not a product failure",
-    await run("http://127.0.0.1:59173/", [{ visible: "body" }]) === 2);
-
   const shot = join(tmp, "shot.png");
   process.env.ACCEPT_SHOT = shot;
   const shotRc = await run(live, [{ visible: "#go" }]);
   delete process.env.ACCEPT_SHOT;
   chk("ACCEPT_SHOT saves a screenshot of the driven page", shotRc === 0 && existsSync(shot));
+
+  const server = await fixtureServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const slowDefault = (async () => {
+    const t0 = Date.now();
+    const rc = await run(`${base}/late.html`, [{ visible: "#late" }]);
+    return { rc, took: Date.now() - t0 };
+  })();
+
+  chk("a list rendered after a 400 ms fetch passes: assertions wait",
+    await run(`${base}/list.html`, [{ visible: ".item" }, { count: { selector: ".item", equals: 3 } },
+      { text: { selector: ".item", equals: "a" } }]) === 0);
+  chk("an error shown after 400 ms fails `hidden`: an absence must hold, not just glance true",
+    await run(`${base}/error-later.html`, [{ hidden: ".error", timeout: 1500 }]) === 1 &&
+    await run(`${base}/error-later.html`, [{ hidden: ".nothing-here" }]) === 0);
+  chk("a click that redirects after 400 ms, then `hidden #email`, passes",
+    await run(`${base}/login.html`, [{ click: "#go" }, { hidden: "#email" }, { url: { contains: "/done.html" } }]) === 0);
+  chk("goto is relative to the target; url, waitFor and press work",
+    await run(`${base}/login.html`, [{ url: { equals: "/login.html" } }, { goto: "/keys.html" },
+      { press: { selector: "#k", key: "Enter" } }, { waitFor: "#pressed" }, { url: { equals: "/keys.html" } },
+      { goto: "/done.html" }, { text: { selector: "#done", contains: "Done" } }]) === 0 &&
+    await run(`${base}/login.html`, [{ url: { equals: "/nowhere", }, timeout: fast }]) === 1);
+  const t0 = Date.now();
+  chk("a per-assertion `timeout` bounds the wait",
+    await run(`${base}/list.html`, [{ visible: ".ghost", timeout: 400 }]) === 1 && Date.now() - t0 < 4000);
+  const lines = [];
+  const say = console.log;
+  console.log = (m) => lines.push(m);
+  const skipRc = await run(`${base}/list.html`, [{ click: "#nope", timeout: fast }, { visible: ".item" }]);
+  console.log = say;
+  chk("a failed action skips the steps that depended on it",
+    skipRc === 1 && lines.some((l) => l.includes("skip")) && !lines.some((l) => l.includes("visible:")));
+  chk("a step with two actions, or an unknown one, fails rather than being half-run",
+    await run(`${base}/list.html`, [{ visible: ".item", hidden: ".item" }]) === 1 &&
+    await run(`${base}/list.html`, [{ levitates: ".item" }]) === 1);
+
+  chk("connection refused is CANNOT RUN (75), not a product failure",
+    await run("http://127.0.0.1:59173/", [{ visible: "body" }]) === CANNOT_RUN);
+  process.env.ACCEPT_NAV_TIMEOUT = "700";
+  const navRc = await run(`${base}/hang`, [{ visible: "body" }]);
+  delete process.env.ACCEPT_NAV_TIMEOUT;
+  chk("a navigation that times out is CANNOT RUN (75)", navRc === CANNOT_RUN);
+  const resetter = createTcpServer((socket) => socket.resetAndDestroy());
+  await new Promise((ok) => resetter.listen(0, "127.0.0.1", ok));
+  const resetRc = await run(`http://127.0.0.1:${resetter.address().port}/`, [{ visible: "body" }]);
+  resetter.close();
+  chk("a connection that is reset is CANNOT RUN (75)", resetRc === CANNOT_RUN);
+  chk("a name that does not resolve is CANNOT RUN (75)",
+    await run("http://no-such-host.invalid/", [{ visible: "body" }]) === CANNOT_RUN);
+  const noChromium = { chromium: { launch: async () => { throw new Error("Executable doesn't exist at /nowhere"); } } };
+  chk("a Chromium that cannot launch is CANNOT RUN (75)",
+    await drive(whole, [{ visible: "h1" }], noChromium) === CANNOT_RUN);
+  chk("a 404 from the page under test is a FAIL, not CANNOT RUN",
+    await drive(`${base}/missing.html`, [{ visible: "body" }]) === 1);
+
+  const late = await slowDefault;
+  chk("the default wait is 5000 ms: an element that appears at 5.6 s is not waited for",
+    late.rc === 1 && late.took >= 4800 && late.took < 9000);
+  server.closeAllConnections();
+  server.close();
 
   rmSync(tmp, { recursive: true, force: true });
   if (ran !== EXPECTED_CONTROLS) { console.log(`  FAIL  ran ${ran} controls, expected ${EXPECTED_CONTROLS}`); passed = -1; }

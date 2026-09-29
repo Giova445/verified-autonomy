@@ -1,82 +1,51 @@
-# Kit — Runnable Enforcement Layer
+# Kit
 
-The parts of the architecture that are code rather than prose. Everything here is
-project-agnostic; the only file you edit per project is `gates.json`.
-
-## Contents
-
-| File | Hook | Purpose |
-|---|---|---|
-| `hooks/stop-gate.sh` | `Stop`, `SubagentStop` | Refuses to let the turn end while any gate is red. The core mechanism. |
-| `hooks/deny-dangerous.sh` | `PreToolUse` | Blocks irreversible ops and self-modification of guardrails. |
-| `hooks/scan-diff-cheats.sh` | gate + CI | Detects the documented ways an agent fakes a green gate. |
-| `agents/verifier.md` | subagent | Adversarial reviewer. Runs after gates are green. |
-| `gates.json` | config | **The one file you edit per project.** |
-| `settings.hooks.json` | config | Merge into `.claude/settings.json`. |
-
-## Install
+What `install.sh` puts into a project. Hooks, skills and the verifier agent come from the
+plugin and are never copied.
 
 ```bash
-bash path/to/verified-autonomy/kit/install.sh [target-repo]
+bash "$VA/kit/install.sh" [--no-coauthor] [target-repo]
 ```
 
-It copies `bin/`, `hooks/` and the deliverable gates from the repo root, then runs
-`bin/arm write` so `.claude/gates.json` holds only commands that passed there. Merge
-`settings.hooks.json` into `.claude/settings.json`.
+`$VA` is the plugin root. Run it from the target repo or pass the path (spaces are fine).
 
-## Verify it actually works
+## What it does
 
-**Do not skip this.** An unverified gate is worse than no gate, because you will trust it.
+1. Probes the project's own commands, before anything is copied. It runs each lint,
+   typecheck and test command it finds at the root and up to two directories down
+   (`apps/web`, `packages/ui`) and writes `.claude/gates.json` from the ones that exit 0.
+   Lint and typecheck go in both tiers, tests in `full`; a gate for a sub-app carries a
+   `surface` so it runs only when the diff touches that app. A probe that hangs is killed
+   with its process group. Files a probe creates (`package-lock.json`, build info) are
+   removed or restored and named in the output; ignored files and your own work are left alone.
+2. Copies the runtime.
+3. Appends `.gitignore` lines for state paths that are not already ignored.
 
-```bash
-# 1. The Stop gate must refuse a red build
-printf '{"full":[{"name":"probe","cmd":"exit 1"}]}' > /tmp/g.json
-cp .claude/gates.json /tmp/gates.bak && cp /tmp/g.json .claude/gates.json
-echo '{}' | CLAUDE_PROJECT_DIR="$PWD" .claude/hooks/stop-gate.sh; echo "expect exit 2, got $?"
-cp /tmp/gates.bak .claude/gates.json && rm -f .claude/.gate-attempts
+## What it copies
 
-# 2. The deny hook must block a force push
-echo '{"tool_name":"Bash","tool_input":{"command":"git push --force origin x"}}' \
-  | .claude/hooks/deny-dangerous.sh; echo "expect exit 2, got $?"
+| Path | Purpose |
+|---|---|
+| `bin/verify`, `.claude/bin/verify` | the gate runner: `verify done` |
+| `bin/scope`, `.claude/bin/scope` | picks the surface-scoped gates a diff touches |
+| `.claude/gates/acceptance.py`, `drive.mjs` | product contract runner and browser driver |
+| `.claude/gates/trailer-check.py` | forbidden-trailer gate |
+| `.claude/selftest.sh` | proves the runner in this project: `bash .claude/selftest.sh` |
 
-# 3. A normal command must pass through
-echo '{"tool_name":"Bash","tool_input":{"command":"npm test"}}' \
-  | .claude/hooks/deny-dangerous.sh; echo "expect exit 0, got $?"
-```
+An existing `bin/verify` that differs from the kit's is kept; the kit's copy lands beside it
+as `bin/verify.new` with a warning. An existing `.claude/gates.json` is kept the same way.
+It refuses to write a config whose only passing gates are policy gates.
 
-Then do the real test: break a test on purpose, ask the agent to finish, and watch it
-refuse.
+## No co-author trailers
+
+Off by default. `--no-coauthor` writes `.claude/forbidden-trailers` (one trailer key per
+line) and sets `attribution.commit` to `""` in `.claude/settings.json`. The `co-author` gate
+is armed only when `.claude/forbidden-trailers` exists.
+
+## CI
+
+Copy `ci/verify.yml` to `.github/workflows/`. It runs `./bin/verify done` and uploads
+`.claude/evidence/`.
 
 ## Requirements
 
-- `bash`, `git`, `python3` (standard library only — no PyYAML, no jq)
-- macOS or Linux. On Windows, run under WSL2.
-
-## Behavior notes
-
-- **Circuit breaker.** `stop-gate.sh` blocks at most `GATE_MAX_BLOCKS` times (default 6) on
-  the same red gate, then demands a structured BLOCKED report instead of looping forever.
-  Reset by deleting `.claude/.gate-attempts`.
-- **Tier selection.** `GATE_TIER=fast` runs the fast gates; default is `full`.
-- **No config, no enforcement.** If `.claude/gates.json` is absent, `stop-gate.sh` exits 0 and
-  stays out of the way. This is deliberate for gradual adoption — and it means a missing
-  config silently disables the gate, so check it in.
-- **Evidence bundle** is written to `.claude/evidence/latest.json` on every run,
-  green or red.
-
-## Extending
-
-Add gates by adding entries to `gates.json` — no code change needed. Anything that exits
-non-zero on failure works.
-
-To add a new cheat detector, add a `flag` call in `scan-diff-cheats.sh`. Keep detectors
-cheap; this runs on every completion attempt.
-
-## Deliberate omissions
-
-- **TDD RED-proof gate.** Enforcing "the test must fail first" requires knowing which
-  test is new and running it at the pre-implementation commit. That is genuinely
-  project-shaped (test runner, selection syntax, monorepo layout), so it is specified in
-  [02 §3](../02-architecture.md) but not shipped as a generic script. Write it per project.
-- **Language-specific gates.** Commands live in `gates.json` rather than in the hooks, so
-  the hooks stay portable.
+`bash`, `git`, `python3`. `node` and Playwright only for a product contract that drives pages.

@@ -11,12 +11,15 @@ SKIP = {".git", "node_modules", ".next", "dist", "build", "out", "coverage", "ve
 CAP = 300
 PY_ROUTE = re.compile(r"@\w+\.(get|post|put|patch|delete|route)\(\s*[\"']([^\"']*)")
 JS_ROUTE = re.compile(r"\b(?:app|router|server)\.(get|post|put|patch|delete)\(\s*[\"'`](/[^\"'`]*)")
-PORT = re.compile(r"(?:-p|--port)[ =](\d{2,5})")
 TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|spec|e2e)/|\.(test|spec)\.[jt]sx?$|(^|/)test_[^/]*\.py$")
 PAGE = re.compile(r"(^|/)app/(.*/)?page\.(tsx|jsx|ts|js|mdx)$")
+HANDLER = re.compile(r"(^|/)app/(.*/)?route\.(tsx|jsx|ts|js|mjs)$")
+HANDLER_METHOD = re.compile(r"export\s+(?:async\s+)?(?:function|const)\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b")
 PAGES_DIR = re.compile(r"(^|/)pages/(.+)\.(tsx|jsx|ts|js)$")
-DEFAULT_PORT = {"next": 3000, "vite": 5173, "react-scripts": 3000, "nuxt": 3000, "astro": 4321,
-                "remix": 3000, "uvicorn": 8000, "flask": 5000, "django": 8000}
+COMPOSE = re.compile(r"(^|/)(docker-)?compose[^/]*\.ya?ml$")
+JS_FRAMEWORKS = ("next", "vite", "react-scripts", "nuxt", "astro", "@remix-run/react", "express", "fastify", "koa",
+                 "hono", "@nestjs/core", "@playwright/test", "playwright", "cypress", "vitest", "jest")
+PY_FRAMEWORKS = ("fastapi", "flask", "django", "uvicorn", "gunicorn", "streamlit", "pytest")
 
 
 def files(root):
@@ -34,95 +37,111 @@ def read(root, rel, limit=400_000):
         return ""
 
 
-def route_of_page(rel):
-    m = PAGE.search(rel)
-    parts = [p for p in (m.group(2) or "").strip("/").split("/") if p and not p.startswith("(")
-             and not p.startswith("@")]
+def route_of(rel, pattern):
+    parts = [p for p in (pattern.search(rel).group(2) or "").strip("/").split("/")
+             if p and not p.startswith("(") and not p.startswith("@")]
     return "/" + "/".join(parts)
 
 
-def serve_from_package(root, rel):
-    try:
-        pkg = json.loads(read(root, rel))
-    except ValueError:
-        return None
-    scripts = pkg.get("scripts") or {}
-    for key in ("dev", "start", "serve"):
-        body = scripts.get(key)
-        if not isinstance(body, str):
-            continue
-        kind = next((k for k in DEFAULT_PORT if k in body), None)
-        if not kind:
-            continue
-        m = PORT.search(body)
-        port = int(m.group(1)) if m else DEFAULT_PORT[kind]
-        return {"dir": os.path.dirname(rel) or ".", "cmd": "npm run %s" % key, "kind": kind,
-                "port": port, "ready": "curl -fsS -o /dev/null http://localhost:%d/" % port}
-    return None
+def make_targets(text):
+    out, cur = [], None
+    for line in text.splitlines():
+        m = re.match(r"^([A-Za-z0-9_][A-Za-z0-9_./-]*)\s*:(?!=)", line)
+        if m:
+            cur = {"target": m.group(1), "recipe": []}
+            out.append(cur)
+        elif line.startswith("\t") and cur is not None and len(cur["recipe"]) < 5:
+            cur["recipe"].append(line.strip())
+    return [t for t in out if t["recipe"]]
 
 
-def serve_from_python(root, rel, text):
-    m = re.search(r"uvicorn\s+([\w.:]+)[^\n]*", text)
-    if not m:
-        return None
-    line = m.group(0).strip()
-    p = PORT.search(line)
-    port = int(p.group(1)) if p else DEFAULT_PORT["uvicorn"]
-    return {"dir": os.path.dirname(rel) or ".", "cmd": line, "kind": "uvicorn", "port": port,
-            "ready": "curl -fsS -o /dev/null http://localhost:%d/docs" % port}
+def compose_services(text):
+    out, svc, key, inside = [], None, None, False
+    for line in text.splitlines():
+        if re.match(r"^services:\s*$", line):
+            inside = True
+        elif re.match(r"^\S", line):
+            inside = False
+        elif inside and re.match(r"^  [\w.-]+:\s*$", line):
+            svc, key = {"service": line.strip()[:-1]}, None
+            out.append(svc)
+        elif inside and svc is not None:
+            m = re.match(r"^    (command|image|build|ports):\s*(.*)$", line)
+            if m:
+                key = m.group(1)
+                if m.group(2) and key != "ports":
+                    svc[key] = m.group(2).strip()
+            elif key == "ports" and (item := re.match(r"^\s+-\s*[\"']?([^\"'\s]+)", line)):
+                svc.setdefault("ports", []).append(item.group(1))
+    return out
+
+
+def python_words(text, names):
+    return [n for n in names if re.search(r"(?i)(?<![\w-])%s(?![\w-])" % re.escape(n), text)]
 
 
 def discover(root):
-    out = {"serve": [], "pages": [], "endpoints": [], "cli": [], "e2e": [], "docs": []}
+    out = {k: [] for k in ("scripts", "make", "procfile", "compose", "python_scripts", "frameworks", "pages",
+                           "endpoints", "cli", "e2e", "docs")}
     for rel in files(root):
-        base = os.path.basename(rel)
+        base, folder = os.path.basename(rel), os.path.dirname(rel) or "."
+        text = None
         if base == "package.json":
-            s = serve_from_package(root, rel)
-            if s:
-                out["serve"].append(s)
             try:
-                bins = json.loads(read(root, rel)).get("bin") or {}
+                pkg = json.loads(read(root, rel))
             except ValueError:
-                bins = {}
-            names = [bins] if isinstance(bins, str) else list(bins)
-            out["cli"] += [{"name": n, "file": rel} for n in names]
-            continue
-        if base in ("Makefile", "Procfile", "pyproject.toml") or base.endswith(".sh"):
+                pkg = {}
+            pkg = pkg if isinstance(pkg, dict) else {}
+            scripts = pkg.get("scripts") if isinstance(pkg.get("scripts"), dict) else {}
+            out["scripts"] += [{"dir": folder, "name": k, "cmd": v} for k, v in scripts.items() if isinstance(v, str)][:40]
+            deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
+            out["frameworks"] += [{"dir": folder, "name": n} for n in JS_FRAMEWORKS if n in deps]
+            bins = pkg.get("bin") or {}
+            out["cli"] += [{"name": n, "file": rel} for n in ([bins] if isinstance(bins, str) else list(bins))]
+        elif base == "Makefile":
+            out["make"] += [dict(t, dir=folder) for t in make_targets(read(root, rel))]
+        elif base == "Procfile":
+            out["procfile"] += [{"dir": folder, "name": m.group(1), "cmd": m.group(2).strip()}
+                                for m in re.finditer(r"^([\w-]+):\s*(.+)$", read(root, rel), re.M)]
+        elif COMPOSE.search(rel):
+            out["compose"] += [dict(s, file=rel) for s in compose_services(read(root, rel))]
+        elif base == "pyproject.toml" or re.match(r"requirements[^/]*\.txt$", base):
             text = read(root, rel)
-            s = serve_from_python(root, rel, text)
-            if s and s not in out["serve"]:
-                out["serve"].append(s)
-            if base == "pyproject.toml":
-                sec = re.search(r"\[project\.scripts\]\n((?:[^\[\n].*\n?)*)", text)
-                for line in (sec.group(1).splitlines() if sec else []):
-                    if "=" in line:
-                        out["cli"].append({"name": line.split("=")[0].strip(), "file": rel})
-            continue
-        if re.search(r"(^|/)(e2e|playwright|cypress)/", rel) and re.search(r"\.(spec|test|cy)\.[jt]sx?$", rel):
+            out["frameworks"] += [{"dir": folder, "name": n} for n in python_words(text, PY_FRAMEWORKS)]
+            sec = re.search(r"\[project\.scripts\]\n((?:[^\[\n].*\n?)*)", text) if base == "pyproject.toml" else None
+            for line in (sec.group(1).splitlines() if sec else []):
+                if "=" in line:
+                    name, _, target = line.partition("=")
+                    out["python_scripts"].append({"name": name.strip(), "target": target.strip().strip("\"'"), "file": rel})
+        elif re.search(r"(^|/)(e2e|playwright|cypress)/", rel) and re.search(r"\.(spec|test|cy)\.[jt]sx?$", rel):
             out["e2e"].append(rel)
-            continue
-        if base.lower().startswith("readme") or (rel.startswith("docs/") and base.endswith(".md")):
+        elif base.lower().startswith("readme") or (rel.startswith("docs/") and base.endswith(".md")):
             out["docs"].append(rel)
+        elif TEST_FILE.search(rel):
             continue
-        if TEST_FILE.search(rel):
-            continue
-        if PAGE.search(rel):
-            out["pages"].append({"route": route_of_page(rel), "file": rel})
-            continue
-        m = PAGES_DIR.search(rel)
-        if m and not os.path.basename(m.group(2)).startswith("_"):
+        elif PAGE.search(rel):
+            out["pages"].append({"route": route_of(rel, PAGE), "file": rel})
+        elif HANDLER.search(rel):
+            methods = HANDLER_METHOD.findall(read(root, rel)) or ["ANY"]
+            out["endpoints"] += [{"method": m, "route": route_of(rel, HANDLER), "file": rel} for m in methods]
+        elif (m := PAGES_DIR.search(rel)) and not os.path.basename(m.group(2)).startswith("_"):
             route = "/" + re.sub(r"(^|/)index$", "", m.group(2))
-            key = "endpoints" if route.startswith("/api") else "pages"
-            out[key].append({"route": route, "file": rel} if key == "pages"
-                            else {"method": "ANY", "route": route, "file": rel})
-            continue
-        rx = PY_ROUTE if rel.endswith(".py") else JS_ROUTE if re.search(r"\.[cm]?[jt]s$", rel) else None
-        if rx:
-            for method, route in rx.findall(read(root, rel)):
+            if route.startswith("/api"):
+                out["endpoints"].append({"method": "ANY", "route": route, "file": rel})
+            else:
+                out["pages"].append({"route": route, "file": rel})
+        else:
+            rx = PY_ROUTE if rel.endswith(".py") else JS_ROUTE if re.search(r"\.[cm]?[jt]s$", rel) else None
+            for method, route in (rx.findall(read(root, rel)) if rx else []):
                 out["endpoints"].append({"method": "ANY" if method == "route" else method.upper(),
                                          "route": route or "/", "file": rel})
-    return {k: v[:50 if k == "docs" else CAP] for k, v in out.items()} | {
-        "counts": {k: len(v) for k, v in out.items()}}
+    return {k: v[:50 if k == "docs" else CAP] for k, v in out.items()} | {"counts": {k: len(v) for k, v in out.items()}}
+
+
+def keys_of(value):
+    if isinstance(value, dict):
+        return set(value) | {k for v in value.values() for k in keys_of(v)}
+    return {k for v in value for k in keys_of(v)} if isinstance(value, list) else set()
 
 
 def selftest():
@@ -142,14 +161,21 @@ def selftest():
         with open(path, "w") as fh:
             fh.write(body)
 
-    put("web/package.json", json.dumps({"scripts": {"dev": "next dev -p 3100"}}))
+    put("web/package.json", json.dumps({"scripts": {"dev": "next dev -p 3100", "build": "next build"},
+                                        "dependencies": {"next": "15", "react": "19"}, "devDependencies": {"@playwright/test": "1"}}))
     put("web/app/page.tsx", "x")
     put("web/app/(shop)/orders/[id]/page.tsx", "x")
     put("web/app/orders/page.test.tsx", "x")
+    put("web/app/api/orders/[id]/route.ts", "export async function GET() {}\nexport const POST = async () => {}\n")
+    put("web/app/api/health/route.js", "module.exports = 1")
     put("web/node_modules/lib/app/page.tsx", "x")
     put("api/main.py", '@app.get("/health")\ndef h(): ...\n@router.post("/orders")\ndef o(): ...\n')
     put("api/tests/test_main.py", '@app.get("/fake")\n')
-    put("api/Makefile", "dev:\n\tuv run uvicorn api.main:app --reload --port 8100\n")
+    put("api/Makefile", ".PHONY: dev\nVAR := 1\ndev:\n\tuv run uvicorn api.main:app --reload --port 8100\nclean:\n")
+    put("api/pyproject.toml", '[project]\ndependencies = ["fastapi>=0.1"]\n[project.scripts]\nserve = "api.main:run"\n')
+    put("Procfile", "web: npm --prefix web start\nworker: python api/worker.py\n")
+    put("docker-compose.yml", "services:\n  db:\n    image: postgres:16\n    ports:\n      - \"5433:5432\"\n"
+                              "  api:\n    build: ./api\n    command: uvicorn api.main:app --port 8000\nvolumes:\n  data:\n")
     put("svc/server.js", "app.get('/items', h)\n")
     put("web/e2e/orders.spec.ts", "x")
     put("README.md", "# x")
@@ -158,14 +184,28 @@ def selftest():
 
     chk("app-router pages, route groups dropped, tests and vendored dirs skipped",
         sorted(p["route"] for p in r["pages"]), ["/", "/orders/[id]"])
-    chk("python and js endpoints found, test files skipped",
+    chk("python, js and Next route-handler endpoints found with their methods, test files skipped",
         sorted((e["method"], e["route"]) for e in r["endpoints"]),
-        [("GET", "/health"), ("GET", "/items"), ("POST", "/orders")])
-    chk("how to serve each app, with its port and a readiness probe",
-        sorted((s["dir"], s["kind"], s["port"]) for s in r["serve"]),
-        [("api", "uvicorn", 8100), ("web", "next", 3100)])
+        [("ANY", "/api/health"), ("GET", "/api/orders/[id]"), ("GET", "/health"), ("GET", "/items"),
+         ("POST", "/api/orders/[id]"), ("POST", "/orders")])
+    chk("package.json scripts are listed with their bodies, verbatim",
+        sorted((s["dir"], s["name"], s["cmd"]) for s in r["scripts"]),
+        [("web", "build", "next build"), ("web", "dev", "next dev -p 3100")])
+    chk("Makefile targets with recipes (empty ones dropped) and Procfile entries",
+        ([(m["dir"], m["target"], m["recipe"]) for m in r["make"]], [(p["name"], p["cmd"]) for p in r["procfile"]]),
+        ([("api", "dev", ["uv run uvicorn api.main:app --reload --port 8100"])],
+         [("web", "npm --prefix web start"), ("worker", "python api/worker.py")]))
+    chk("docker-compose services with their command, image and published ports",
+        r["compose"], [{"service": "db", "image": "postgres:16", "ports": ["5433:5432"], "file": "docker-compose.yml"},
+                       {"service": "api", "build": "./api", "command": "uvicorn api.main:app --port 8000", "file": "docker-compose.yml"}])
+    chk("pyproject scripts and detected frameworks",
+        (r["python_scripts"], sorted((f["dir"], f["name"]) for f in r["frameworks"])),
+        ([{"name": "serve", "target": "api.main:run", "file": "api/pyproject.toml"}],
+         [("api", "fastapi"), ("web", "@playwright/test"), ("web", "next")]))
     chk("existing e2e specs and docs are listed for the agent to read",
         (r["e2e"], r["docs"]), (["web/e2e/orders.spec.ts"], ["README.md"]))
+    chk("nothing is guessed: no port, ready probe or kind appears anywhere in the output",
+        keys_of(r) & {"port", "ready", "kind", "start"}, set())
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("\ndiscover (%d checks)" % ran)

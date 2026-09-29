@@ -6,7 +6,8 @@ import subprocess
 import sys
 import tempfile
 
-CO_AUTHOR = re.compile(r"^co-authored-by:\s*\S", re.M | re.I)
+CONFIG = ".claude/forbidden-trailers"
+DEFAULT_KEYS = ("Co-Authored-By",)
 REC, FIELD = "\x1e", "\x1f"
 
 
@@ -16,6 +17,31 @@ class GitError(Exception):
 
 def git(root, *args):
     return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
+
+
+def parse_keys(text):
+    keys = [ln.strip().rstrip(":").strip() for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    return tuple(keys) or DEFAULT_KEYS
+
+
+def pattern_for(keys):
+    alt = "|".join(re.escape(k) for k in keys)
+    return re.compile(rf"^(?:{alt}):\s*\S", re.M | re.I)
+
+
+def forbidden_keys(root, base=None):
+    found = []
+    path = os.path.join(root, CONFIG)
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as fh:
+            found.extend(parse_keys(fh.read()))
+    elif os.path.exists(path):
+        raise OSError(f"{CONFIG} exists but is not a readable file")
+    if base:
+        blob = git(root, "show", f"{base}:{CONFIG}")
+        if blob.returncode == 0:
+            found.extend(parse_keys(blob.stdout))
+    return tuple(dict.fromkeys(found)) or None
 
 
 def resolve_base(root, ref):
@@ -36,19 +62,20 @@ def commits(root, rev_range):
     return out
 
 
-def audit(root, base=None):
+def audit(root, base=None, keys=DEFAULT_KEYS):
+    pattern = pattern_for(keys)
     if base:
         rev_range = [f"{resolve_base(root, base)}..HEAD"]
     else:
         rev_range = ["HEAD", "--not", "--remotes"]
     rows = commits(root, rev_range)
     rev_range = " ".join(rev_range)
-    return rev_range, [(sha, subj) for sha, subj, body in rows if CO_AUTHOR.search(body)], len(rows)
+    return rev_range, [(sha, subj) for sha, subj, body in rows if pattern.search(body)], len(rows)
 
 
-def message_has_co_author(path):
+def message_has_trailer(path, keys=DEFAULT_KEYS):
     with open(path, encoding="utf-8") as fh:
-        return bool(CO_AUTHOR.search(fh.read()))
+        return bool(pattern_for(keys).search(fh.read()))
 
 
 EXPECTED_CONTROLS = {
@@ -56,9 +83,14 @@ EXPECTED_CONTROLS = {
     "base-history-not-judged", "prose-mention-not-flagged", "no-remote-judges-all-history",
     "pushed-commits-not-judged",
     "missing-explicit-base-refuses", "message-mode-both-ways",
+    "unconfigured-repo-exits-0-not-configured", "configured-repo-with-trailer-exits-1",
+    "force-judges-without-config", "custom-key-judged-and-default-not",
+    "empty-config-means-co-authored-by", "config-deleted-on-branch-still-judged-from-base",
+    "unreadable-config-cannot-run",
 }
 
 TRAILER = "Co-Authored-By: Claude <noreply@anthropic.com>"
+SELF_PATH = os.path.abspath(__file__)
 
 
 def _commit(r, name, msg):
@@ -76,8 +108,19 @@ def _repo(path, branch="main"):
     return path
 
 
+def _write_config(r, text):
+    os.makedirs(os.path.join(r, ".claude"), exist_ok=True)
+    with open(os.path.join(r, CONFIG), "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def _run(r, *args):
+    p = subprocess.run([sys.executable, SELF_PATH, "--root", r, *args], capture_output=True, text=True)
+    return p.returncode, p.stdout + p.stderr
+
+
 def self_test():
-    print("co-author gate — controls\n")
+    print("trailer gate — controls\n")
     ok, n, seen = True, 0, set()
 
     def check(name, got, want):
@@ -86,7 +129,7 @@ def self_test():
         seen.add(name)
         good = got == want
         ok = ok and good
-        print(f"  {'ok  ' if good else 'FAIL'} {name:<40} {got!r}")
+        print(f"  {'ok  ' if good else 'FAIL'} {name:<46} {got!r}")
         if not good:
             print(f"       expected {want!r}")
 
@@ -137,45 +180,92 @@ def self_test():
         m = os.path.join(td, "msg")
         with open(m, "w", encoding="utf-8") as fh:
             fh.write(f"subject\n\n{TRAILER}\n")
-        v1 = message_has_co_author(m)
+        v1 = message_has_trailer(m)
         with open(m, "w", encoding="utf-8") as fh:
             fh.write("subject\n\nbody\n")
-        check("message-mode-both-ways", [v1, message_has_co_author(m)], [True, False])
+        check("message-mode-both-ways", [v1, message_has_trailer(m)], [True, False])
+
+        r = _repo(os.path.join(td, "e"))
+        _commit(r, "x", f"tagged\n\n{TRAILER}")
+        rc, out = _run(r)
+        check("unconfigured-repo-exits-0-not-configured", (rc, "not configured" in out), (0, True))
+        rc, _ = _run(r, "--force")
+        check("force-judges-without-config", rc, 1)
+        _write_config(r, "Co-Authored-By\n")
+        rc, _ = _run(r)
+        check("configured-repo-with-trailer-exits-1", rc, 1)
+
+        _write_config(r, "Signed-off-by:\n")
+        _, bad, _ = audit(r, keys=forbidden_keys(r))
+        signed_off = len(bad)
+        _commit(r, "y", "signed\n\nSigned-off-by: someone <s@x>")
+        _, bad, _ = audit(r, keys=forbidden_keys(r))
+        check("custom-key-judged-and-default-not", (signed_off, [s for _, s in bad]), (0, ["signed"]))
+
+        _write_config(r, "\n\n")
+        check("empty-config-means-co-authored-by", forbidden_keys(r), DEFAULT_KEYS)
+
+        r = _repo(os.path.join(td, "f"))
+        _write_config(r, "Co-Authored-By\n")
+        _commit(r, "base", "base")
+        git(r, "checkout", "-q", "-b", "feat")
+        os.remove(os.path.join(r, CONFIG))
+        _commit(r, "x", f"sneaky\n\n{TRAILER}")
+        rc, _ = _run(r, "--base", "main")
+        check("config-deleted-on-branch-still-judged-from-base", rc, 1)
+
+        r = _repo(os.path.join(td, "g"))
+        os.makedirs(os.path.join(r, CONFIG))
+        _commit(r, "x", "plain")
+        rc, out = _run(r)
+        check("unreadable-config-cannot-run", (rc, "CANNOT RUN" in out), (2, True))
 
     if seen != EXPECTED_CONTROLS:
         ok = False
         print(f"\n  !! CONTROL SET CHANGED: missing {sorted(EXPECTED_CONTROLS - seen) or 'none'}, "
               f"unexpected {sorted(seen - EXPECTED_CONTROLS) or 'none'}")
-    print(f"\n  co-author gate ({n} checks)")
+    print(f"\n  trailer gate ({n} checks)")
     return 0 if ok else 1
 
 
 def main():
-    ap = argparse.ArgumentParser(description="refuse any commit carrying a Co-Authored-By trailer")
+    ap = argparse.ArgumentParser(description=f"refuse commits carrying a trailer listed in {CONFIG}")
     ap.add_argument("--root", default=".")
     ap.add_argument("--base", help="judge BASE..HEAD (default: commits on no remote, the ones still fixable)")
     ap.add_argument("--message", help="commit-msg hook: judge a prepared message file")
+    ap.add_argument("--force", action="store_true", help=f"judge Co-Authored-By even when {CONFIG} is absent")
     ap.add_argument("--self-test", action="store_true")
     a = ap.parse_args()
     if a.self_test:
         return self_test()
+    root = os.path.abspath(a.root)
+    try:
+        keys = forbidden_keys(root, a.base)
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"  CANNOT RUN: {exc}", file=sys.stderr)
+        return 2
+    if keys is None:
+        if not a.force:
+            print(f"trailer gate: not configured (no {CONFIG}); nothing judged")
+            return 0
+        keys = DEFAULT_KEYS
     if a.message:
-        if message_has_co_author(a.message):
-            print("  refused: Co-Authored-By trailers are not allowed on any commit", file=sys.stderr)
+        if message_has_trailer(a.message, keys):
+            print(f"  refused: a forbidden trailer ({', '.join(keys)}) is not allowed on any commit", file=sys.stderr)
             return 1
         return 0
     try:
-        rev_range, bad, total = audit(os.path.abspath(a.root), a.base)
+        rev_range, bad, total = audit(root, a.base, keys)
     except GitError as exc:
         print(f"  CANNOT RUN: {exc}", file=sys.stderr)
         return 2
-    print(f"co-author gate — {rev_range}, {total} commit(s)")
+    print(f"trailer gate ({', '.join(keys)}) - {rev_range}, {total} commit(s)")
     for sha, subj in bad:
-        print(f"  co-author  {sha[:9]}  {subj[:60]}")
+        print(f"  trailer  {sha[:9]}  {subj[:60]}")
     if not bad:
-        print("  no Co-Authored-By trailers")
+        print("  no forbidden trailers")
         return 0
-    print(f"\n  {len(bad)}/{total} commit(s) carry a co-author. Reword them; the rule has no opt-out.")
+    print(f"\n  {len(bad)}/{total} commit(s) carry a forbidden trailer. Reword them; the rule has no opt-out.")
     return 1
 
 

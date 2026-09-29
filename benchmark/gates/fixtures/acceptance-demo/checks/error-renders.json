@@ -2,7 +2,7 @@
   { "hidden": "#error" },
   { "fill": { "selector": "#email", "value": "a@b.co" } },
   { "fill": { "selector": "#password", "value": "wrong" } },
-  { "click": "#submit" },
+  { "click": "#submit", "timeout": 1500 },
   { "visible": "#error" },
   { "consoleClean": true }
 ]

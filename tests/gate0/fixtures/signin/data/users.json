@@ -1,0 +1,23 @@
+{
+  "tester@example.test": {
+    "salt": "5f0c1a9e7b3d4c28",
+    "hash": "feea3609ac3d9a9f8b7597f09ac1bc59e673b94990352cb772fb35d553090dac",
+    "orders": [
+      {
+        "id": 2001,
+        "item": "Standing desk",
+        "total": 480
+      },
+      {
+        "id": 2002,
+        "item": "Desk mat",
+        "total": 35
+      },
+      {
+        "id": 2003,
+        "item": "Webcam",
+        "total": 120
+      }
+    ]
+  }
+}

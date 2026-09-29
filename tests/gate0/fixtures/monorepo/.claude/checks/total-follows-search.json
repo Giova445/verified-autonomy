@@ -1,0 +1,6 @@
+[
+  { "visible": ".order", "timeout": 10000 },
+  { "text": { "selector": "#total", "equals": "Total: $880" } },
+  { "fill": { "selector": "#search", "value": "alice" } },
+  { "text": { "selector": "#total", "equals": "Total: $515" } }
+]

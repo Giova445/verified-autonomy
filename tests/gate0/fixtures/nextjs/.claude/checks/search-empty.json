@@ -1,0 +1,8 @@
+[
+  { "visible": ".order", "timeout": 10000 },
+  { "hidden": "#empty" },
+  { "fill": { "selector": "#search", "value": "zzz" } },
+  { "visible": "#empty" },
+  { "text": { "selector": "#empty", "contains": "zzz" } },
+  { "count": { "selector": ".order", "equals": 0 } }
+]

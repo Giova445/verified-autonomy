@@ -1,0 +1,7 @@
+{
+  "name": "orders-cli",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "bin": { "orders": "bin/orders.mjs" }
+}

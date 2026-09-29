@@ -177,7 +177,7 @@ def bring_up(name, env, ctx):
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             port = int(env.get("port") or s.getsockname()[1])
-        extra = {"PORT": str(port), "BASE_URL": "http://127.0.0.1:%d" % port}
+        extra = {"PORT": str(port), "BASE_URL": "http://localhost:%d" % port}
     up = boot(env, ctx["root"], name, extra, ctx["left"])
     ctx["resolved"][name] = (up, provenance(env, ctx["root"], extra) if up[0] else None, extra)
 
@@ -483,7 +483,7 @@ def selftest():
     chk("a spent run budget makes the remaining outcomes NO VERDICT without running them",
         verdicts(run) == ["NO VERDICT"] * 3 and time.time() - began < 3 and "run budget" in run[1])
 
-    same = 'test "$BASE_URL" = http://127.0.0.1:$PORT'
+    same = 'test "$BASE_URL" = http://localhost:$PORT'
     run = go("ports", {"environments": {
         "a": {"start": "echo $PORT > a.port; touch up; exec sleep 60", "ready": "test -f up && " + same},
         "b": {"start": "echo {{port}} > b.port; exec sleep 60", "ready": "test -s b.port", "port": 45911}},

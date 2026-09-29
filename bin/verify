@@ -5,7 +5,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 CONFIG="$ROOT/.claude/gates.json"
 REGISTRY="$ROOT/.claude/evidence/assumptions.jsonl"
-USAGE="usage: verify {preflight|fast|full|done [--hook]|product|fingerprint}"
+USAGE="usage: verify {preflight|fast|full|done|product|fingerprint}"
 
 say() { printf '%s\n' "$*" >&2; }
 
@@ -45,11 +45,8 @@ find_state() {
 
 case "${1:-done}" in
   preflight) say "preflight:"; preflight || exit 1 ;;
-  fast|full|done|product|fingerprint|--hook)
+  fast|full|done|product|fingerprint)
     STATE_PY="$(find_state)" || {
-      case " $* " in
-        *" --hook "*) printf '%s\n' '{"systemMessage":"NO VERDICT: hooks/state.py was not found beside the runner, so nothing was checked"}'; exit 0 ;;
-      esac
       say "CANNOT RUN: hooks/state.py is neither beside bin/ nor in .claude/hooks/"; exit 1
     }
     VERIFY_ROOT="$ROOT" VERIFY_HOME="$HERE" exec python3 "$STATE_PY" verify "$@" ;;

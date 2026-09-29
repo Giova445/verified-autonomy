@@ -4,7 +4,7 @@
   ],
   "environments": {
     "local": {
-      "start": "python3 -m http.server $PORT --bind 127.0.0.1 --directory src",
+      "start": "python3 serve.py $PORT --directory src",
       "ready": "/"
     }
   },

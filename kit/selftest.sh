@@ -20,8 +20,8 @@ mkdir -p "$tmp/.claude"
 ( cd "$tmp" && git init -q . && git config user.email t@t && git config user.name t && git commit -q --allow-empty -m init )
 
 run() {
-  rm -rf "$tmp/.claude/evidence" "$tmp/.claude/.gate-attempts" "$tmp/.claude/.gate-judged"
-  OUT="$(CLAUDE_PROJECT_DIR="$tmp" VERIFY_CACHE=0 bash "$VERIFY" "$@" 2>&1)"; RC=$?
+  rm -rf "$tmp/.claude/evidence"
+  OUT="$(CLAUDE_PROJECT_DIR="$tmp" bash "$VERIFY" "$@" 2>&1)"; RC=$?
 }
 gates() { printf '%s' "$1" > "$tmp/.claude/gates.json"; }
 

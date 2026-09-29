@@ -7,12 +7,12 @@ import { join, resolve, isAbsolute } from "node:path";
 
 const require_ = createRequire(import.meta.url);
 
-const EXPECTED_CONTROLS = 25;
+const EXPECTED_CONTROLS = 32;
 const CANNOT_RUN = 75;
 const DEFAULT_TIMEOUT = 5000;
 const SETTLE_MS = 800;
 const POLL_MS = 50;
-const ENV_ERROR = /ERR_(CONNECTION_REFUSED|CONNECTION_RESET|CONNECTION_CLOSED|CONNECTION_TIMED_OUT|EMPTY_RESPONSE|NAME_NOT_RESOLVED|ADDRESS_UNREACHABLE|INTERNET_DISCONNECTED)|Timeout \d+ms exceeded/;
+const ENV_ERROR = /ERR_(CONNECTION_REFUSED|CONNECTION_RESET|CONNECTION_CLOSED|CONNECTION_ABORTED|CONNECTION_TIMED_OUT|SOCKET_NOT_CONNECTED|EMPTY_RESPONSE|NAME_NOT_RESOLVED|ADDRESS_UNREACHABLE|INTERNET_DISCONNECTED)|Timeout \d+ms exceeded/;
 
 class EnvError extends Error {}
 
@@ -116,7 +116,38 @@ async function navigate(page, url, timeout) {
   }
 }
 
+const ROUTE_KEYS = ["match", "json", "body", "contentType", "status", "delay"];
+const isRoute = (step) => Boolean(step) && typeof step === "object" && !Array.isArray(step) && "route" in step;
+const need = (ok, why) => { if (!ok) throw new Error(why); };
+
+function routeSpec(arg, base) {
+  need(arg && typeof arg === "object" && !Array.isArray(arg), "the argument must be an object such as {match, json, status, delay}");
+  const unknown = Object.keys(arg).filter((k) => !ROUTE_KEYS.includes(k));
+  need(unknown.length === 0, `unknown ${JSON.stringify(unknown)}; a route takes ${ROUTE_KEYS.join(", ")}`);
+  const { match, json, body, contentType, status, delay = 0 } = arg;
+  need(typeof match === "string" && match !== "", `'match' must be a non-empty URL pattern such as "**/api/items*"`);
+  need(json !== undefined || body !== undefined || status !== undefined, "give at least one of 'json', 'body' or 'status'");
+  need(json === undefined || body === undefined, "give 'json' or 'body', not both");
+  need(body === undefined || typeof body === "string", "'body' must be a string; use 'json' for data");
+  need(contentType === undefined || (typeof contentType === "string" && body !== undefined), "'contentType' must be a string and goes with 'body'");
+  need(status === undefined || (Number.isInteger(status) && status >= 100 && status <= 599), "'status' must be an integer from 100 to 599");
+  need(Number.isFinite(delay) && delay >= 0, "'delay' must be a number of milliseconds, 0 or more");
+  const pattern = match.startsWith("/") && /^https?:/.test(base) ? new URL(base).origin + match : match;
+  return { match, pattern, delay, response: { status, ...(json !== undefined ? { json, contentType: "application/json" } : { body: body ?? "", contentType }) } };
+}
+
 const ACTIONS = {
+  async route(page, arg, { base, routes }) {
+    const { match, pattern, delay, response } = routeSpec(arg, base);
+    const entry = { match, hits: 0 };
+    await page.route(pattern, async (r) => {
+      entry.hits++;
+      if (delay) await sleep(delay);
+      await r.fulfill(response);
+    });
+    routes.push(entry);
+    return done(`${match} answers ${response.status ?? 200}${delay ? ` after ${delay} ms` : ""}`);
+  },
   async fill(page, { selector, value }, { timeout }) {
     await page.locator(selector).first().fill(String(value ?? ""), { timeout });
     return done(`filled ${selector}`);
@@ -169,7 +200,7 @@ async function runStep(page, step, ctx) {
   if (!(timeout > 0)) return { ok: false, detail: "timeout must be a positive number of milliseconds", kind };
   const arg = step[kind];
   if (kind in ACTIONS) {
-    try { return { ...(await ACTIONS[kind](page, arg, { timeout, base: ctx.base })), kind, action: true }; }
+    try { return { ...(await ACTIONS[kind](page, arg, { timeout, base: ctx.base, routes: ctx.routes })), kind, action: true }; }
     catch (e) {
       if (e instanceof EnvError) throw e;
       return { ok: false, detail: `cannot ${kind}: ${firstLine(e)}`, kind, action: true };
@@ -190,22 +221,38 @@ async function drive(target, checks, pw = loadPlaywright()) {
   const url = /^https?:|^file:/.test(target)
     ? target
     : "file://" + (isAbsolute(target) ? target : resolve(process.cwd(), target));
-  const ctx = { consoleErrors: [], base: url };
+  const ctx = { consoleErrors: [], base: url, routes: [] };
   let browser;
   let failures = 0;
   try {
     browser = await pw.chromium.launch();
-    const page = await browser.newPage();
+    const page = await browser.newPage(checks.some(isRoute) ? { serviceWorkers: "block" } : {});
     page.on("console", (m) => { if (m.type() === "error") ctx.consoleErrors.push(m.text()); });
     page.on("pageerror", (e) => ctx.consoleErrors.push(String(e)));
-    const first = await navigate(page, url, navTimeout());
-    if (!first.ok) { console.log(`  FAIL  page load: ${first.detail}`); failures++; }
-    for (let i = 0; first.ok && i < checks.length; i++) {
+    const firstOther = checks.findIndex((s) => !isRoute(s));
+    let loaded = false;
+    let complete = true;
+    const load = async () => {
+      loaded = true;
+      const first = await navigate(page, url, navTimeout());
+      if (!first.ok) { console.log(`  FAIL  page load: ${first.detail}`); failures++; }
+      return first.ok;
+    };
+    for (let i = 0; complete && i < checks.length; i++) {
+      if (i === firstOther) { complete = await load(); if (!complete) break; }
       const r = await runStep(page, checks[i], ctx);
       console.log(`  ${r.ok ? "ok  " : "FAIL"}  ${r.kind}: ${r.detail}`);
       if (r.ok) continue;
       failures++;
-      if (r.action && i + 1 < checks.length) { console.log(`  skip  ${checks.length - i - 1} step(s) after the failed ${r.kind}`); break; }
+      if (!r.action) continue;
+      complete = false;
+      if (i + 1 < checks.length) console.log(`  skip  ${checks.length - i - 1} step(s) after the failed ${r.kind}`);
+    }
+    if (!loaded && failures === 0) complete = await load();
+    for (const r of complete ? ctx.routes : []) {
+      if (r.hits > 0) continue;
+      console.log(`  FAIL  route: ${r.match} never matched a request`);
+      failures++;
     }
     if (process.env.ACCEPT_SHOT) {
       try {
@@ -229,12 +276,14 @@ const PAGES = {
   "/login.html": `<input id="email"><button id="go">Go</button><script>go.onclick=()=>setTimeout(()=>{location.href="/done.html"},400)</script>`,
   "/done.html": `<h1 id="done">Done</h1>`,
   "/keys.html": `<input id="k"><p id="pressed" hidden>yes</p><script>k.onkeydown=e=>{if(e.key==="Enter")pressed.hidden=false}</script>`,
+  "/items.html": `<p id="loading">Loading</p><ul id="l"></ul><p id="empty" hidden>Nothing here yet</p><p id="error" hidden>Could not load items</p><script>fetch("/api/items").then(r=>{if(!r.ok)throw r.status;return r.json()}).then(a=>{if(a.length)l.innerHTML=a.map(x=>'<li class="item">'+x+'</li>').join("");else empty.hidden=false}).catch(()=>{error.hidden=false}).finally(()=>{loading.hidden=true})</script>`,
   "/late.html": `<script>setTimeout(()=>document.body.insertAdjacentHTML("beforeend",'<p id="late">x</p>'),5600)</script>`,
 };
 
 function fixtureServer() {
   const server = createServer((req, res) => {
     if (req.url === "/hang") return;
+    if (req.url === "/api/items") return void (res.setHeader("content-type", "application/json"), res.end('["a","b","c"]'));
     if (req.url === "/slow.json") return void setTimeout(() => { res.setHeader("content-type", "application/json"); res.end('["a","b","c"]'); }, 400);
     const page = PAGES[req.url];
     res.statusCode = page ? 200 : 404;
@@ -365,6 +414,11 @@ async function selftest() {
   const resetRc = await run(`http://127.0.0.1:${resetter.address().port}/`, [{ visible: "body" }]);
   resetter.close();
   chk("a connection that is reset is CANNOT RUN (75)", resetRc === CANNOT_RUN);
+  const gotoFailing = (message) => ({ goto: async () => { throw new Error(`page.goto: net::${message} at http://x/`); } });
+  const classified = async (message) => navigate(gotoFailing(message), "http://x/", 1).then(() => "none", (e) => e instanceof EnvError ? "environment" : "product");
+  chk("a socket that is not connected or a connection that is aborted is an environment error; a certificate error is not",
+    [await classified("ERR_SOCKET_NOT_CONNECTED"), await classified("ERR_CONNECTION_ABORTED"), await classified("ERR_CERT_AUTHORITY_INVALID")].join(" ") ===
+    "environment environment product");
   chk("a name that does not resolve is CANNOT RUN (75)",
     await run("http://no-such-host.invalid/", [{ visible: "body" }]) === CANNOT_RUN);
   const noChromium = { chromium: { launch: async () => { throw new Error("Executable doesn't exist at /nowhere"); } } };
@@ -372,6 +426,34 @@ async function selftest() {
     await drive(whole, [{ visible: "h1" }], noChromium) === CANNOT_RUN);
   chk("a 404 from the page under test is a FAIL, not CANNOT RUN",
     await drive(`${base}/missing.html`, [{ visible: "body" }]) === 1);
+
+  const items = `${base}/items.html`;
+  const api = "**/api/items";
+  const via = (spec, ...steps) => [{ route: { match: api, ...spec } }, ...steps];
+  const quick = (s) => ("visible" in s || "hidden" in s ? { ...s, timeout: 100 } : s);
+  const outcome = async (steps) => await run(items, steps) === 0 && await run(items, steps.filter((s) => !s.route).map(quick)) === 1;
+  chk("route: an outcome that passes only when the API returns empty fails without the route",
+    await outcome(via({ json: [] }, { visible: "#empty" }, { hidden: ".item", settle: 100 })));
+  chk("route: an outcome that passes only on a 500 shows the error state and fails without the route",
+    await outcome(via({ status: 500, json: { error: "boom" } }, { visible: "#error" }, { hidden: ".item", settle: 100 })));
+  chk("route: a delay makes the loading indicator observable; the outcome fails without the route",
+    await outcome(via({ json: ["a"], delay: 900 }, { hidden: "#never", settle: 250 }, { visible: "#loading" }, { visible: ".item" })));
+  const stacked = [...via({ json: [] }, { visible: "#empty" }), { route: { match: api, status: 503 } }, { goto: "/items.html" }, { visible: "#error" }];
+  chk("route: one declared mid-run governs later requests and outranks an earlier route on the same pattern",
+    await run(items, stacked) === 0 && await run(items, stacked.filter((_, i) => i !== 2).map(quick)) === 1);
+  const attempt = (arg) => runStep({ route: async () => {} }, { route: arg }, { base, routes: [] });
+  const invalid = await Promise.all([undefined, [], {}, { match: "", json: [] }, { match: api }, { match: api, json: [], typo: 1 },
+    { match: api, json: [], body: "x" }, { match: api, status: 99 }, { match: api, json: [], delay: -1 }, { match: api, json: [], delay: "5" }].map(attempt));
+  const valid = await Promise.all([{ match: api, json: [], status: 404, delay: 10 }, { match: "/api/x", body: "text", contentType: "text/plain" }, { match: api, json: null }].map(attempt));
+  chk("route: invalid arguments fail the step with a reason, and a valid one is accepted",
+    invalid.every((v) => !v.ok && v.detail.startsWith("cannot route: ")) && valid.every((v) => v.ok) &&
+    await run(items, [{ route: { match: api, status: "500" } }, { visible: "#loading" }]) === 1);
+  const seen = [];
+  console.log = (m) => seen.push(m);
+  const strayRc = await run(items, [{ route: { match: "**/api/itemz", json: [] } }, { visible: ".item" }]);
+  console.log = say;
+  chk("route: a route that no request matched fails the run, since the outcome never saw its state",
+    strayRc === 1 && seen.some((l) => l.includes("never matched")) && await run(items, [{ route: { match: "/api/items", body: "[]", contentType: "application/json" } }, { visible: "#empty" }]) === 0);
 
   const late = await slowDefault;
   chk("the default wait is 5000 ms: an element that appears at 5.6 s is not waited for",

@@ -1,0 +1,58 @@
+{
+  "environments": {
+    "local": {
+      "start": "uvicorn app.main:app --host 127.0.0.1 --port $PORT",
+      "ready": "/login"
+    }
+  },
+  "outcomes": [
+    {
+      "name": "a signed-out visitor is sent to the sign-in page",
+      "expect": "Ticket criterion 1: A signed-out visitor who opens `/` or `/orders` ends up on the sign-in page (`/login`). It shows the heading \"Sign in\", an Email field, a Password field and a \"Sign in\" button, and no order information.",
+      "env": "local",
+      "needs": ["TEST_ACCOUNT_EMAIL", "TEST_ACCOUNT_PASSWORD"],
+      "check": "node .claude/checks/run.mjs check signed-out",
+      "control": "node .claude/checks/run.mjs control signed-out"
+    },
+    {
+      "name": "signing in shows my three orders",
+      "expect": "Ticket criterion 2: Signing in with the test account takes the user to `/orders`. The page shows the heading \"Your orders\", \"Signed in as\" followed by the account's email, and the three orders in the order above, each like \"#2001 Standing desk $480\". Account data: \"The test account has three orders: #2001 Standing desk $480, #2002 Desk mat $35, #2003 Webcam $120.\"",
+      "env": "local",
+      "needs": ["TEST_ACCOUNT_EMAIL", "TEST_ACCOUNT_PASSWORD"],
+      "check": "node .claude/checks/run.mjs check orders-after-sign-in",
+      "control": "node .claude/checks/run.mjs control orders-after-sign-in"
+    },
+    {
+      "name": "a wrong password is refused and leaves me signed out",
+      "expect": "Ticket criterion 3: A wrong password puts the user back on the sign-in page with an alert reading \"Wrong email or password\". The user is not signed in: opening `/orders` sends them to the sign-in page again.",
+      "env": "local",
+      "needs": ["TEST_ACCOUNT_EMAIL", "TEST_ACCOUNT_PASSWORD"],
+      "check": "node .claude/checks/run.mjs check wrong-password",
+      "control": "node .claude/checks/run.mjs control wrong-password"
+    },
+    {
+      "name": "an unknown email or empty fields get the same refusal",
+      "expect": "Ticket criterion 4: An unknown email, or empty fields, give the same alert as a wrong password, so nothing reveals whether an email has an account.",
+      "env": "local",
+      "needs": ["TEST_ACCOUNT_EMAIL", "TEST_ACCOUNT_PASSWORD"],
+      "check": "node .claude/checks/run.mjs check unknown-email-or-empty-fields",
+      "control": "node .claude/checks/run.mjs control unknown-email-or-empty-fields"
+    },
+    {
+      "name": "reloading my orders keeps me signed in",
+      "expect": "Ticket criterion 5: Reloading `/orders` while signed in keeps the user signed in.",
+      "env": "local",
+      "needs": ["TEST_ACCOUNT_EMAIL", "TEST_ACCOUNT_PASSWORD"],
+      "check": "node .claude/checks/run.mjs check reload-keeps-sign-in",
+      "control": "node .claude/checks/run.mjs control reload-keeps-sign-in"
+    },
+    {
+      "name": "signing out locks my orders again",
+      "expect": "Ticket criterion 6: The orders page has a \"Sign out\" button. Using it returns the user to the sign-in page, and opening `/orders` afterwards sends them there again.",
+      "env": "local",
+      "needs": ["TEST_ACCOUNT_EMAIL", "TEST_ACCOUNT_PASSWORD"],
+      "check": "node .claude/checks/run.mjs check sign-out",
+      "control": "node .claude/checks/run.mjs control sign-out"
+    }
+  ]
+}

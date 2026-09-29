@@ -15,7 +15,9 @@ checks are kept; the automatic enforcement is not.
 - `./bin/verify product`: the product contract alone.
 - `./bin/verify full`: the engineering gates alone.
 
-Every run executes; nothing is cached.
+Every run executes. The one exception is an environment's `build`, which is skipped when a gate
+in the same run passed with the same command, or when the tree's fingerprint matches the last
+successful build.
 
 ## Engineering gates
 
@@ -29,9 +31,10 @@ not touch it. An unreadable file, an empty list or a placeholder command refuses
 `.claude/acceptance.json` holds what a user must be able to do or see, as the person or the
 ticket states it.
 
-- `environments`: `start` and `ready`. The harness picks a free `$PORT`, exports
-  `BASE_URL=http://localhost:$PORT`, starts the app, waits for `ready`, runs every outcome,
-  and stops the app.
+- `environments`: `start` and `ready`, and optionally `build`. The harness picks a free `$PORT`,
+  exports `BASE_URL=http://localhost:$PORT`, runs `build` unless this tree is already built,
+  starts the app, waits for `ready`, runs every outcome, and stops the app. A failed build is
+  CANNOT RUN.
 - `outcomes`: `name`, `expect` (the user's words), `check`, and optionally `control`, `needs`
   and `env`. A check exits 0 when the outcome holds and 75 when it cannot run. Any other exit
   fails. A control is a variant that must fail. If it passes, the check proves nothing.
@@ -41,6 +44,15 @@ Verdicts: `holds`, `FAILS`, `NOT PROVEN`, `CANNOT RUN`, `BLOCKED` (a `needs` var
 so nothing runs), `NO VERDICT` (timeout), `WRONG BUILD` (an environment's `provenance` probe
 prints a commit other than HEAD), `REFUSED` (an outcome lacks `name`, `expect` or `check`).
 Only `holds` passes.
+
+## Memory
+
+Each `verify` run samples the physical memory of its whole process tree twice a second (macOS
+`footprint`, Linux PSS, so pages shared between processes count once) and prints the peak. Above
+`VERIFY_MEMORY_MB` (600 by default) it names the step that peaked. It warns; it does not fail the
+run. Measured on a Next.js app: a full `verify done` (typecheck, tests, a one-worker build, the
+product check on the production server) peaks near 360 MB; a `next dev` server alone is about
+480 MB and an uncapped `next build` about 830 MB.
 
 ## Evidence
 

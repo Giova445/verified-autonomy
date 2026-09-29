@@ -11,7 +11,11 @@ permissions:
 
 jobs:
   selftest:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
@@ -22,7 +26,8 @@ jobs:
       - name: Install test runners
         run: |
           python3 -m pip install --quiet pytest==8.3.5
-          npm install --no-save --silent playwright@1.61.0 && npx playwright install --with-deps chromium
+          npm install --no-save --silent playwright@1.61.0
+          if [ "$RUNNER_OS" = Linux ]; then npx playwright install --with-deps chromium; else npx playwright install chromium; fi
       - name: Self-test
         run: bash selftest.sh
 

@@ -19,6 +19,7 @@ STALE_LOCK_SECONDS = 1000
 DEFAULT_GATE_TIMEOUT = 300.0
 DEFAULT_MAX_BLOCKS = 3
 DEFAULT_BUDGET = 800.0
+DEFAULT_MEMORY_MB = 600
 
 def say(text):
     sys.stderr.write(text.rstrip("\n") + "\n")
@@ -270,6 +271,77 @@ class Ctx:
 
 ACTIVE = []
 
+def descendants(root):
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    kids = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            kids.setdefault(int(parts[1]), []).append(int(parts[0]))
+    found, stack = [], [root]
+    while stack:
+        for kid in kids.get(stack.pop(), []):
+            found.append(kid)
+            stack.append(kid)
+    return found
+
+def footprint_mb(pids):
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.run(["footprint", "-f", "bytes"] + [a for p in pids for a in ("-p", str(p))],
+                                 capture_output=True, text=True, timeout=10).stdout
+            return sum(int(v) for v in re.findall(r"\]: \d+-bit\s+Footprint: (\d+) B", out)) / 1048576
+        except (OSError, subprocess.SubprocessError):
+            return 0.0
+    total = 0.0
+    for p in pids:
+        text = read_text("/proc/%d/smaps_rollup" % p) or ""
+        found = re.search(r"^Pss:\s+(\d+) kB", text, re.M)
+        total += int(found.group(1)) / 1024 if found else 0
+    return total
+
+class Meter:
+    def __init__(self):
+        import threading
+        self.phase, self.peak, self.peak_phase = "startup", 0.0, "startup"
+        self.budget = env_number("VERIFY_MEMORY_MB", DEFAULT_MEMORY_MB)
+        self.stopped = threading.Event()
+        self.thread = threading.Thread(target=self.run, daemon=True)
+
+    def run(self):
+        while not self.stopped.is_set():
+            self.sample()
+            self.stopped.wait(0.5)
+
+    def sample(self):
+        used = footprint_mb([os.getpid()] + descendants(os.getpid()))
+        if used > self.peak:
+            self.peak, self.peak_phase = used, self.phase
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_):
+        self.stopped.set()
+        self.thread.join(timeout=15)
+        if self.peak <= 0:
+            return
+        if self.peak > self.budget:
+            say("memory  : peak %d MB during %s, over the %d MB budget (VERIFY_MEMORY_MB)"
+                % (self.peak, self.peak_phase, self.budget))
+        else:
+            say("memory  : peak %d MB (budget %d MB)" % (self.peak, self.budget))
+
+METER = None
+
+def at_phase(label):
+    if METER:
+        METER.phase = label
+
 def kill_group(proc, sig=9):
     try:
         os.killpg(proc.pid, sig)
@@ -483,6 +555,7 @@ def run_tier(ctx, tier):
             out["budget"] = True
             break
         limit = ctx.gate_timeout if left is None else min(ctx.gate_timeout, left)
+        at_phase("gate '%s'" % name)
         result = run_gate(ctx.root, cmd, limit)
         entry = {"gate": name, "command": cmd, "exit_code": result["code"],
                  "stdout_sha256": result["sha"], "duration_ms": result["ms"], "executed_by": "harness"}
@@ -528,12 +601,14 @@ def accept_py(ctx):
             return os.path.normpath(path)
     return None
 
-def run_acceptance(ctx, script, results):
+def run_acceptance(ctx, script, results, tier=None):
     left = ctx.remaining()
+    passed = [g["command"] for g in (tier or {}).get("gates", []) if not g.get("skipped") and g.get("exit_code") == 0]
+    env = dict(os.environ, VERIFY_TREE=fingerprint(ctx.root), VERIFY_PASSED=json.dumps(passed))
     with open(os.path.join(ctx.evidence, "product.txt"), "wb") as log:
         proc = subprocess.Popen([sys.executable, script, ".", "--results", results], cwd=ctx.root,
                                 stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                                start_new_session=True)
+                                start_new_session=True, env=env)
         ACTIVE.append(proc)
         try:
             proc.wait(timeout=None if left is None else max(left, 1))
@@ -556,7 +631,8 @@ def product_half(ctx, tier=None):
                                          "nor in .claude/gates/"}
     results = os.path.join(ctx.evidence, "product.json")
     remove(results)
-    if not run_acceptance(ctx, script, results):
+    at_phase("the product check")
+    if not run_acceptance(ctx, script, results, tier):
         return {"status": "noverdict", "msg": "NO VERDICT: the product check did not finish in the time "
                                               "the hook has, so the product is unproven."}
     proc = subprocess.run([sys.executable, script, "--summarize", results], stdin=subprocess.DEVNULL,
@@ -586,6 +662,7 @@ def write_bundle(ctx, tier, prod, kind):
     green = bool(gates) and all(g.get("exit_code") == 0 for g in executed) and not error \
         and prod["status"] in ("held", "not run")
     bundle = {"commit_sha": sha, "product": prod["status"], "verdict": kind,
+              "peak_memory_mb": int(METER.peak) if METER else None,
               "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
               "gates": gates, "all_green": green,
               "trust": "self-reported by the process under test; not a receipt", "verified_by": "producer"}
@@ -774,6 +851,14 @@ def cmd_verify(argv):
     if sub == "fingerprint":
         print(fingerprint(ctx.root))
         return 0
+    global METER
+    if sub in ("product", "fast", "full", "done") and not ctx.hook and os.environ.get("VERIFY_MEMORY_MB") != "0":
+        METER = Meter()
+        with METER:
+            return dispatch(ctx, sub)
+    return dispatch(ctx, sub)
+
+def dispatch(ctx, sub):
     if sub == "product":
         return cmd_product(ctx)
     if sub in ("fast", "full"):

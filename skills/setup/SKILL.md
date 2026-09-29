@@ -39,7 +39,8 @@ you: take them from the user's request, open issues and the README, quote the so
 `.claude/acceptance.json`: three to eight journeys a user would call the product. Keep existing outcomes.
 
 ```json
-{ "environments": { "local": { "start": "cd web && npm run dev -- -p $PORT", "ready": "/" } },
+{ "environments": { "local": { "build": "cd web && npm run build",
+                                "start": "cd web && npm run start -- -p $PORT", "ready": "/" } },
   "outcomes": [ { "name": "orders list", "env": "local", "needs": ["API_TOKEN"],
     "expect": "Opening Orders shows the customer's orders, newest first",
     "check": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/orders.json",
@@ -48,6 +49,14 @@ you: take them from the user's request, open issues and the README, quote the so
 
 - The harness picks a free port, exports `$PORT` and `$BASE_URL` to `start`, `ready`, `check` and
   `control`, waits for `ready` (a URL path like `/`, or a command) and stops the app after.
+- Serve a production build (`build` plus the production `start`), not a dev server: it is what
+  users get, and a dev server compiles on demand, costing about 5x the memory and a slower first
+  page. When a passing gate runs the same `build` command, or this exact tree was built already,
+  the build is not repeated. Use a dev server only when the repo has no production build.
+- Keep a run under 600 MB: `verify` prints its peak and names the step over budget. Cap that
+  step's workers in the command, identically in the gate and in `build` so it is built once.
+  Next.js: `CIRCLE_NODE_TOTAL=1 npm run build` (one build worker: 830 to 400 MB). Jest:
+  `--maxWorkers=2`.
 - `expect` is what a user sees or does, in their words. Never "works" or "renders".
 - `check` exits 0 when it holds, non-zero when it does not, 75 when it could not run. `drive.mjs`
   steps (they wait for each assertion) are quick; `curl -fsS`, the real CLI and plain Playwright

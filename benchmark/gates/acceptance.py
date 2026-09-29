@@ -66,11 +66,12 @@ def substitute(cmd, values):
         cmd = cmd.replace("{{%s}}" % k, str(v).rstrip("/"))
     return cmd
 
-def revision(out):
+def revision(out, head=""):
     if FULL_SHA.search(out):
         return FULL_SHA.search(out).group(0)
     runs = HEX_RUN.findall(out)
-    return runs[0] if len(runs) == 1 and re.search("[a-f]", runs[0]) else None
+    lone = runs[0] if len(runs) == 1 else ""
+    return lone if lone and (re.search("[a-f]", lone) or head.lower().startswith(lone.lower())) else None
 
 def provenance(env, root, extra=None):
     spec = env.get("provenance")
@@ -83,7 +84,7 @@ def provenance(env, root, extra=None):
     if code != 0:
         return False, "the provenance probe %s" % ("never finished" if code is None else "exited %d" % code)
     m = re.search(spec["pattern"], out) if spec.get("pattern") else None
-    sha = (m and m.group(1 if m.groups() else 0)) if spec.get("pattern") else revision(out)
+    sha = (m and m.group(1 if m.groups() else 0)) if spec.get("pattern") else revision(out, head)
     if not sha or len(sha) < 7:
         return False, "no unambiguous revision (%r) in the probe output: print the full 40-character sha, or declare a `pattern`" % sha
     n = min(len(sha), len(head))
@@ -134,11 +135,21 @@ def interrupted(signum, _frame):
         kill_group(pgid)
     sys.exit(128 + signum)
 
+def answering(port):
+    for host in ("localhost", "127.0.0.1"):
+        try:
+            socket.create_connection((host, int(port)), timeout=1).close()
+            return "http://%s:%s" % (host, port)
+        except OSError:
+            pass
+    return None
+
 def is_ready(ready, root, extra):
     if not ready.startswith("/"):
         return sh(ready, root, extra, timeout=10)[0] == 0
+    base = answering(extra["PORT"])
     try:
-        urllib.request.build_opener(urllib.request.ProxyHandler({})).open(extra["BASE_URL"] + ready, timeout=3).close()
+        urllib.request.build_opener(urllib.request.ProxyHandler({})).open(base + ready, timeout=3).close()
         return True
     except Exception:
         return False
@@ -179,6 +190,8 @@ def bring_up(name, env, ctx):
             port = int(env.get("port") or s.getsockname()[1])
         extra = {"PORT": str(port), "BASE_URL": "http://localhost:%d" % port}
     up = boot(env, ctx["root"], name, extra, ctx["left"])
+    if extra and up[0]:
+        extra = dict(extra, BASE_URL=answering(extra["PORT"]) or extra["BASE_URL"])
     ctx["resolved"][name] = (up, provenance(env, ctx["root"], extra) if up[0] else None, extra)
 
 def malformed(o):
@@ -429,6 +442,19 @@ def selftest():
                       [out("exit 0", "exit 1", env=e, name=e) for e in list(envs)[1:]]})
     chk("vars are substituted; a different, unestablishable or 1-char-captured build is WRONG BUILD",
         verdicts(run)[:4] == ["holds", "WRONG BUILD", "WRONG BUILD", "WRONG BUILD"])
+    fake = "1234567" + "a" * 33
+    chk("a lone all-digit short sha that prefixes HEAD is a revision; a lone date is not",
+        revision("running 1234567", fake) == "1234567" and revision('{"built":"20260928"}', fake) is None)
+    with socket.socket() as srv:
+        srv.bind(("127.0.0.1", 0)); srv.listen(1)
+        base, ok = answering(srv.getsockname()[1]), False
+        if base:
+            host, port = base[len("http://"):].rsplit(":", 1)
+            try:
+                socket.create_connection((host, int(port)), timeout=1).close(); ok = True
+            except OSError:
+                ok = False
+    chk("BASE_URL names a host the app actually answers on", ok)
     chk("a 40-hex sha beats a JSON date; a lone date or two hex runs is no revision; a lone 7-hex sha is",
         verdicts(run)[4:] == ["holds", "WRONG BUILD", "holds", "WRONG BUILD"])
 
@@ -516,7 +542,7 @@ def selftest():
         and any("Search results: lists only matches" in l for l in st[1]) and summarize(go("absent", None)[3])[0] == "absent")
 
     shutil.rmtree(tmp, ignore_errors=True)
-    expected = 29
+    expected = 31
     print("\nSELF-TEST %s" % ("PASSED  (%d checks)" % expected if passed == ran == expected else "FAILED  (%d of %d checks)" % (passed, expected)))
     return 0 if passed == ran == expected else 1
 

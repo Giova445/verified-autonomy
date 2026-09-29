@@ -1,0 +1,10 @@
+{
+  "check": [
+    {"args": ["list", "--search", "zed"], "exit": 0, "stdout_lines": ["No orders match zed"], "stderr_lines": []},
+    {"args": ["list", "--search", "xyzzy"], "exit": 0, "stdout_lines": ["No orders match xyzzy"], "stderr_lines": []}
+  ],
+  "control": [
+    {"args": ["list", "--search", "bob"], "exit": 0, "stdout_lines": ["No orders match bob"], "stderr_lines": []},
+    {"args": ["list", "--search", "alice"], "exit": 0, "stdout_lines": ["No orders match alice"], "stderr_lines": []}
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "check": [
+    {"args": ["list", "--search", "erre"], "exit": 0, "stdout_rows": [["1002", "Bob Ferreira", "Monitor arm", "95.00"]], "stderr_lines": []},
+    {"args": ["list", "--search", "kafo"], "exit": 0, "stdout_rows": [["1004", "Chidi Okafor", "Webcam", "120.00"]], "stderr_lines": []},
+    {"args": ["list", "--search", "chidi okafor"], "exit": 0, "stdout_rows": [["1004", "Chidi Okafor", "Webcam", "120.00"]], "stderr_lines": []},
+    {"args": ["total", "--search", "erre"], "exit": 0, "stdout_lines": ["Total: 95.00"], "stderr_lines": []}
+  ],
+  "control": [
+    {"args": ["list", "--search", "qqq"], "exit": 0, "stdout_rows": [["1002", "Bob Ferreira", "Monitor arm", "95.00"]], "stderr_lines": []},
+    {"args": ["list", "--search", "qqq"], "exit": 0, "stdout_rows": [["1004", "Chidi Okafor", "Webcam", "120.00"]], "stderr_lines": []},
+    {"args": ["list", "--search", "qqq qqq"], "exit": 0, "stdout_rows": [["1004", "Chidi Okafor", "Webcam", "120.00"]], "stderr_lines": []},
+    {"args": ["total", "--search", "qqq"], "exit": 0, "stdout_lines": ["Total: 95.00"], "stderr_lines": []}
+  ]
+}

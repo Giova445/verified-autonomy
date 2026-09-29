@@ -21,7 +21,14 @@ listening(){ python3 -c 'import socket,sys; s=socket.socket(); s.settimeout(1); 
 free_port(){ python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'; }
 wait_for_file(){ local i; for i in $(seq 1 100); do [ -s "$1" ] && return 0; sleep 0.2; done; return 1; }
 gone(){ local i; for i in $(seq 1 50); do "$@" || return 0; sleep 0.2; done; return 1; }
-SERVE='python3 -m http.server $PORT --bind 127.0.0.1'
+until_up(){ local i; for i in $(seq 1 600); do "$@" && return 0; sleep 0.2; done; return 1; }
+cat > "$TMP/serve.py" <<'PY'
+import runpy, socket, sys
+socket.getfqdn = lambda name="": name
+sys.argv = ["http.server", sys.argv[1], "--bind", "127.0.0.1", *sys.argv[2:]]
+runpy.run_module("http.server", run_name="__main__")
+PY
+SERVE='python3 '"$TMP"'/serve.py $PORT'
 TRIVIAL='{"outcomes":[{"name":"o","expect":"e","check":"exit 0","control":"exit 1"}]}'
 
 d="$(repo)"
@@ -64,7 +71,7 @@ contract "$d" '{"environments":{"local":{"start":"echo $PORT > port; exec '"$SER
  "outcomes":[{"name":"long","expect":"e","env":"local","check":"sleep 6171","control":"exit 1"}]}'
 ( cd "$d" && ACCEPT_TIMEOUT=20 exec python3 "$ACC" . --results "$d/r.json" ) > "$d/out.txt" 2>&1 &
 pid=$!
-wait_for_file "$d/port"; sleep 1.5
+wait_for_file "$d/port"; until_up pgrep -f 'sleep 6171' >/dev/null
 kill -TERM "$pid"; wait "$pid"; rc=$?
 chk "SIGTERM stops the server and the running check, and exits 143" \
   "$rc $(gone listening "$(cat "$d/port")" && echo server-gone) $(gone pgrep -f 'sleep 6171' >/dev/null && echo check-gone)" \
@@ -75,7 +82,7 @@ contract "$d" '{"environments":{"local":{"start":"echo $PORT > port; exec '"$SER
  "outcomes":[{"name":"long","expect":"e","env":"local","check":"sleep 6172","control":"exit 1"}]}'
 ( cd "$d" && ACCEPT_TIMEOUT=20 exec python3 "$ACC" . --results "$d/r.json" ) > "$d/out.txt" 2>&1 &
 pid=$!
-wait_for_file "$d/port"; sleep 1.5
+wait_for_file "$d/port"; until_up pgrep -f 'sleep 6172' >/dev/null
 kill -9 "$pid"; wait "$pid" 2>/dev/null
 port="$(cat "$d/port")"
 survived="$(listening "$port" && echo orphaned)"
@@ -147,7 +154,7 @@ else
   printf '[{"visible":".item","timeout":1500},{"count":{"selector":".item","equals":1}}]' > "$TMP/site/has-item.json"
   printf '[{"visible":"body"}]' > "$TMP/site/any.json"
   d="$(repo)"
-  contract "$d" '{"environments":{"site":{"start":"exec python3 -m http.server $PORT --bind 127.0.0.1 --directory '"$TMP"'/site","ready":"/"}},
+  contract "$d" '{"environments":{"site":{"start":"exec '"$SERVE"' --directory '"$TMP"'/site","ready":"/"}},
    "outcomes":[
     {"name":"late list","expect":"the list appears after a 400 ms load","env":"site",
      "check":"node '"$DRIVE"' \"$BASE_URL/late-list.html\" '"$TMP"'/site/has-item.json","control":"node '"$DRIVE"' \"$BASE_URL/late-error.html\" '"$TMP"'/site/has-item.json"},

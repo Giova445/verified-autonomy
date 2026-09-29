@@ -9,7 +9,7 @@ verify(){ CLAUDE_PROJECT_DIR="$tmp" bash "$PLUGIN/bin/verify" "$@" 2>&1; }
 
 echo "self-test: $ROOT"
 
-chk "the plugin registers no hooks" "$(ls "$PLUGIN/hooks" | tr '\n' ' ')" "state.py "
+chk "the plugin registers no hooks" "$(ls "$PLUGIN/hooks" | grep -v '^__pycache__$' | tr '\n' ' ')" "state.py "
 
 tmp="$(mktemp -d)"
 ( cd "$tmp" && git init -q . && git config user.email t@t && git config user.name t && mkdir -p .claude \

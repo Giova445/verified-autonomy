@@ -528,12 +528,14 @@ def accept_py(ctx):
             return os.path.normpath(path)
     return None
 
-def run_acceptance(ctx, script, results):
+def run_acceptance(ctx, script, results, tier=None):
     left = ctx.remaining()
+    passed = [g["command"] for g in (tier or {}).get("gates", []) if not g.get("skipped") and g.get("exit_code") == 0]
+    env = dict(os.environ, VERIFY_TREE=fingerprint(ctx.root), VERIFY_PASSED=json.dumps(passed))
     with open(os.path.join(ctx.evidence, "product.txt"), "wb") as log:
         proc = subprocess.Popen([sys.executable, script, ".", "--results", results], cwd=ctx.root,
                                 stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                                start_new_session=True)
+                                start_new_session=True, env=env)
         ACTIVE.append(proc)
         try:
             proc.wait(timeout=None if left is None else max(left, 1))
@@ -556,7 +558,7 @@ def product_half(ctx, tier=None):
                                          "nor in .claude/gates/"}
     results = os.path.join(ctx.evidence, "product.json")
     remove(results)
-    if not run_acceptance(ctx, script, results):
+    if not run_acceptance(ctx, script, results, tier):
         return {"status": "noverdict", "msg": "NO VERDICT: the product check did not finish in the time "
                                               "the hook has, so the product is unproven."}
     proc = subprocess.run([sys.executable, script, "--summarize", results], stdin=subprocess.DEVNULL,

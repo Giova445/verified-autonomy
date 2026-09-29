@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import hashlib
 import json
 import os
 import re
@@ -154,6 +155,39 @@ def is_ready(ready, root, extra):
     except Exception:
         return False
 
+def build(env, root, name, extra, values, left):
+    if not env.get("build"):
+        return True, ""
+    cmd = substitute(env["build"], values)
+    try:
+        passed = json.loads(os.environ.get("VERIFY_PASSED") or "[]")
+    except ValueError:
+        passed = []
+    if cmd in passed:
+        return True, "built by the gate that just passed"
+    tree = os.environ.get("VERIFY_TREE", "")
+    key = hashlib.sha256(("%s\0%s" % (tree, cmd)).encode()).hexdigest() if tree and not tree.startswith("uncacheable") else ""
+    stamp = os.path.join(root, EVIDENCE, "build-%s.stamp" % clean(name))
+    try:
+        if key and open(stamp).read().strip() == key:
+            return True, "already built from this exact tree"
+    except OSError:
+        pass
+    if os.path.exists(stamp):
+        os.remove(stamp)
+    wait = max(1, min(limit("ACCEPT_BUILD_TIMEOUT", 600), left()))
+    code, out = sh(cmd, root, extra, timeout=wait)
+    with open(os.path.join(root, EVIDENCE, "build-%s.log" % clean(name)), "w", encoding="utf-8") as log:
+        log.write(out)
+    if code is None:
+        return False, "`build` gave no answer in %ds" % wait
+    if code != 0:
+        return False, "`build` exited %d%s" % (code, tail(out))
+    if key:
+        with open(stamp, "w") as fh:
+            fh.write(key + "\n")
+    return True, "built"
+
 def boot(env, root, name, extra, left):
     if not env.get("start"):
         return True, ""
@@ -166,6 +200,9 @@ def boot(env, root, name, extra, left):
             return True, "already up, reused as declared"
         return False, ("`ready` passes before `start` ran, so something else is already serving there and would "
                        "be checked instead of this build. Stop it, or declare \"reuse\": true if that is this build")
+    built = build(env, root, name, extra, values, left)
+    if not built[0]:
+        return built
     with open(os.path.join(root, EVIDENCE, "server-%s.log" % clean(name)), "w") as log:
         p = subprocess.Popen(start, shell=True, cwd=root, stdin=subprocess.DEVNULL, stdout=log,
                              stderr=subprocess.STDOUT, env=dict(os.environ, **extra), start_new_session=True)
@@ -534,6 +571,24 @@ def selftest():
     chk("something already serving is CANNOT RUN unless reuse is declared, and is never restarted",
         verdicts(run) == ["CANNOT RUN"] and "already serving" in run[1] and not os.path.exists(os.path.join(run[2], "started")))
 
+    def built(tree=None, passed=None, build="echo b >> builds; test -f fail-build && exit 4; true"):
+        env = {"VERIFY_TREE": tree or "", "VERIFY_PASSED": json.dumps(passed or [])}
+        run = go("build", {"environments": {"local": {"build": build, "start": "test -f fail-build || touch up; exec sleep 60",
+                                                      "ready": "test -f up"}},
+                           "outcomes": [out("test -f up", "exit 1", env="local")]}, env)
+        sh("rm -f up", run[2])
+        return verdicts(run)[0], open(os.path.join(run[2], "builds")).read().count("b") if os.path.exists(os.path.join(run[2], "builds")) else 0
+
+    first, again, changed = built("t1"), built("t1"), built("t2")
+    chk("a declared build runs before start, and is skipped only for the exact tree it was built from",
+        first == ("holds", 1) and again == ("holds", 1) and changed == ("holds", 2))
+    chk("a build the passing gates already ran is not run again",
+        built("t3", ["echo b >> builds; test -f fail-build && exit 4; true"]) == ("holds", 2))
+    sh("touch fail-build", os.path.join(tmp, "build"))
+    chk("a build that fails is CANNOT RUN, forgets its stamp, and start never runs",
+        built("t4") == ("CANNOT RUN", 3) and not os.path.exists(os.path.join(tmp, "build", EVIDENCE, "build-local.stamp"))
+        and built("t4")[1] == 4)
+
     run = go("evidence", {"outcomes": [out('test -n "$ACCEPT_SHOT" && touch "$ACCEPT_SHOT"', "exit 1"),
                                        out("exit 1", "exit 1", name="Search results", expect="lists only matches")]})
     rs, st = json.load(open(run[3]))["outcomes"], summarize(run[3])
@@ -542,7 +597,7 @@ def selftest():
         and any("Search results: lists only matches" in l for l in st[1]) and summarize(go("absent", None)[3])[0] == "absent")
 
     shutil.rmtree(tmp, ignore_errors=True)
-    expected = 31
+    expected = 34
     print("\nSELF-TEST %s" % ("PASSED  (%d checks)" % expected if passed == ran == expected else "FAILED  (%d of %d checks)" % (passed, expected)))
     return 0 if passed == ran == expected else 1
 

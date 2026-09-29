@@ -47,7 +47,7 @@ Before a PR, say "prove it" (the `prove` skill), or run:
 ```json
 {
   "environments": {
-    "local": { "start": "npm run dev -- --port $PORT", "ready": "/" }
+    "local": { "build": "npm run build", "start": "npm run start -- --port $PORT", "ready": "/" }
   },
   "outcomes": [
     {
@@ -63,6 +63,9 @@ Before a PR, say "prove it" (the `prove` skill), or run:
 
 - `start`, `ready`: the harness starts the app on a free `$PORT` (with
   `BASE_URL=http://localhost:$PORT`), waits for `ready`, runs the outcomes, and stops the app.
+- `build`: optional, run before `start`. It is skipped when a gate that just passed ran the same
+  command, or when this exact tree was already built. A production build (`build`, then the
+  production `start`) uses a fraction of a dev server's memory; prefer it.
 - `check` exits 0 when the outcome holds and 75 when it cannot run. Any other exit is a failure.
 - `control` is a variant that must fail, proving the check can tell broken from working.
 - `needs` lists environment variables an outcome or environment requires.
@@ -75,6 +78,7 @@ Before a PR, say "prove it" (the `prove` skill), or run:
 |---|---|
 | `GATE_TIMEOUT` | seconds for one test gate (default 300); past it the verdict is NO VERDICT |
 | `ACCEPT_TIMEOUT`, `ACCEPT_READY_TIMEOUT`, `ACCEPT_BUDGET` | seconds for one check (120), for the app to become ready (120), for the whole contract (600) |
+| `ACCEPT_BUILD_TIMEOUT` | seconds for an environment's `build` (default 600) |
 | `ACCEPT_NAV_TIMEOUT` | milliseconds `drive.mjs` waits for a page to load (default 30000) |
 | `VERIFY_SCOPE=0` | run gates whose surface the diff does not touch |
 | `PLAYWRIGHT_PATH` | where `drive.mjs` finds Playwright when it is not in the repo |

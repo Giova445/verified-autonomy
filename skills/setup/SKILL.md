@@ -23,12 +23,12 @@ git switch -c chore/arm-verified-autonomy && bash "$VA/kit/install.sh" .
 
 `$VA` is the version whose hooks are loaded (`installPath` in `installed_plugins.json`), else the
 highest cached. The installer arms gates from the commands that pass today; a `.new` beside an
-existing `gates.json` or `AGENTS.md` is merged by hand (keep every existing entry, then delete it).
+existing `gates.json` or `bin/verify` is merged by hand (keep every existing entry, then delete it).
 A command that fails on a clean checkout is inherited debt: leave it out, report it.
 
 ## 2. Discover
 
-`mkdir -p .claude/evidence && python3 bin/discover . > .claude/evidence/discover.json` prints facts
+`mkdir -p .claude/evidence && python3 "$VA/bin/discover" . > .claude/evidence/discover.json` prints facts
 only (scripts, Makefile/Procfile/compose commands, frameworks, pages, endpoints, e2e specs, docs);
 choose the start command yourself. Then read the README, `docs/`, open issues, recent PRs and the
 user's request: expectations live there.
@@ -65,8 +65,8 @@ weaken an `expect` to pass.
 
 ## 5. Commit
 
-Run the self-test the installer copied under `.claude/`, then `git add -f .claude/gates.json
-.claude/acceptance.json .claude/checks AGENTS.md` and commit `chore: arm verified-autonomy` (no
-`Co-Authored-By` trailer).
+Run `bash .claude/selftest.sh`, then `git add -f bin/verify .claude/bin .claude/hooks/state.py
+.claude/gates .claude/gates.json .claude/acceptance.json .claude/checks` and commit
+`chore: arm verified-autonomy`.
 Commit what CI needs to run the contract too: the Playwright dev dependency and a CI step
 `npx playwright install chromium`. Never merge.

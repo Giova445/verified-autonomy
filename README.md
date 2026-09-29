@@ -83,7 +83,10 @@ with a `surface` (a list of globs) runs only when the diff touches it.
 |---|---|
 | `.claude/protected-branches` | branches agents may not push or merge into (default `main`, `master`) |
 | `GATE_MAX_BLOCKS` | refusals before the blocked report (default 3) |
-| `ACCEPT_TIMEOUT`, `ACCEPT_READY_TIMEOUT` | seconds allowed for one check, and for the app to become ready |
+| `.claude/forbidden-trailers` | opt-in: commit trailers to refuse, one per line (empty file means `Co-Authored-By`) |
+| `GATE_TIMEOUT`, `VERIFY_BUDGET` | seconds for one gate (default 300) and for a whole stop (default 800); past them the verdict is NO VERDICT |
+| `ACCEPT_TIMEOUT`, `ACCEPT_READY_TIMEOUT`, `ACCEPT_BUDGET` | seconds for one check (120), for the app to become ready (120), for the whole contract (600) |
+| `ACCEPT_NAV_TIMEOUT` | milliseconds `drive.mjs` waits for a page to load (default 30000) |
 | `VERIFY_CACHE=0` | judge even when nothing changed since the last verdict |
 | `VERIFY_SCOPE=0` | run gates whose surface the diff does not touch |
 | `PLAYWRIGHT_PATH` | where `drive.mjs` finds Playwright when it is not in the repo |

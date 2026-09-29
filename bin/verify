@@ -16,10 +16,10 @@ preflight() {
     if [ -n "$status" ] && ! printf '%s' "$status" | grep -qiE "not initialized|no such|not found"; then
       say "  graph   : ok"
     else
-      say "  graph   : NOT INITIALIZED. Run 'codegraph init -i'; until then blast radius is grep precision."
+      say "  graph   : NOT INITIALIZED. Run 'codegraph init -i'; until then graph queries are unavailable."
     fi
   else
-    say "  graph   : codegraph is not on PATH; blast radius is grep precision."
+    say "  graph   : codegraph is not on PATH."
   fi
   if [ -f "$CONFIG" ]; then
     if python3 -m json.tool "$CONFIG" >/dev/null 2>&1; then say "  gates   : parseable"

@@ -236,12 +236,65 @@ def bring_up(name, env, ctx):
         extra = dict(extra, BASE_URL=answering(extra["PORT"]) or extra["BASE_URL"])
     ctx["resolved"][name] = (up, provenance(env, ctx["root"], extra) if up[0] else None, extra)
 
-def stopped(ctx, name):
+def server_log(name):
+    return os.path.join(EVIDENCE, "server-%s.log" % clean(name))
+
+def ended(ctx, name):
     p = ctx["procs"].get(name)
     if p is None or p.poll() is None:
         return None
-    how = "was killed by signal %d" % -p.returncode if p.returncode < 0 else "exited %d" % p.returncode
-    return "its `start` %s (see %s)" % (how, os.path.join(EVIDENCE, "server-%s.log" % clean(name)))
+    rc = p.returncode
+    if rc < 0:
+        return None, "its `start` was killed by signal %d (see %s)" % (-rc, server_log(name))
+    if rc > 128:
+        return None, "its `start` exited %d, which a shell reports for a child killed by signal %d (see %s)" % (rc, rc - 128, server_log(name))
+    return rc, "its `start` exited %d (see %s)" % (rc, server_log(name))
+
+def port_closed(port):
+    for host in ("localhost", "127.0.0.1"):
+        try:
+            socket.create_connection((host, int(port)), timeout=1).close()
+            return False
+        except socket.timeout:
+            return False
+        except OSError:
+            pass
+    return True
+
+def port_lost(port):
+    for attempt in range(3):
+        if not port_closed(port):
+            return False
+        if attempt < 2:
+            time.sleep(0.2)
+    return True
+
+def expects_port(ctx, name, env, extra):
+    port = extra.get("PORT")
+    if port and (name in ctx["listened"] or str(env.get("ready", "")).startswith("/") or answering(port)):
+        ctx["listened"].add(name)
+    return name in ctx["listened"]
+
+def lost(ctx, name, extra, expected):
+    gone = ended(ctx, name)
+    if gone or not (expected and port_lost(extra["PORT"])):
+        return gone
+    p = ctx["procs"].get(name)
+    if p is not None:
+        try:
+            p.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+        gone = ended(ctx, name)
+    return gone or (None, "nothing accepts connections on port %s any more%s" % (extra["PORT"], " though its `start` is still running" if p else ""))
+
+def stopped_during(ctx, name, extra, expected, stage, consequence, said):
+    found = lost(ctx, name, extra, expected)
+    if not found:
+        return None
+    if found[0] is not None:
+        return res("FAILS", "the app exited with status %d during the %s (see %s)%s" % (found[0], stage, server_log(name), said))
+    return res("CANNOT RUN", "the app stopped during the %s (environment '%s': %s), %s%s" % (stage, name, found[1], consequence, said))
 
 def malformed(o):
     if not isinstance(o, dict):
@@ -275,9 +328,10 @@ def judge(o, ctx, shot, log):
         return res("CANNOT RUN", "environment '%s' did not come up: %s" % (name, up[1]))
     if not prov[0]:
         return res("WRONG BUILD", "environment '%s': %s" % (name, prov[1]))
-    gone = stopped(ctx, name)
+    expected = expects_port(ctx, name, env, extra)
+    gone = lost(ctx, name, extra, expected)
     if gone:
-        return res("CANNOT RUN", "environment '%s' stopped before this outcome ran: %s, so there was no app to check" % (name, gone))
+        return res("CANNOT RUN", "environment '%s' stopped before this outcome ran: %s, so there was no app to check" % (name, gone[1]))
     values = dict(env.get("vars") or {}, port=extra.get("PORT", ""), base_url=extra.get("BASE_URL", ""))
     used = [0]
 
@@ -288,9 +342,9 @@ def judge(o, ctx, shot, log):
         return code, tail(out)
 
     code, said = attempt("check", o["check"], {"ACCEPT_SHOT": shot})
-    gone = stopped(ctx, name)
+    gone = stopped_during(ctx, name, extra, expected, "check", "so nothing was learned about the deliverable", said)
     if gone:
-        return res("CANNOT RUN", "the app stopped during the check (environment '%s': %s), so nothing was learned about the deliverable%s" % (name, gone, said))
+        return gone
     if code is None:
         return res("NO VERDICT", "check still running at %ds" % used[0])
     if code == CANNOT_RUN:
@@ -300,6 +354,9 @@ def judge(o, ctx, shot, log):
     if not o.get("control"):
         return res("holds", "check exit 0 (no control declared)")
     code, said = attempt("control", o["control"])
+    gone = stopped_during(ctx, name, extra, expected, "control", "so the check is not shown able to fail", said)
+    if gone:
+        return gone
     if code is None:
         return res("NO VERDICT", "control still running at %ds" % used[0])
     if code == CANNOT_RUN:
@@ -353,7 +410,7 @@ def report_run(root, results_path):
     os.makedirs(os.path.join(root, EVIDENCE, "shots"), exist_ok=True)
     reap_stale(root)
     budget, began = limit("ACCEPT_BUDGET", 600), time.time()
-    ctx = {"envs": envs, "root": root, "resolved": {}, "procs": {}, "budget": int(budget), "left": lambda: began + budget - time.time()}
+    ctx = {"envs": envs, "root": root, "resolved": {}, "procs": {}, "listened": set(), "budget": int(budget), "left": lambda: began + budget - time.time()}
     print("deliverable contract: %d outcome(s)\n" % len(outcomes))
     results = []
     for o, slug in zip(outcomes, slugs(outcomes, envs)):
@@ -590,7 +647,10 @@ def selftest():
         verdicts(run) == ["CANNOT RUN"] and "already serving" in run[1] and not os.path.exists(os.path.join(run[2], "started")))
 
     LISTEN = ("import os, socket, time\ns = socket.socket()\ns.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
-              "s.bind(('127.0.0.1', int(os.environ['PORT'])))\ns.listen(8)\nopen('up', 'w').close()\ntime.sleep(60)\n")
+              "s.bind(('127.0.0.1', int(os.environ['PORT'])))\ns.listen(8)\nopen('up', 'w').close()\ns.settimeout(60)\n"
+              "while True:\n    c, _ = s.accept()\n    if c.recv(16) == b'crash':\n        os._exit(1)\n    c.close()\n")
+    CRASH = ("import os, socket\ns = socket.create_connection(('127.0.0.1', int(os.environ['PORT'])), timeout=5)\n"
+             "s.sendall(b'crash')\ntry:\n    s.recv(1)\nexcept OSError:\n    pass\n")
     PROBE = ("import os, socket, sys\ntry:\n    socket.create_connection(('127.0.0.1', int(os.environ['PORT'])), timeout=1).close()\n"
              "except OSError:\n    sys.exit(1)\n")
     STOP = ("import os, signal, subprocess, sys, time\nos.kill(int(open('pid').read()), signal.SIGKILL)\n"
@@ -598,23 +658,81 @@ def selftest():
     LOCAL = {"start": "echo start >> hits; echo $$ > pid; exec python3 listen.py", "ready": "test -f up"}
     OCCUPY = "python3 listen.py >/dev/null 2>&1 & echo $! > occupier.pid; until python3 probe.py; do sleep 0.1; done"
 
-    def watched(name, outcomes, environment=None):
-        d = repo(name)
-        for fname, body in (("listen.py", LISTEN), ("probe.py", PROBE), ("stop.py", STOP)):
+    def scripts(d):
+        for fname, body in (("listen.py", LISTEN), ("probe.py", PROBE), ("stop.py", STOP), ("crash.py", CRASH)):
             with open(os.path.join(d, fname), "w") as fh:
                 fh.write(body)
+        return d
+
+    def watched(name, outcomes, environment=None):
+        scripts(repo(name))
         return go(name, {"environments": {"local": environment or LOCAL}, "outcomes": outcomes})
 
+    def external(name, environment, check):
+        d = scripts(repo(name))
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        srv = subprocess.Popen([sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1", "--directory", d],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with open(os.path.join(d, "pid"), "w") as fh:
+            fh.write(str(srv.pid))
+        for _ in range(100):
+            if answering(port):
+                break
+            time.sleep(0.1)
+        try:
+            return go(name, {"environments": {"ext": dict(environment, port=port)}, "outcomes": [out(check, "exit 1", env="ext")]})
+        finally:
+            srv.kill()
+            srv.wait()
+
+    KILLED = "python3 probe.py && python3 stop.py"
     run = watched("dies-between", [out("python3 probe.py", "python3 stop.py; exit 1", env="local"),
                                    out("python3 probe.py", "exit 1", env="local", name="b"), out("python3 probe.py", "exit 1", env="local", name="c")])
-    chk("an app that dies between outcomes leaves the next ones CANNOT RUN, never FAILS; the one whose control took it down still holds",
-        verdicts(run) == ["holds", "CANNOT RUN", "CANNOT RUN"] and run[0] == 1 and "stopped before this outcome ran" in run[1])
+    chk("an app whose control took it down is CANNOT RUN, never holds, and the outcomes after it are CANNOT RUN, never FAILS",
+        verdicts(run) == ["CANNOT RUN"] * 3 and run[0] == 1 and "stopped before this outcome ran" in run[1])
+    run = watched("dies-idle", [out("python3 probe.py", "exit 1", env="local"), out("kill -9 $(cat pid); sleep 0.5", "exit 1", name="k"),
+                                out("python3 probe.py", "exit 1", env="local", name="b"), out("python3 probe.py", "exit 1", env="local", name="c")])
+    chk("an app that dies between outcomes leaves the next ones CANNOT RUN, never FAILS",
+        verdicts(run) == ["holds", "holds", "CANNOT RUN", "CANNOT RUN"] and "stopped before this outcome ran" in run[1])
     run = watched("dies-during", [out("python3 probe.py && python3 stop.py && python3 probe.py", "exit 1", env="local")])
     chk("an app that dies during its check is CANNOT RUN, never FAILS",
         verdicts(run) == ["CANNOT RUN"] and "the app stopped during the check" in run[1] and "killed by signal 9" in run[1])
     run = watched("dies-after", [out("python3 probe.py && python3 stop.py", "python3 probe.py", env="local")])
     chk("an app that dies after its check passed is CANNOT RUN, never holds, and the run is not green",
         verdicts(run) == ["CANNOT RUN"] and run[0] == 1 and "the app stopped during the check" in run[1])
+    run = watched("dies-control", [out("python3 probe.py", "python3 stop.py; exit 1", env="local")])
+    chk("an app that dies during its control is CANNOT RUN, never holds: a control failing against a dead app shows nothing",
+        verdicts(run) == ["CANNOT RUN"] and run[0] == 1 and "the app stopped during the control" in run[1] and "killed by signal 9" in run[1])
+    runs = [watched("crash-check%d" % i, [out(check, "exit 1", env="local"), out("python3 probe.py", "exit 1", env="local", name="b")])
+            for i, check in enumerate(["python3 probe.py && python3 crash.py; exit 1", "python3 probe.py && python3 crash.py"])]
+    chk("an app that exits by itself during its check FAILS, naming the status and its log, whatever the check exited; the next outcome is CANNOT RUN",
+        all(verdicts(r) == ["FAILS", "CANNOT RUN"] and "the app exited with status 1 during the check (see .claude/evidence/server-local.log)" in r[1] for r in runs))
+    run = watched("crash-control", [out("python3 probe.py", "python3 crash.py; exit 1", env="local")])
+    chk("an app that exits by itself during its control FAILS, never holds: a product that dies on a legitimate request is broken",
+        verdicts(run) == ["FAILS"] and run[0] == 1 and "the app exited with status 1 during the control (see .claude/evidence/server-local.log)" in run[1])
+
+    HTTP = "python3 -m http.server $PORT --bind 127.0.0.1 --directory $PWD"
+    lingering = lambda server, ready: {"start": "echo $$ > wrapper.pid; %s & echo $! > pid; wait $!; sleep 60" % server, "ready": ready}
+    runs = [watched("outlives%d" % i, [out(check, control, env="local")], environment) for i, (environment, check, control) in enumerate([
+        (lingering(HTTP, "/"), KILLED + " && python3 probe.py", "exit 1"), (lingering(HTTP, "/"), "python3 probe.py", "python3 stop.py; exit 1"),
+        (lingering("python3 listen.py", "test -f up"), KILLED, "exit 1")])]
+    chk("a `start` wrapper that outlives its killed server is CANNOT RUN in the check and the control, for an HTTP or a command `ready`",
+        all(verdicts(r) == ["CANNOT RUN"] and "nothing accepts connections on port" in r[1] for r in runs))
+    run = watched("outlives-idle", [out("python3 probe.py", "exit 1", env="local"), out("kill -9 $(cat pid); sleep 0.5", "exit 1", name="k"),
+                                    out("touch ran", "exit 1", env="local", name="b"), out("touch ran", "exit 1", env="local", name="c")], lingering(HTTP, "/"))
+    chk("a wrapper that outlives its server between outcomes leaves the next ones CANNOT RUN before their check runs",
+        verdicts(run) == ["holds", "holds", "CANNOT RUN", "CANNOT RUN"] and "stopped before this outcome ran: nothing accepts connections" in run[1]
+        and not os.path.exists(os.path.join(run[2], "ran")))
+    run = watched("wrapper-exit", [out(KILLED, "exit 1", env="local")],
+                  {"start": "echo $$ > wrapper.pid; python3 listen.py & echo $! > pid; wait $!", "ready": "test -f up"})
+    chk("a shell wrapper that reports its killed child as exit 137 is CANNOT RUN, never a crash of the product",
+        verdicts(run) == ["CANNOT RUN"] and "exited 137" in run[1] and "signal 9" in run[1])
+    reused = external("ext-reuse", {"start": "touch started", "ready": "/", "reuse": True}, KILLED + " && python3 probe.py")
+    portonly = external("ext-port", {}, KILLED)
+    chk("a `reuse` or port-only environment whose server dies mid-run is CANNOT RUN, never FAILS or holds",
+        verdicts(reused) == ["CANNOT RUN"] and verdicts(portonly) == ["CANNOT RUN"] and "nothing accepts connections on port" in reused[1] + portonly[1])
     run = watched("taken", [out("python3 probe.py", "exit 1", env="local")], dict(LOCAL, build=OCCUPY))
     sh("kill $(cat occupier.pid)", run[2], timeout=5)
     chk("a port taken during `build` is CANNOT RUN, and `start` never runs beside the occupier",
@@ -655,7 +773,7 @@ def selftest():
         and any("Search results: lists only matches" in l for l in st[1]) and summarize(go("absent", None)[3])[0] == "absent")
 
     shutil.rmtree(tmp, ignore_errors=True)
-    expected = 40
+    expected = 48
     print("\nSELF-TEST %s" % ("PASSED  (%d checks)" % expected if passed == ran == expected else "FAILED  (%d of %d checks)" % (passed, expected)))
     return 0 if passed == ran == expected else 1
 

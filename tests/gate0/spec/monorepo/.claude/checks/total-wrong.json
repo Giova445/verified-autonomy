@@ -1,0 +1,16 @@
+[
+  {
+    "count": {
+      "selector": "#orders li",
+      "equals": 5
+    },
+    "timeout": 1000
+  },
+  {
+    "text": {
+      "selector": "#orders ~ #total",
+      "equals": "Total: $480"
+    },
+    "timeout": 1000
+  }
+]

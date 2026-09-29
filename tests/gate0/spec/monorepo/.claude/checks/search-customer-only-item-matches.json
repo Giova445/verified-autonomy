@@ -1,0 +1,49 @@
+[
+  {
+    "fill": {
+      "selector": "input[aria-label='Search by customer']",
+      "value": "dana"
+    }
+  },
+  {
+    "count": {
+      "selector": "#orders li",
+      "equals": 1
+    },
+    "timeout": 1000
+  },
+  {
+    "text": {
+      "selector": "#orders li:nth-child(1)",
+      "equals": "Dana Whitfield Headset $150"
+    },
+    "timeout": 1000
+  },
+  {
+    "fill": {
+      "selector": "input[aria-label='Search by customer']",
+      "value": "webcam"
+    }
+  },
+  {
+    "count": {
+      "selector": "#orders li",
+      "equals": 1
+    },
+    "timeout": 1000
+  },
+  {
+    "text": {
+      "selector": "#orders li:nth-child(1)",
+      "equals": "Chidi Okafor Webcam $120"
+    },
+    "timeout": 1000
+  },
+  {
+    "text": {
+      "selector": "#total",
+      "equals": "Total: $120"
+    },
+    "timeout": 1000
+  }
+]

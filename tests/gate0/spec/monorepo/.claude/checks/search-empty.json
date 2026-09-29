@@ -1,0 +1,32 @@
+[
+  {
+    "fill": {
+      "selector": "input[aria-label='Search by customer']",
+      "value": "chidi"
+    }
+  },
+  {
+    "count": {
+      "selector": "#orders li",
+      "equals": 1
+    }
+  },
+  {
+    "fill": {
+      "selector": "input[aria-label='Search by customer']",
+      "value": "zed"
+    }
+  },
+  {
+    "count": {
+      "selector": "#orders li",
+      "equals": 0
+    }
+  },
+  {
+    "text": {
+      "selector": "#total",
+      "equals": "Total: $0"
+    }
+  }
+]

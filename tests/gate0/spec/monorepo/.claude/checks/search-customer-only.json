@@ -1,0 +1,74 @@
+[
+  {
+    "fill": {
+      "selector": "input[aria-label='Search by customer']",
+      "value": "dana"
+    }
+  },
+  {
+    "count": {
+      "selector": "#orders li",
+      "equals": 1
+    }
+  },
+  {
+    "text": {
+      "selector": "#orders li:nth-child(1)",
+      "equals": "Dana Whitfield Headset $150"
+    }
+  },
+  {
+    "fill": {
+      "selector": "input[aria-label='Search by customer']",
+      "value": "webcam"
+    }
+  },
+  {
+    "count": {
+      "selector": "#orders li",
+      "equals": 0
+    }
+  },
+  {
+    "text": {
+      "selector": "#total",
+      "equals": "Total: $0"
+    }
+  },
+  {
+    "fill": {
+      "selector": "input[aria-label='Search by customer']",
+      "value": "dana"
+    }
+  },
+  {
+    "count": {
+      "selector": "#orders li",
+      "equals": 1
+    }
+  },
+  {
+    "text": {
+      "selector": "#orders li:nth-child(1)",
+      "equals": "Dana Whitfield Headset $150"
+    }
+  },
+  {
+    "fill": {
+      "selector": "input[aria-label='Search by customer']",
+      "value": "480"
+    }
+  },
+  {
+    "count": {
+      "selector": "#orders li",
+      "equals": 0
+    }
+  },
+  {
+    "text": {
+      "selector": "#total",
+      "equals": "Total: $0"
+    }
+  }
+]

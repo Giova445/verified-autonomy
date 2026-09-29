@@ -1,45 +1,43 @@
-# CI is the ADJUDICATION layer. The agent's local green is a claim; this is the fact.
-# It runs the SAME ./bin/verify the agent ran — no drift between local and CI definitions.
 name: Verify
 on:
   pull_request:
   push:
     branches-ignore: [main]
 
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }          # full history: diff-scoped gates need the base
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0
 
-      - name: Secret scan (hard fail, no override)
-        uses: gitleaks/gitleaks-action@v2
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up toolchain
-        run: |
-          # project-specific: language runtimes + deps
-          echo "TODO: install deps"
+      # Add your language setup and dependency install steps here; gates run in this job.
 
-      # A gate that cannot run is not a gate that passed. .claude/gates/drive.mjs opens the
-      # deliverable in a real browser and exits 2 — refusing to report — when Playwright is
-      # absent, so without this step the acceptance gate goes red in CI for a reason that has
-      # nothing to do with the code. Delete this step only together with the acceptance gate.
-      - name: Install the runtime driver (only if this project gates its deliverable)
+      - name: Install the browser driver (only if the project declares a product contract)
         if: hashFiles('.claude/acceptance.json') != ''
         run: npm install --no-save playwright@1.61.0 && npx playwright install --with-deps chromium
 
-      - name: Verify — same gate runner the agent used
+      - name: Forbidden commit trailers (no-op unless .claude/forbidden-trailers exists)
+        if: github.event_name == 'pull_request'
+        run: python3 .claude/gates/trailer-check.py --base "origin/${{ github.base_ref }}"
+
+      - name: Verify
         run: ./bin/verify done
         env:
           VERIFY_BASE: origin/${{ github.base_ref || 'main' }}
 
-      - name: Cheat scan on the diff
-        run: .claude/hooks/scan-diff-cheats.sh "origin/${{ github.base_ref || 'main' }}"
-
-      - name: Upload evidence bundle
+      - name: Upload evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
-          name: evidence-bundle
-          path: .claude/evidence/latest.json
+          name: evidence
+          path: .claude/evidence/

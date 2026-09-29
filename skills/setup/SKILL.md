@@ -53,6 +53,10 @@ you: take them from the user's request, open issues and the README, quote the so
   users get, and a dev server compiles on demand, costing about 5x the memory and a slower first
   page. When a passing gate runs the same `build` command, or this exact tree was built already,
   the build is not repeated. Use a dev server only when the repo has no production build.
+- Keep a run under 600 MB: `verify` prints its peak and names the step over budget. Cap that
+  step's workers in the command, identically in the gate and in `build` so it is built once.
+  Next.js: `CIRCLE_NODE_TOTAL=1 npm run build` (one build worker: 830 to 400 MB). Jest:
+  `--maxWorkers=2`.
 - `expect` is what a user sees or does, in their words. Never "works" or "renders".
 - `check` exits 0 when it holds, non-zero when it does not, 75 when it could not run. `drive.mjs`
   steps (they wait for each assertion) are quick; `curl -fsS`, the real CLI and plain Playwright

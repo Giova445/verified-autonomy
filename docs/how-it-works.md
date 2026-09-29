@@ -45,6 +45,15 @@ so nothing runs), `NO VERDICT` (timeout), `WRONG BUILD` (an environment's `prove
 prints a commit other than HEAD), `REFUSED` (an outcome lacks `name`, `expect` or `check`).
 Only `holds` passes.
 
+## Memory
+
+Each `verify` run samples the physical memory of its whole process tree twice a second (macOS
+`footprint`, Linux PSS, so pages shared between processes count once) and prints the peak. Above
+`VERIFY_MEMORY_MB` (600 by default) it names the step that peaked. It warns; it does not fail the
+run. Measured on a Next.js app: a full `verify done` (typecheck, tests, a one-worker build, the
+product check on the production server) peaks near 360 MB; a `next dev` server alone is about
+480 MB and an uncapped `next build` about 830 MB.
+
 ## Evidence
 
 `.claude/evidence/latest.json` records the commit, each gate's command and exit code, and the

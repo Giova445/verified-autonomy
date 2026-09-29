@@ -40,6 +40,12 @@ printf '{"full":[{"name":"count","cmd":"sh .claude/count.sh"}]}' > "$tmp/.claude
 for i in 1 2 3; do verify done >/dev/null; done
 chk "every run executes: nothing is cached" "$(grep -c run "$tmp/.claude/runs")" "3"
 
+printf '{"full":[{"name":"hog","cmd":"python3 -c \\"b=b\x27x\x27*(300<<20); import time; time.sleep(2)\\""}]}' > "$tmp/.claude/gates.json"
+rm -f "$tmp/.claude/acceptance.json"
+out="$(VERIFY_MEMORY_MB=100 verify full)"
+printf '%s' "$out" | grep -q "during gate 'hog', over the 100 MB budget" && r=named || r="silent: $(printf '%s' "$out" | grep memory)"
+chk "memory: a step over VERIFY_MEMORY_MB is named" "$r" "named"
+
 fc(){ printf '%s' "$2" > "$tmp/.claude/gates.json"; verify done >/dev/null; chk "$1" "$?" "1"; }
 fc "unparseable config -> refuse"   '{"full":[{"name":"u","cmd":"exit 0"},]}'
 fc "empty full tier -> refuse"      '{"full":[]}'

@@ -79,6 +79,7 @@ Before a PR, say "prove it" (the `prove` skill), or run:
 | `GATE_TIMEOUT` | seconds for one test gate (default 300); past it the verdict is NO VERDICT |
 | `ACCEPT_TIMEOUT`, `ACCEPT_READY_TIMEOUT`, `ACCEPT_BUDGET` | seconds for one check (120), for the app to become ready (120), for the whole contract (600) |
 | `ACCEPT_BUILD_TIMEOUT` | seconds for an environment's `build` (default 600) |
+| `VERIFY_MEMORY_MB` | memory budget for one run (default 600). Each run prints its peak and names the step that went over; `0` turns the meter off |
 | `ACCEPT_NAV_TIMEOUT` | milliseconds `drive.mjs` waits for a page to load (default 30000) |
 | `VERIFY_SCOPE=0` | run gates whose surface the diff does not touch |
 | `PLAYWRIGHT_PATH` | where `drive.mjs` finds Playwright when it is not in the repo |

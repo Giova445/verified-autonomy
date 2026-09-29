@@ -1,0 +1,34 @@
+{
+  "requests": [
+    {
+      "path": "/api/orders/1004",
+      "status": 200,
+      "body": {
+        "id": 1004,
+        "customer": "Chidi Okafor",
+        "item": "Webcam",
+        "total": 120
+      }
+    },
+    {
+      "path": "/api/orders/1001",
+      "status": 200,
+      "body": {
+        "id": 1001,
+        "customer": "Alice Nguyen",
+        "item": "Standing desk",
+        "total": 480
+      }
+    },
+    {
+      "path": "/api/orders/1005",
+      "status": 200,
+      "body": {
+        "id": 1005,
+        "customer": "Dana Whitfield",
+        "item": "Headset",
+        "total": 150
+      }
+    }
+  ]
+}

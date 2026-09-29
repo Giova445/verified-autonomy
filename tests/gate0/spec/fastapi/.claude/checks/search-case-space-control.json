@@ -1,0 +1,16 @@
+{
+  "requests": [
+    {
+      "path": "/api/orders?q=%20ZZQ%20",
+      "status": 200,
+      "body": [
+        {
+          "id": 1002,
+          "customer": "Bob Ferreira",
+          "item": "Monitor arm",
+          "total": 95
+        }
+      ]
+    }
+  ]
+}

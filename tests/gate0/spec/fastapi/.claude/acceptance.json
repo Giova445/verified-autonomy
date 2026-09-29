@@ -1,0 +1,94 @@
+{
+  "environments": {
+    "api": {
+      "start": "uvicorn app.main:app --port $PORT",
+      "ready": "/health"
+    }
+  },
+  "outcomes": [
+    {
+      "name": "health check answers ok",
+      "env": "api",
+      "expect": "Criterion 1: `GET /health` answers 200 with JSON saying status \"ok\".",
+      "check": "python3 .claude/checks/probe.py .claude/checks/health.json",
+      "control": "python3 .claude/checks/probe.py .claude/checks/health-control.json"
+    },
+    {
+      "name": "filled: orders list shows all five orders in id order",
+      "env": "api",
+      "expect": "Criterion 2: `GET /api/orders` answers 200 with a JSON array of all five orders in the id order above, each with id, customer, item and total (id and total as numbers).",
+      "check": "python3 .claude/checks/probe.py .claude/checks/list-all.json",
+      "control": "python3 .claude/checks/probe.py .claude/checks/list-all-control.json"
+    },
+    {
+      "name": "filled: an empty or missing q lists all five orders",
+      "env": "api",
+      "expect": "Criterion 6: An empty or missing `q` returns all five orders.",
+      "check": "python3 .claude/checks/probe.py .claude/checks/q-empty.json",
+      "control": "python3 .claude/checks/probe.py .claude/checks/q-empty-control.json"
+    },
+    {
+      "name": "filled: search finds a customer by part of the name",
+      "env": "api",
+      "expect": "Criterion 3: `GET /api/orders?q=alice` returns only orders whose customer name contains the text (checked on a text that matches one customer name and no item).",
+      "check": "python3 .claude/checks/probe.py .claude/checks/search-part-of-name.json",
+      "control": "python3 .claude/checks/probe.py .claude/checks/search-part-of-name-control.json"
+    },
+    {
+      "name": "filled: search ignores case and surrounding spaces",
+      "env": "api",
+      "expect": "Criterion 3: Case and surrounding spaces do not matter: `q=%20ALICE%20` returns the same two (checked on texts that match one customer name and no item).",
+      "check": "python3 .claude/checks/probe.py .claude/checks/search-case-space.json",
+      "control": "python3 .claude/checks/probe.py .claude/checks/search-case-space-control.json"
+    },
+    {
+      "name": "filled: search lists every order of a customer",
+      "env": "api",
+      "expect": "Criterion 3: `GET /api/orders?q=alice` returns only orders whose customer name contains the text (1001 and 1003). Case and surrounding spaces do not matter: `q=%20ALICE%20` returns the same two.",
+      "check": "python3 .claude/checks/probe.py .claude/checks/search-every-order.json",
+      "control": "python3 .claude/checks/probe.py .claude/checks/search-every-order-control.json"
+    },
+    {
+      "name": "empty: a search that matches nothing is an empty list, not an error",
+      "env": "api",
+      "expect": "Criterion 5: When nothing matches (for example `q=zed`), the answer is 200 with an empty JSON array, not an error.",
+      "check": "python3 .claude/checks/probe.py .claude/checks/search-nothing.json",
+      "control": "python3 .claude/checks/probe.py .claude/checks/search-nothing-control.json"
+    },
+    {
+      "name": "empty: search does not look at item words",
+      "env": "api",
+      "expect": "Criterion 4: `q` looks at customer names only: an item word returns an empty array (checked on item words that occur in one item and no customer name).",
+      "check": "python3 .claude/checks/probe.py .claude/checks/search-item-word.json",
+      "control": "python3 .claude/checks/probe.py .claude/checks/search-item-word-control.json"
+    },
+    {
+      "name": "empty: the item word from the ticket finds nothing",
+      "env": "api",
+      "expect": "Criterion 4: `q` looks at customer names only: `q=desk`, an item word, returns an empty array.",
+      "check": "python3 .claude/checks/probe.py .claude/checks/search-desk.json",
+      "control": "python3 .claude/checks/probe.py .claude/checks/search-desk-control.json"
+    },
+    {
+      "name": "filled: one order opens by its id",
+      "env": "api",
+      "expect": "Criterion 7: `GET /api/orders/1004` answers 200 with that one order (Chidi Okafor, Webcam, 120) as a JSON object.",
+      "check": "python3 .claude/checks/probe.py .claude/checks/order-one.json",
+      "control": "python3 .claude/checks/probe.py .claude/checks/order-one-control.json"
+    },
+    {
+      "name": "error: an unknown order id is a 404 order not found",
+      "env": "api",
+      "expect": "Criterion 8: `GET /api/orders/9999` answers 404 with the message \"order not found\".",
+      "check": "python3 .claude/checks/probe.py .claude/checks/order-missing.json",
+      "control": "python3 .claude/checks/probe.py .claude/checks/order-missing-control.json"
+    },
+    {
+      "name": "error: a non-numeric order id is a client error",
+      "env": "api",
+      "expect": "Criterion 9: A non-numeric id such as `/api/orders/abc` is rejected with a 4xx client error, never a 200 or a 500.",
+      "check": "python3 .claude/checks/probe.py .claude/checks/order-bad-id.json",
+      "control": "python3 .claude/checks/probe.py .claude/checks/order-bad-id-control.json"
+    }
+  ]
+}

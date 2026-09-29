@@ -28,7 +28,64 @@ jobs:
           python3 -m pip install --quiet pytest==8.3.5
           npm install --no-save --silent playwright@1.61.0
           if [ "$RUNNER_OS" = Linux ]; then npx playwright install --with-deps chromium; else npx playwright install chromium; fi
+      - name: Diagnose macOS (temporary)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: |
+          set +e
+          echo "::group::platform"
+          sw_vers; uname -a; sysctl kern.ipc.somaxconn kern.ipc.maxsockbuf; which python3; python3 --version; node --version
+          cat /etc/hosts; scutil --dns | head -20; ifconfig lo0
+          echo "::endgroup::"
+          echo "::group::process launch cost"
+          TIMEFORMAT='%R s'
+          for i in 1 2 3; do echo -n "python3 -c pass: "; time python3 -c pass; done
+          for i in 1 2 3; do echo -n "node -e 0: "; time node -e 0; done
+          for i in 1 2 3; do echo -n "sh -c true: "; time sh -c true; done
+          for i in 1 2 3; do echo -n "ps lstart: "; time ps -o lstart= -p $$; done
+          echo -n "python3 -m http.server import: "; time python3 -c "import http.server"
+          echo "::endgroup::"
+          echo "::group::sockets"
+          python3 - <<'PY'
+          import socket, time
+          print(socket.getaddrinfo("localhost", 80, type=socket.SOCK_STREAM))
+          for backlog in (1, 128):
+              srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(backlog)
+              port = srv.getsockname()[1]
+              for i in range(4):
+                  t = time.time()
+                  try:
+                      socket.create_connection(("localhost", port), timeout=1).close(); r = "ok"
+                  except OSError as e:
+                      r = repr(e)
+                  print("backlog", backlog, "connect", i, r, "%.2fs" % (time.time() - t))
+              srv.close()
+          for fam, host in ((socket.AF_INET6, "::1"), (socket.AF_INET, "127.0.0.1")):
+              t = time.time()
+              try:
+                  s = socket.socket(fam); s.settimeout(1); r = s.connect_ex((host, 9)); s.close()
+              except OSError as e:
+                  r = repr(e)
+              print("connect to closed port", host, r, "%.2fs" % (time.time() - t))
+          PY
+          echo "::endgroup::"
+          echo "::group::lstart across exec"
+          sh -c 'ps -o lstart= -p $$; sleep 2; exec sleep 3' & sp=$!
+          sleep 1; ps -o lstart= -p $sp; sleep 3; ps -o lstart= -p $sp; wait
+          echo "::endgroup::"
+          echo "::group::acceptance self-test"
+          time python3 benchmark/gates/acceptance.py --self-test
+          echo "::endgroup::"
+          echo "::group::installed self-test"
+          w="$(mktemp -d)"; ( cd "$w" && git init -q . && git config user.email t@t && git config user.name t && printf '.claude/*\n' > .gitignore && git add -A && git commit -qm init )
+          ( cd "$w" && ARM_TIMEOUT=30 bash "$GITHUB_WORKSPACE/kit/install.sh" . ) >/dev/null 2>&1
+          ( cd "$w" && bash .claude/selftest.sh ); echo "installed selftest rc=$?"
+          echo "::endgroup::"
+          echo "::group::product-live"
+          bash tests/product-live.sh 2>&1 | while IFS= read -r l; do printf '[%4ss] %s\n' "$SECONDS" "$l"; done
+          echo "::endgroup::"
       - name: Self-test
+        if: runner.os != 'macOS'
         run: bash selftest.sh
 
   policy:

@@ -134,6 +134,7 @@ else
   run "$d"
   chk "the demo contract holds end to end: a served page, waiting assertions, controls that fail" \
     "$(verdicts "$d")" "holds holds"
+  [ "$(verdicts "$d")" = "holds holds" ] || { sed 's/^/        | /' "$d/out.txt"; tail -5 "$d"/.claude/evidence/server-*.log 2>/dev/null | sed 's/^/        | /'; }
   printf '        demo run: %ss\n' "$((SECONDS - began))"
   chk "each outcome leaves a log and a screenshot in .claude/evidence" \
     "$(ls "$d/.claude/evidence/shots" | wc -l | tr -d ' ') $(ls "$d/.claude/evidence"/*.log | wc -l | tr -d ' ')" "2 3"

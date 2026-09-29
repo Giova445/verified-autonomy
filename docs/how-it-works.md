@@ -35,6 +35,17 @@ ticket states it.
   exports `BASE_URL=http://localhost:$PORT`, runs `build` unless this tree is already built,
   starts the app, waits for `ready`, runs every outcome, and stops the app. A failed build is
   CANNOT RUN.
+- The environment can fail under a run, and none of these is a product verdict. A port that
+  already accepts connections just before `start` (taken during `build`, say) is CANNOT RUN,
+  and `start` is not run beside it. The harness watches the `start` process itself: if it has
+  exited before an outcome, or by the time that outcome's check returns, the outcome is CANNOT
+  RUN ("the app stopped during the check"), never FAILS or holds. What it cannot see: an
+  environment with no `start`, or with `"reuse": true` (that app is not the harness's to
+  watch, and `reuse` also skips the port check); a `start` wrapper that stays alive after the
+  app inside it died; an app that stops during a control or after the last outcome (a control
+  may take the app down on purpose, so the outcome keeps its verdict and the next outcome
+  reports the stop); and an app that crashes because of the check, which reads CANNOT RUN with
+  the exit status and `server-<env>.log` named. `start` must stay in the foreground.
 - `outcomes`: `name`, `expect` (the user's words), `check`, and optionally `control`, `needs`
   and `env`. A check exits 0 when the outcome holds and 75 when it cannot run. Any other exit
   fails. A control is a variant that must fail. If it passes, the check proves nothing.

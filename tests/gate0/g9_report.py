@@ -155,6 +155,24 @@ def main(argv):
     print(fmt_row("nextjs without nj-29", [spec[i] for i in nj], [g4[i] for i in nj]))
 
     print()
+    print("== false-PASS rate (missed / faults) and rate without break-marked faults ==")
+    for fixture in FIXTURES + ["all"]:
+        ids = [i for i in all_ids if fixture == "all" or entries[i]["fixture"] == fixture]
+        live = [i for i in ids if not entries[i]["breaks_run"]]
+        print("  %-9s false-PASS SPEC %4.1f%% (%d/%d) HAND %4.1f%% (%d/%d);  caught without break-marked faults: SPEC %4.1f%% (%d/%d) HAND %4.1f%% (%d/%d)" % (
+            fixture,
+            rate(sum(1 for i in ids if spec[i] == "missed"), len(ids)), sum(1 for i in ids if spec[i] == "missed"), len(ids),
+            rate(sum(1 for i in ids if g4[i] == "missed"), len(ids)), sum(1 for i in ids if g4[i] == "missed"), len(ids),
+            rate(sum(1 for i in live if spec[i] == "caught"), len(live)), sum(1 for i in live if spec[i] == "caught"), len(live),
+            rate(sum(1 for i in live if g4[i] == "caught"), len(live)), sum(1 for i in live if g4[i] == "caught"), len(live)))
+    uncaught = [i for i in all_ids if spec[i] != "caught"]
+    print("  SPEC not caught: %d = %d missed + %d no signal; of the no-signal ones %d are break-marked and %d live-marked (%s)" % (
+        len(uncaught), sum(1 for i in uncaught if spec[i] == "missed"), sum(1 for i in uncaught if spec[i] == "no_signal"),
+        sum(1 for i in uncaught if spec[i] == "no_signal" and entries[i]["breaks_run"]),
+        sum(1 for i in uncaught if spec[i] == "no_signal" and not entries[i]["breaks_run"]),
+        ", ".join(i for i in uncaught if spec[i] == "no_signal" and not entries[i]["breaks_run"])))
+
+    print()
     print("== per category, per fixture ==")
     for fixture in FIXTURES:
         print("  -- %s" % fixture)
@@ -273,7 +291,24 @@ def main(argv):
         overall = "NOT MEASURED"
     else:
         overall = "MET" if agg >= RATE_LINE and all(v == "MET" for v in verdicts.values()) else "NOT MET"
-    print("G9 OVERALL: %s (aggregate at least %d%% and every fixture MET on rate, state faults and wrong-field)" % (overall, RATE_LINE))
+    if measured:
+        kind_ok = {}
+        for fixture in FIXTURES:
+            flags = []
+            for state, present in PRODUCT_STATES[fixture].items():
+                if present:
+                    ids = STATE_FAULTS.get(fixture, {}).get(state, [])
+                    flags.append(any(kind_of(spec_rows, i) == "caught" for i in ids))
+            kind_ok[fixture] = all(flags) and bool(fixture_field_ok[fixture])
+        strict_ok = all(fixture_state_ok[f][0] and bool(fixture_field_ok[f]) for f in FIXTURES)
+        agg_ok = agg >= RATE_LINE
+        print("  reading A (corpus-wide rate; each existing state has a caught seeded fault; a wrong-field fault caught per fixture): %s" % (
+            "MET" if agg_ok and all(kind_ok.values()) else "NOT MET"))
+        print("  reading B (corpus-wide rate; every seeded state fault caught; a wrong-field fault caught per fixture): %s" % (
+            "MET" if agg_ok and strict_ok else "NOT MET"))
+        print("  reading C (every fixture at least %d%% as well as reading B): %s" % (
+            RATE_LINE, "MET" if agg_ok and all(v == "MET" for v in verdicts.values()) else "NOT MET"))
+    print("G9 OVERALL: %s (reading C: aggregate at least %d%% and every fixture MET on rate, state faults and wrong-field)" % (overall, RATE_LINE))
 
     summary = {
         "overall": overall,

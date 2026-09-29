@@ -1,0 +1,16 @@
+diff --git a/apps/web/server.mjs b/apps/web/server.mjs
+index 18a723b..3c0ac33 100644
+--- a/apps/web/server.mjs
++++ b/apps/web/server.mjs
+@@ -7,11 +7,6 @@ const dist = join(dirname(fileURLToPath(import.meta.url)), "dist");
+ const port = Number(process.env.PORT);
+ const types = { ".html": "text/html", ".js": "text/javascript", ".json": "application/json" };
+ 
+-if (!Number.isInteger(port) || port <= 0) {
+-  console.error("PORT must be set to a port number");
+-  process.exit(2);
+-}
+-
+ const server = createServer((request, response) => {
+   const name = request.url === "/" ? "/index.html" : request.url.split("?")[0];
+   const file = join(dist, name);

@@ -1,0 +1,12 @@
+diff --git a/app/main.py b/app/main.py
+index 6c1034c..315f7fd 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -86,6 +86,6 @@ def orders(request: Request):
+ @app.post("/logout")
+ def logout(request: Request):
+     SESSIONS.pop(request.cookies.get(COOKIE, ""), None)
+-    response = RedirectResponse("/login", status_code=303)
++    response = RedirectResponse("/signed-out", status_code=303)
+     response.delete_cookie(COOKIE)
+     return response

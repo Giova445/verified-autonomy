@@ -1,0 +1,11 @@
+diff --git a/bin/orders.mjs b/bin/orders.mjs
+index 3d5d35f..8115bd5 100644
+--- a/bin/orders.mjs
++++ b/bin/orders.mjs
+@@ -22,5 +22,5 @@ if (parsed.command === "list") {
+   if (rows.length === 0) console.log(`No orders match ${parsed.query}`);
+   for (const order of rows) console.log(formatRow(order));
+ } else {
+-  console.log(formatTotal(rows));
++  formatTotal(rows);
+ }

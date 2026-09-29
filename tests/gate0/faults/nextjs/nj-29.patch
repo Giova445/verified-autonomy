@@ -1,0 +1,13 @@
+diff --git a/package.json b/package.json
+index 1c797bb..d22bbd8 100644
+--- a/package.json
++++ b/package.json
+@@ -3,7 +3,7 @@
+   "private": true,
+   "version": "1.0.0",
+   "scripts": {
+-    "build": "next build --webpack",
++    "build": "next build",
+     "start": "next start"
+   },
+   "dependencies": {

@@ -1,0 +1,11 @@
+diff --git a/src/orders.mjs b/src/orders.mjs
+index 0953980..9afb4f4 100644
+--- a/src/orders.mjs
++++ b/src/orders.mjs
+@@ -16,5 +16,5 @@ export function formatRow(order) {
+ }
+ 
+ export function formatTotal(rows) {
+-  return `Total: ${rows.reduce((sum, order) => sum + order.total, 0).toFixed(2)}`;
++  return `Total: ${(rows.reduce((sum, order) => sum + order.total, 0) + 0.01).toFixed(2)}`;
+ }

@@ -1,0 +1,13 @@
+diff --git a/app/main.py b/app/main.py
+index 6c1034c..a77441d 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -68,7 +68,7 @@ async def login(request: Request):
+     return response
+ 
+ 
+-@app.get("/orders")
++@app.get("/order")
+ def orders(request: Request):
+     email = signed_in_email(request)
+     if not email:

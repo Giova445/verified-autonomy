@@ -1,0 +1,13 @@
+diff --git a/app/main.py b/app/main.py
+index 6c1034c..53af2f1 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -80,7 +80,7 @@ def orders(request: Request):
+     return page("Your orders", f"""<h1>Your orders</h1>
+ <p>Signed in as <span id="who">{escape(email)}</span></p>
+ <ul id="orders">{rows}</ul>
+-<form method="post" action="/logout"><button id="signout" type="submit">Sign out</button></form>""")
++<form method="post" action="/logout"><button id="signout" type="button">Sign out</button></form>""")
+ 
+ 
+ @app.post("/logout")

@@ -1,0 +1,13 @@
+diff --git a/app/orders/page.js b/app/orders/page.js
+index 5800863..60ef1c2 100644
+--- a/app/orders/page.js
++++ b/app/orders/page.js
+@@ -24,7 +24,7 @@ export default function OrdersPage() {
+         aria-label="Search by customer"
+         placeholder="Search by customer"
+         value={query}
+-        disabled={orders === null}
++        disabled={orders !== null}
+         onChange={(event) => setQuery(event.target.value)}
+       />
+       {orders === null ? <p id="loading">Loading orders</p> : null}

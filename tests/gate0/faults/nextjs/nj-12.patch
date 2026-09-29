@@ -1,0 +1,13 @@
+diff --git a/app/orders/page.js b/app/orders/page.js
+index 5800863..c426e69 100644
+--- a/app/orders/page.js
++++ b/app/orders/page.js
+@@ -31,7 +31,7 @@ export default function OrdersPage() {
+       <ul id="orders">
+         {shown.map((order) => (
+           <li key={order.id} className="order">
+-            <span className="customer">{order.customer}</span> {order.item} ${order.total}
++            <span className="customer">{order.item}</span> {order.customer} ${order.total}
+           </li>
+         ))}
+       </ul>

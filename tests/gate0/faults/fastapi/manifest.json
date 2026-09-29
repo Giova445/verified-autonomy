@@ -1,0 +1,226 @@
+[
+  {
+    "id": "fa-01",
+    "category": "dead handler",
+    "statement": "GET /api/orders?q=Alice returns every order, ignoring the query filter.",
+    "breaks_run": false,
+    "patch": "fa-01.patch"
+  },
+  {
+    "id": "fa-02",
+    "category": "wrong field in search/filter",
+    "statement": "Filtering orders by customer name actually searches the item field, so a name query returns nothing.",
+    "breaks_run": false,
+    "patch": "fa-02.patch"
+  },
+  {
+    "id": "fa-03",
+    "category": "mocked or hardcoded data",
+    "statement": "GET /api/orders/1004 returns the Standing desk order (id 1001) instead of the Webcam order that was actually requested.",
+    "breaks_run": false,
+    "patch": "fa-03.patch"
+  },
+  {
+    "id": "fa-04",
+    "category": "off-by-one",
+    "statement": "GET /api/orders/1002 returns order 1001 (the previous order) instead of 1002.",
+    "breaks_run": false,
+    "patch": "fa-04.patch"
+  },
+  {
+    "id": "fa-05",
+    "category": "loading/empty/error state wrong",
+    "statement": "Requesting a nonexistent order id returns 200 with an empty object instead of a 404 error.",
+    "breaks_run": false,
+    "patch": "fa-05.patch"
+  },
+  {
+    "id": "fa-06",
+    "category": "search/filter behavior wrong",
+    "statement": "Filtering by \"alice\" (lowercase) finds nothing because the match is now case-sensitive.",
+    "breaks_run": false,
+    "patch": "fa-06.patch"
+  },
+  {
+    "id": "fa-07",
+    "category": "search/filter behavior wrong",
+    "statement": "A search query with a leading space (\" Alice\") never matches, though \"Alice\" would.",
+    "breaks_run": false,
+    "patch": "fa-07.patch"
+  },
+  {
+    "id": "fa-08",
+    "category": "broken link/route",
+    "statement": "GET /api/orders returns 404 Not Found; the route was renamed to /api/order without updating clients.",
+    "breaks_run": false,
+    "patch": "fa-08.patch"
+  },
+  {
+    "id": "fa-09",
+    "category": "broken link/route",
+    "statement": "GET /api/orders/1001 returns 404; the single-order endpoint's path was capitalized in a code change.",
+    "breaks_run": false,
+    "patch": "fa-09.patch"
+  },
+  {
+    "id": "fa-10",
+    "category": "wrong computation",
+    "statement": "GET /api/orders/1001 returns 404 not found for every id because the id is now compared as text instead of a number.",
+    "breaks_run": false,
+    "patch": "fa-10.patch"
+  },
+  {
+    "id": "fa-11",
+    "category": "loading/empty/error state wrong",
+    "statement": "GET /api/orders (with no search box filled in) fails with a 422 error instead of showing all orders.",
+    "breaks_run": false,
+    "patch": "fa-11.patch"
+  },
+  {
+    "id": "fa-12",
+    "category": "wrong sort",
+    "statement": "The orders list comes back sorted by price, highest first, instead of the original order.",
+    "breaks_run": false,
+    "patch": "fa-12.patch"
+  },
+  {
+    "id": "fa-13",
+    "category": "stale deploy or wrong build",
+    "statement": "The two newest orders (Chidi Okafor's webcam and Dana Whitfield's headset) never show up; the deployed server is running an older snapshot of the order data.",
+    "breaks_run": false,
+    "patch": "fa-13.patch"
+  },
+  {
+    "id": "fa-14",
+    "category": "mocked or hardcoded data",
+    "statement": "No matter what you search for, /api/orders only ever returns Alice Nguyen's orders.",
+    "breaks_run": false,
+    "patch": "fa-14.patch"
+  },
+  {
+    "id": "fa-15",
+    "category": "crash on edge case",
+    "statement": "Requesting a negative or zero order id crashes the server with an unhandled error instead of returning a clean 404.",
+    "breaks_run": false,
+    "patch": "fa-15.patch"
+  },
+  {
+    "id": "fa-16",
+    "category": "works in dev but not on the production build",
+    "statement": "Search filtering on /api/orders only works when a DEBUG environment variable is set; in a normal (production) deployment every search returns the full list.",
+    "breaks_run": false,
+    "patch": "fa-16.patch"
+  },
+  {
+    "id": "fa-17",
+    "category": "wrong computation",
+    "statement": "Opening a single order's detail (GET /api/orders/1001) shows a total twice the real price.",
+    "breaks_run": false,
+    "patch": "fa-17.patch"
+  },
+  {
+    "id": "fa-18",
+    "category": "dead handler",
+    "statement": "The health check endpoint returns an empty object instead of {\"status\": \"ok\"}, so uptime monitors can't confirm the service is healthy.",
+    "breaks_run": false,
+    "patch": "fa-18.patch"
+  },
+  {
+    "id": "fa-19",
+    "category": "dead handler",
+    "statement": "GET /api/orders always returns an empty list; a leftover duplicate route registered earlier shadows the real handler.",
+    "breaks_run": false,
+    "patch": "fa-19.patch"
+  },
+  {
+    "id": "fa-20",
+    "category": "search/filter behavior wrong",
+    "statement": "Searching for \"Alice\" returns every order except Alice's; the match condition was inverted.",
+    "breaks_run": false,
+    "patch": "fa-20.patch"
+  },
+  {
+    "id": "fa-21",
+    "category": "stale deploy or wrong build",
+    "statement": "The pinned FastAPI version in requirements.txt is years out of date and fails to install/import in the current environment, so the service never starts.",
+    "breaks_run": true,
+    "patch": "fa-21.patch"
+  },
+  {
+    "id": "fa-22",
+    "category": "build or start breaks",
+    "statement": "The whole API fails to start: even GET /health returns nothing because the server process can't boot due to a code error.",
+    "breaks_run": true,
+    "patch": "fa-22.patch"
+  },
+  {
+    "id": "fa-23",
+    "category": "wrong field in search/filter",
+    "statement": "GET /api/orders/1001 always returns 404 Not Found; the lookup compares the id against the customer name field by mistake.",
+    "breaks_run": false,
+    "patch": "fa-23.patch"
+  },
+  {
+    "id": "fa-24",
+    "category": "loading/empty/error state wrong",
+    "statement": "When a search matches nothing, /api/orders returns an object {\"orders\": []} instead of an empty array, breaking clients that expect a list.",
+    "breaks_run": false,
+    "patch": "fa-24.patch"
+  },
+  {
+    "id": "fa-25",
+    "category": "wrong field in search/filter",
+    "statement": "A single order's detail view shows the price under the key \"amount\" instead of \"total\", and after the first request the price disappears from that order everywhere.",
+    "breaks_run": false,
+    "patch": "fa-25.patch"
+  },
+  {
+    "id": "fa-26",
+    "category": "off-by-one",
+    "statement": "Searching for a customer with multiple orders always leaves out the last one in the results.",
+    "breaks_run": false,
+    "patch": "fa-26.patch"
+  },
+  {
+    "id": "fa-27",
+    "category": "mocked or hardcoded data",
+    "statement": "Every single-order detail page shows the item name as \"Sample Item\" instead of the real product.",
+    "breaks_run": false,
+    "patch": "fa-27.patch"
+  },
+  {
+    "id": "fa-28",
+    "category": "search/filter behavior wrong",
+    "statement": "Typing part of a name, like \"nguyen\", returns no results; only an exact full-name match works now.",
+    "breaks_run": false,
+    "patch": "fa-28.patch"
+  },
+  {
+    "id": "fa-29",
+    "category": "broken link/route",
+    "statement": "GET /api/orders/1001 (no trailing slash) returns 404; the route now requires a trailing slash that the app's own links don't include.",
+    "breaks_run": false,
+    "patch": "fa-29.patch"
+  },
+  {
+    "id": "fa-30",
+    "category": "crash on edge case",
+    "statement": "Searching for a customer with zero matching orders crashes the endpoint with a division-by-zero error instead of returning an empty list.",
+    "breaks_run": false,
+    "patch": "fa-30.patch"
+  },
+  {
+    "id": "fa-31",
+    "category": "loading/empty/error state wrong",
+    "statement": "The single-order detail endpoint returns a one-item array instead of the order object itself, breaking any client expecting a single record.",
+    "breaks_run": false,
+    "patch": "fa-31.patch"
+  },
+  {
+    "id": "fa-32",
+    "category": "loading/empty/error state wrong",
+    "statement": "Loading the orders page normally (no search text) shows an empty list instead of every order; only typing something makes any orders appear.",
+    "breaks_run": false,
+    "patch": "fa-32.patch"
+  }
+]

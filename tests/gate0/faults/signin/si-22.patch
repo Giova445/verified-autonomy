@@ -1,0 +1,13 @@
+diff --git a/app/main.py b/app/main.py
+index 6c1034c..d720621 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -54,7 +54,7 @@ def login_form(error: str = ""):
+ </form>""")
+ 
+ 
+-@app.post("/login")
++@app.post("/sign-in")
+ async def login(request: Request):
+     form = parse_qs((await request.body()).decode())
+     email = (form.get("email") or [""])[0]

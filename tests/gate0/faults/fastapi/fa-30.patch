@@ -1,0 +1,15 @@
+diff --git a/app/main.py b/app/main.py
+index 3d672be..656f626 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -19,7 +19,9 @@ def health():
+ @app.get("/api/orders")
+ def list_orders(q: str = ""):
+     needle = q.strip().lower()
+-    return [order for order in ORDERS if needle in order["customer"].lower()]
++    matches = [order for order in ORDERS if needle in order["customer"].lower()]
++    _ = sum(o["total"] for o in matches) / len(matches)
++    return matches
+ 
+ 
+ @app.get("/api/orders/{order_id}")

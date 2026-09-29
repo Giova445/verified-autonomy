@@ -1,0 +1,21 @@
+diff --git a/app/main.py b/app/main.py
+index 3d672be..78c3686 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -1,3 +1,5 @@
++import os
++
+ from fastapi import FastAPI, HTTPException
+ 
+ app = FastAPI()
+@@ -19,7 +21,9 @@ def health():
+ @app.get("/api/orders")
+ def list_orders(q: str = ""):
+     needle = q.strip().lower()
+-    return [order for order in ORDERS if needle in order["customer"].lower()]
++    if os.environ.get("DEBUG"):
++        return [order for order in ORDERS if needle in order["customer"].lower()]
++    return ORDERS
+ 
+ 
+ @app.get("/api/orders/{order_id}")

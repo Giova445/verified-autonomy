@@ -1,0 +1,13 @@
+diff --git a/apps/web/src/app.js b/apps/web/src/app.js
+index d280df3..8855ca0 100644
+--- a/apps/web/src/app.js
++++ b/apps/web/src/app.js
+@@ -5,7 +5,7 @@ const loading = document.getElementById("loading");
+ 
+ function render(orders, query) {
+   const needle = query.trim().toLowerCase();
+-  const shown = orders.filter((order) => order.customer.toLowerCase().includes(needle));
++  const shown = orders.filter((order) => order.item.toLowerCase().includes(needle));
+   list.replaceChildren(
+     ...shown.map((order) => {
+       const item = document.createElement("li");

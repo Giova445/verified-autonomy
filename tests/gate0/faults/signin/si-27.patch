@@ -1,0 +1,13 @@
+diff --git a/app/main.py b/app/main.py
+index 6c1034c..4affd60 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -50,7 +50,7 @@ def login_form(error: str = ""):
+ <form method="post" action="/login">
+ <label>Email <input id="email" name="email" type="email" autocomplete="username"></label>
+ <label>Password <input id="password" name="password" type="password" autocomplete="current-password"></label>
+-<button id="signin" type="submit">Sign in</button>
++<button id="signin" type="button">Sign in</button>
+ </form>""")
+ 
+ 

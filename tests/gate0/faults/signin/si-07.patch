@@ -1,0 +1,13 @@
+diff --git a/app/main.py b/app/main.py
+index 6c1034c..10c1e30 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -40,7 +40,7 @@ def health():
+ 
+ @app.get("/")
+ def home():
+-    return RedirectResponse("/orders", status_code=303)
++    return RedirectResponse("/order", status_code=303)
+ 
+ 
+ @app.get("/login", response_class=HTMLResponse)

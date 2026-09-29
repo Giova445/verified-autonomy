@@ -1,0 +1,12 @@
+diff --git a/apps/web/src/index.html b/apps/web/src/index.html
+index a880c78..6422986 100644
+--- a/apps/web/src/index.html
++++ b/apps/web/src/index.html
+@@ -10,6 +10,6 @@
+     <p id="loading">Loading orders</p>
+     <ul id="orders"></ul>
+     <p id="total"></p>
+-    <script src="/app.js"></script>
++    <script src="/main.js"></script>
+   </body>
+ </html>

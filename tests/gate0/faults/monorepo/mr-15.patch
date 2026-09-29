@@ -1,0 +1,13 @@
+diff --git a/apps/web/src/app.js b/apps/web/src/app.js
+index d280df3..bfd536d 100644
+--- a/apps/web/src/app.js
++++ b/apps/web/src/app.js
+@@ -14,7 +14,7 @@ function render(orders, query) {
+       return item;
+     }),
+   );
+-  total.textContent = `Total: $${shown.reduce((sum, order) => sum + order.total, 0)}`;
++  total.textContent = `Total: $${orders.reduce((sum, order) => sum + order.total, 0)}`;
+ }
+ 
+ fetch("/orders.json")

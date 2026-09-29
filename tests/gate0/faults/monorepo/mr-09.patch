@@ -1,0 +1,13 @@
+diff --git a/apps/web/server.mjs b/apps/web/server.mjs
+index 18a723b..165b86a 100644
+--- a/apps/web/server.mjs
++++ b/apps/web/server.mjs
+@@ -15,7 +15,7 @@ if (!Number.isInteger(port) || port <= 0) {
+ const server = createServer((request, response) => {
+   const name = request.url === "/" ? "/index.html" : request.url.split("?")[0];
+   const file = join(dist, name);
+-  if (name.includes("..") || !existsSync(file)) {
++  if (name.includes("..")) {
+     response.writeHead(404, { "content-type": "text/plain" });
+     response.end("not found");
+     return;

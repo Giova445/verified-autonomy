@@ -1,0 +1,13 @@
+diff --git a/app/main.py b/app/main.py
+index 6c1034c..7f7f1ff 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -61,7 +61,7 @@ async def login(request: Request):
+     password = (form.get("password") or [""])[0]
+     if not password_ok(email, password):
+         return RedirectResponse("/login?error=1", status_code=303)
+-    token = secrets.token_hex(16)
++    token = "fixed-session-token"
+     SESSIONS[token] = email
+     response = RedirectResponse("/orders", status_code=303)
+     response.set_cookie(COOKIE, token, httponly=True, samesite="lax")

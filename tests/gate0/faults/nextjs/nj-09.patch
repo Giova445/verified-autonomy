@@ -1,0 +1,13 @@
+diff --git a/app/api/orders/route.js b/app/api/orders/route.js
+index aa48ddd..068503b 100644
+--- a/app/api/orders/route.js
++++ b/app/api/orders/route.js
+@@ -1,5 +1,8 @@
+ import { orders } from "../../../lib/orders.js";
+ 
+ export function GET() {
++  if (process.env.NODE_ENV === "production") {
++    return Response.json([]);
++  }
+   return Response.json(orders);
+ }

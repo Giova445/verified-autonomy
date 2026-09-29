@@ -1,0 +1,13 @@
+diff --git a/app/main.py b/app/main.py
+index 6c1034c..b35c2bd 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -34,7 +34,7 @@ def signed_in_email(request):
+ 
+ 
+ @app.get("/health")
+-def health():
++def health()
+     return {"status": "ok"}
+ 
+ 

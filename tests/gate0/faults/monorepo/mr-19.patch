@@ -1,0 +1,11 @@
+diff --git a/package.json b/package.json
+index a65d549..edb179f 100644
+--- a/package.json
++++ b/package.json
+@@ -1,5 +1,5 @@
+ {
+   "name": "orders-monorepo",
+   "private": true,
+-  "workspaces": ["apps/*", "packages/*"]
++  "workspaces": ["aps/*", "packages/*"]
+ }

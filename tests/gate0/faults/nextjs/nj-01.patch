@@ -1,0 +1,13 @@
+diff --git a/app/orders/page.js b/app/orders/page.js
+index 5800863..3cf7277 100644
+--- a/app/orders/page.js
++++ b/app/orders/page.js
+@@ -25,7 +25,7 @@ export default function OrdersPage() {
+         placeholder="Search by customer"
+         value={query}
+         disabled={orders === null}
+-        onChange={(event) => setQuery(event.target.value)}
++        onChange={() => {}}
+       />
+       {orders === null ? <p id="loading">Loading orders</p> : null}
+       <ul id="orders">

@@ -1,0 +1,11 @@
+diff --git a/bin/orders.mjs b/bin/orders.mjs
+index 3d5d35f..0b98a9b 100644
+--- a/bin/orders.mjs
++++ b/bin/orders.mjs
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env node
+-import { formatRow, formatTotal, orders, search } from "../src/orders.mjs";
++import { formatRow, formatTotal, orders, searchOrders } from "../src/orders.mjs";
+ 
+ const USAGE = "usage: orders {list|total} [--search NAME]";
+ 

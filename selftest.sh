@@ -75,6 +75,12 @@ chk "run log: a red run logs exit code 1, verdict red and the gate's exit 3" "$r
 chk "run log: a run that skips the product check logs none, not an older product.json" "$(rec 1 'rec["product"]')" "{'status': 'not run', 'outcomes': []}"
 VERIFY_MEMORY_MB=0 rverify full >/dev/null
 chk "run log: with the meter off, peak memory is null" "$(rec 2 'rec["peak_memory_mb"]')" "None"
+printf '{"full":[{"name":"nap","cmd":"true"}]}' > "$rl/.claude/gates.json"
+bare="$(mktemp -d)"; mkdir "$bare/bin" "$bare/hooks"
+cp "$PLUGIN/bin/verify" "$bare/bin/"; cp "$PLUGIN/hooks/state.py" "$bare/hooks/"
+CLAUDE_PROJECT_DIR="$rl" bash "$bare/bin/verify" done >/dev/null 2>&1
+chk "run log: a product check that could not run logs no outcomes, not an older product.json" "$(rec 3 '"%s %s" % (rec["product"]["status"], rec["product"]["outcomes"])')" "open []"
+find "$bare" -maxdepth 0 -exec rm -rf {} +
 rm -f "$runlog"; mkdir "$runlog"
 printf '{"full":[{"name":"ok","cmd":"true"}]}' > "$rl/.claude/gates.json"
 out="$(rverify full)"; rc=$?

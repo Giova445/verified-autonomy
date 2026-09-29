@@ -449,7 +449,7 @@ def product_half(ctx, tier=None):
     proc = subprocess.run([sys.executable, script, "--summarize", results], stdin=subprocess.DEVNULL,
                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
     lines = proc.stdout.decode("utf-8", "replace").splitlines()
-    return {"status": lines[0] if lines else "open", "msg": "\n".join(lines[1:])}
+    return {"status": lines[0] if lines else "open", "msg": "\n".join(lines[1:]), "measured": True}
 
 def decide(tier, prod):
     kind, text = tier_verdict(tier)
@@ -561,7 +561,7 @@ def gate_record(gate):
 
 def product_record(ctx, prod):
     outcomes = []
-    if prod["status"] != NOT_RUN["status"]:
+    if prod.get("measured"):
         data = load_json(os.path.join(ctx.evidence, "product.json"))
         listed = data.get("outcomes") if isinstance(data, dict) else None
         outcomes = [{"name": o.get("name"), "verdict": o.get("verdict")}

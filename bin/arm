@@ -6,6 +6,11 @@ TARGET="${2:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 TARGET="$(cd "$TARGET" 2>/dev/null && pwd)" || { printf 'arm: no such directory: %s\n' "${2:-}" >&2; exit 2; }
 KIT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 PROBE_TIMEOUT="${ARM_TIMEOUT:-600}"
+SEP=$'\x1f'
+NL=$'\n'
+MANIFESTS="package.json pyproject.toml requirements.txt setup.py go.mod Cargo.toml Makefile"
+
+command -v python3 >/dev/null 2>&1 || { printf 'arm: CANNOT RUN, python3 is required\n' >&2; exit 2; }
 
 say() { printf '%s\n' "$*" >&2; }
 
@@ -16,19 +21,140 @@ is_placeholder() {
   esac
 }
 
-run_probe() {
-  local dir="$1" cmd="$2" pid rc=0
-  ( cd "$dir" && eval "$cmd" ) >/dev/null 2>&1 &
-  pid=$!
-  ( sleep "$PROBE_TIMEOUT"; kill -9 "$pid" 2>/dev/null ) >/dev/null 2>&1 &
-  local killer=$!
-  wait "$pid" 2>/dev/null; rc=$?
-  kill -9 "$killer" 2>/dev/null
-  wait "$killer" 2>/dev/null
-  return $rc
+shq() {
+  case "$1" in
+    ""|*[!A-Za-z0-9._/-]*) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+    *) printf '%s' "$1" ;;
+  esac
 }
 
-SEP=$'\x1f'
+slug() { printf '%s' "$1" | sed 's/[^A-Za-z0-9._-]/-/g'; }
+
+run_probe() {
+  python3 - "$1" "$2" "$PROBE_TIMEOUT" <<'PY'
+import os, signal, subprocess, sys
+
+directory, command, limit = sys.argv[1], sys.argv[2], float(sys.argv[3])
+proc = subprocess.Popen(["bash", "-c", command], cwd=directory, stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        start_new_session=True)
+
+def reap():
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+def stop(sig, _frame):
+    reap()
+    sys.exit(128 + sig)
+
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
+try:
+    rc = proc.wait(timeout=limit)
+except subprocess.TimeoutExpired:
+    reap()
+    proc.wait()
+    sys.exit(124)
+reap()
+sys.exit(128 - rc if rc < 0 else rc)
+PY
+}
+
+guard() {
+  python3 - "$@" <<'PY'
+import json, os, subprocess, sys
+
+mode, root, snap_file = sys.argv[1:4]
+label = sys.argv[4] if len(sys.argv) > 4 else ""
+MAX_NOTES = 8
+
+top = subprocess.run(["git", "-C", root, "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+if top.returncode != 0:
+    sys.exit(0)
+top = top.stdout.strip()
+scope = os.path.relpath(os.path.realpath(root), os.path.realpath(top))
+
+def status():
+    p = subprocess.run(["git", "-C", top, "status", "--porcelain=v1", "-z", "-uall",
+                        "--ignored=matching", "--", scope], capture_output=True)
+    if p.returncode != 0:
+        return None
+    fields = p.stdout.decode("utf-8", "surrogateescape").split("\0")
+    out, i = {}, 0
+    while i < len(fields):
+        entry = fields[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        xy, path = entry[:2], entry[3:]
+        if "R" in xy or "C" in xy:
+            i += 1
+        out[path] = xy
+    return out
+
+def stamp(path):
+    try:
+        st = os.lstat(os.path.join(top, path))
+    except OSError:
+        return [None, None]
+    return [st.st_size, st.st_mtime_ns]
+
+def drop_empty_parents(path):
+    parent = os.path.dirname(os.path.join(top, path))
+    while parent != top and parent.startswith(top):
+        try:
+            os.rmdir(parent)
+        except OSError:
+            return
+        parent = os.path.dirname(parent)
+
+current = status()
+if current is None:
+    sys.exit(0)
+
+if mode == "snap":
+    with open(snap_file, "w", encoding="utf-8") as fh:
+        json.dump({p: [xy] + stamp(p) for p, xy in current.items()}, fh)
+    sys.exit(0)
+
+with open(snap_file, encoding="utf-8") as fh:
+    before = json.load(fh)
+notes, left = [], []
+for path, xy in sorted(current.items()):
+    if path in before:
+        if xy != "!!" and before[path][1:] != stamp(path):
+            notes.append(f"changed {path} (it already held your changes; left as is)")
+            before[path] = [xy] + stamp(path)
+        continue
+    if xy == "??":
+        try:
+            os.remove(os.path.join(top, path))
+            drop_empty_parents(path)
+            notes.append(f"created {path} (removed)")
+        except OSError as exc:
+            notes.append(f"created {path} (could not remove: {exc})")
+    elif xy == "!!":
+        left.append(path)
+        before[path] = [xy] + stamp(path)
+    elif xy in (" M", " D", " T"):
+        done = subprocess.run(["git", "-C", top, "checkout", "--", path], capture_output=True)
+        notes.append(f"modified {path} ({'restored' if done.returncode == 0 else 'could not restore'})")
+    else:
+        notes.append(f"changed {path} in the index (left as is)")
+        before[path] = [xy] + stamp(path)
+if left:
+    shown = ", ".join(left[:3]) + (f" and {len(left) - 3} more" if len(left) > 3 else "")
+    notes.append(f"left {len(left)} ignored path(s) in place: {shown}")
+with open(snap_file, "w", encoding="utf-8") as fh:
+    json.dump(before, fh)
+for line in notes[:MAX_NOTES]:
+    print(f"  note   {label}: {line}", file=sys.stderr)
+if len(notes) > MAX_NOTES:
+    print(f"  note   {label}: and {len(notes) - MAX_NOTES} more", file=sys.stderr)
+PY
+}
 
 npm_script() {
   python3 - "$1/package.json" "$2" <<'PY' 2>/dev/null
@@ -48,21 +174,58 @@ make_recipe() {
     "$1/Makefile" 2>/dev/null
 }
 
-emit() { printf '%s%s%s%s%s%s%s\n' "$1" "$SEP" "$2" "$SEP" "$3" "$SEP" "${4:-$3}"; }
+emit() { printf '%s\n' "$1$SEP$2$SEP$3$SEP${4:-$3}$SEP${5:-}$SEP${6:-$3}"; }
+
+has_manifest() {
+  local m
+  for m in $MANIFESTS; do [ -f "$1/$m" ] && return 0; done
+  return 1
+}
+
+skip_dir() {
+  case "$1" in
+    node_modules|vendor|dist|build|out|target|coverage|examples|example|fixtures|fixture|testdata|venv|site-packages|__pycache__) return 0 ;;
+  esac
+  return 1
+}
+
+usable_app_dir() {
+  [ -d "$1" ] && [ ! -L "$1" ] && [ ! -e "$1/.git" ] && has_manifest "$1" \
+    && ! printf '%s' "$1" | grep -q '[][*?{}]'
+}
+
+app_dirs() {
+  local d="$1" a b
+  shopt -s nullglob
+  for a in "$d"/*/; do
+    a="${a%/}"
+    skip_dir "${a##*/}" && continue
+    usable_app_dir "$a" && printf '%s\n' "${a#"$d"/}"
+    for b in "$a"/*/; do
+      b="${b%/}"
+      skip_dir "${b##*/}" && continue
+      usable_app_dir "$b" && printf '%s\n' "${b#"$d"/}"
+    done
+  done
+  shopt -u nullglob
+  return 0
+}
 
 candidates() {
-  local d="$1" b
+  local d="$1" b r="" s
   if [ -f "$d/package.json" ]; then
     b="$(npm_script "$d" lint)";      [ -n "$b" ] && emit fast js-lint      'npm run lint'      "$b"
     b="$(npm_script "$d" typecheck)"; [ -n "$b" ] && emit fast js-typecheck 'npm run typecheck' "$b"
     b="$(npm_script "$d" test)";      [ -n "$b" ] && emit full js-test      'npm test --silent' "$b"
-    [ -f "$d/tsconfig.json" ] && emit full js-tsc 'npx --no-install tsc --noEmit'
+    [ -f "$d/tsconfig.json" ] && emit full js-tsc 'npx --no-install tsc --noEmit' 'tsc --noEmit'
   fi
   if [ -f "$d/pyproject.toml" ] || [ -f "$d/requirements.txt" ] || [ -f "$d/setup.py" ]; then
-    local r=""; command -v uv >/dev/null 2>&1 && r="uv run "
+    command -v uv >/dev/null 2>&1 && r="uv run "
     emit fast py-lint      "${r}ruff check ."
     emit fast py-typecheck "${r}mypy ."
     emit full py-test      "${r}pytest -q"
+  elif { compgen -G "$d/tests/*.py" || compgen -G "$d/test/*.py"; } >/dev/null && command -v pytest >/dev/null 2>&1; then
+    emit full py-test-bare 'pytest -q'
   fi
   [ -f "$d/go.mod" ]     && { emit fast go-vet    'go vet ./...';                  emit full go-test 'go test ./...'; }
   [ -f "$d/Cargo.toml" ] && { emit fast rs-clippy 'cargo clippy -- -D warnings';   emit full rs-test 'cargo test'; }
@@ -70,95 +233,102 @@ candidates() {
     b="$(make_recipe "$d" lint)"; [ -n "$b" ] && emit fast make-lint 'make lint' "$b"
     b="$(make_recipe "$d" test)"; [ -n "$b" ] && emit full make-test 'make test' "$b"
   fi
-  local s
   for s in selftest.sh test.sh run-tests.sh runtests.sh scripts/test.sh bin/test; do
     [ -x "$d/$s" ] && emit full "script-${s##*/}" "./$s"
   done
-  if [ ! -f "$d/pyproject.toml" ] && [ ! -f "$d/requirements.txt" ] && [ ! -f "$d/setup.py" ]; then
-    if { [ -d "$d/tests" ] || [ -d "$d/test" ]; } && command -v pytest >/dev/null 2>&1; then
-      emit full py-test-bare 'pytest -q'
-    fi
-  fi
-  [ -x "$d/.claude/hooks/scan-diff-cheats.sh" ] && emit full cheat-scan '.claude/hooks/scan-diff-cheats.sh'
-  local trailer="" p
-  for p in "$KIT_ROOT/benchmark/gates/trailer-check.py" "$KIT_ROOT/.claude/gates/trailer-check.py"; do
-    [ -f "$p" ] && { trailer="$p"; break; }
-  done
-  local trailer_ref="$trailer"
-  case "$trailer" in "$d"/*) trailer_ref=".${trailer#"$d"}" ;; esac
-  git -C "$d" rev-parse --verify --quiet HEAD >/dev/null 2>&1 && [ -n "$trailer" ] \
-    && emit full co-author "python3 '$trailer_ref'"
-  local ledger=""
-  for p in "$KIT_ROOT/bin/ledger" "$d/bin/ledger"; do
-    [ -x "$p" ] && { ledger="$p"; break; }
-  done
-  local ledger_ref="$ledger"
-  case "$ledger" in "$d"/*) ledger_ref=".${ledger#"$d"}" ;; esac
-  [ -d "$d/.claude/work" ] && [ -n "$ledger" ] \
-    && emit full ledger-open "'$ledger_ref' open"
   return 0
 }
 
-REPO_LEVEL='^(co-author|cheat-scan|ledger-open)$'
-all_candidates() {
-  local d="$1" sub tier name cmd body
-  candidates "$d"
-  for sub in "$d"/*/; do
-    sub="$(basename "$sub")"
-    case "$sub" in node_modules|vendor|dist|build|*" "*|.*) continue ;; esac
-    local m found=""
-    for m in package.json pyproject.toml requirements.txt go.mod Cargo.toml Makefile; do
-      [ -f "$d/$sub/$m" ] && found=1
-    done
-    [ -n "$found" ] || continue
-    while IFS="$SEP" read -r tier name cmd body; do
-      [ -n "${tier:-}" ] || continue
-      printf '%s\n' "$name" | grep -Eq "$REPO_LEVEL" && continue
-      printf '%s%s%s%s%s%s%s%s%s\n' "$tier" "$SEP" "$sub-$name" "$SEP" "cd $sub && $cmd" "$SEP" "${body:-$cmd}" "$SEP" "$sub/**"
-    done < <(candidates "$d/$sub")
-  done
+policy_candidates() {
+  local d="$1" kit_copy="$KIT_ROOT/benchmark/gates/trailer-check.py"
+  [ -f "$d/.claude/forbidden-trailers" ] || return 0
+  git -C "$d" rev-parse --verify --quiet HEAD >/dev/null 2>&1 || return 0
+  if [ -f "$d/.claude/gates/trailer-check.py" ]; then
+    emit policy co-author 'python3 .claude/gates/trailer-check.py'
+  elif [ -f "$kit_copy" ]; then
+    emit policy co-author 'python3 .claude/gates/trailer-check.py' 'python3 .claude/gates/trailer-check.py' '' "python3 $(shq "$kit_copy")"
+  fi
+  return 0
 }
 
-PASS_FAST=(); PASS_FULL=(); N_CAND=0; N_PASS=0; N_UNKNOWN=0
+all_candidates() {
+  local d="$1" sub tier name cmd body surf probe q
+  candidates "$d"
+  while IFS= read -r sub; do
+    q="cd $(shq "$sub") && "
+    while IFS="$SEP" read -r tier name cmd body surf probe; do
+      [ -n "${tier:-}" ] || continue
+      emit "$tier" "$(slug "$sub")-$name" "$q$cmd" "$body" "$sub/**" "$q$probe"
+    done < <(candidates "$d/$sub")
+  done < <(app_dirs "$d")
+  policy_candidates "$d"
+}
+
+PASS_FAST=(); PASS_FULL=(); N_CAND=0; N_PASS=0; N_SUBST=0; N_UNKNOWN=0
 probe_all() {
-  local d="$1" quiet="${2:-}" tier name cmd body rc verdict
-  PASS_FAST=(); PASS_FULL=(); N_CAND=0; N_PASS=0; N_UNKNOWN=0
-  while IFS="$SEP" read -r tier name cmd body surf; do
+  local d="$1" quiet="${2:-}" tier name cmd body surf probe rc verdict key seen="$NL" snap t0 secs dup
+  PASS_FAST=(); PASS_FULL=(); N_CAND=0; N_PASS=0; N_SUBST=0; N_UNKNOWN=0
+  snap="$(mktemp "${TMPDIR:-/tmp}/arm-snap.XXXXXX")"
+  guard snap "$d" "$snap"
+  while IFS="$SEP" read -r tier name cmd body surf probe; do
     [ -n "${tier:-}" ] || continue
     N_CAND=$((N_CAND + 1))
-    if is_placeholder "${body:-$cmd}"; then
-      verdict="REJECTED (placeholder — a gate that cannot fail is not a gate)"
+    key="$surf|$body"
+    dup=0
+    if [ "$tier" != policy ]; then case "$seen" in *"$NL$key$NL"*) dup=1 ;; esac; fi
+    if [ "$dup" -eq 1 ]; then
+      verdict="SKIPPED (runs the same command as an earlier gate)"
+    elif is_placeholder "${body:-$cmd}"; then
+      verdict="REJECTED (placeholder: a gate that cannot fail is not a gate)"
     else
-      local t0 t1 secs; t0=$(date +%s)
-      run_probe "$d" "$cmd"; rc=$?
-      t1=$(date +%s); secs=$((t1 - t0))
+      seen="$seen$key$NL"
+      t0=$(date +%s)
+      run_probe "$d" "${probe:-$cmd}"; rc=$?
+      secs=$(( $(date +%s) - t0 ))
+      guard restore "$d" "$snap" "$name"
       if [ "$rc" -eq 0 ]; then
         verdict="passes (${secs}s)"
         N_PASS=$((N_PASS + 1))
-        local obj; obj="$(printf '{"name":"%s","cmd":"%s"%s}' "$name" "$cmd" "${surf:+,\"surface\":[\"$surf\"]}")"
-        if [ "$tier" = fast ]; then PASS_FAST+=("$obj"); else PASS_FULL+=("$obj"); fi
-      elif [ "$rc" -eq 137 ]; then
+        if [ "$tier" = policy ]; then
+          verdict="passes (${secs}s; policy, does not count as a gate)"
+        else
+          N_SUBST=$((N_SUBST + 1))
+        fi
+        [ "$tier" = fast ] && PASS_FAST+=("$name$SEP$cmd$SEP$surf")
+        PASS_FULL+=("$name$SEP$cmd$SEP$surf")
+      elif [ "$rc" -eq 124 ]; then
         N_UNKNOWN=$((N_UNKNOWN + 1))
-        verdict="NO VERDICT (still running at ${PROBE_TIMEOUT}s — raise ARM_TIMEOUT to probe longer)"
+        verdict="NO VERDICT (still running at ${PROBE_TIMEOUT}s; raise ARM_TIMEOUT to probe longer)"
       else
         verdict="REJECTED (exit $rc after ${secs}s)"
       fi
     fi
-    [ -n "$quiet" ] || printf '  %-6s %-14s %-46s %s\n' "$tier" "$name" "$cmd" "$verdict"
+    [ -n "$quiet" ] || printf '  %-6s %-22s %-46s %s\n' "$tier" "$name" "$cmd" "$verdict"
   done < <(all_candidates "$d")
+  rm -f "$snap"
 }
 
 emit_config() {
-  local IFS=,
-  printf '{\n'
-  printf '  "_comment": "Written by bin/arm. Every command here was RUN and exited 0 in this repository before it was written down. Nothing aspirational is in this file; add a gate only after it passes.",\n'
-  printf '  "fast": [%s],\n'   "${PASS_FAST[*]:-}"
-  printf '  "full": [%s],\n'   "${PASS_FULL[*]:-}"
-  printf '  "deferred": []\n}\n'
-}
-
-surface_plan() {
-  python3 "$KIT_ROOT/bin/arm-surface.py" "$1"
+  local r
+  {
+    for r in ${PASS_FAST[@]+"${PASS_FAST[@]}"}; do printf 'fast%s%s\n' "$SEP" "$r"; done
+    for r in ${PASS_FULL[@]+"${PASS_FULL[@]}"}; do printf 'full%s%s\n' "$SEP" "$r"; done
+  } | python3 -c '
+import json, sys
+tiers = {"fast": [], "full": []}
+for line in sys.stdin.read().splitlines():
+    tier, name, cmd, surface = line.split("\x1f")
+    gate = {"name": name, "cmd": cmd}
+    if surface:
+        gate["surface"] = [surface]
+    tiers[tier].append(gate)
+def block(key):
+    gates = tiers[key]
+    if not gates:
+        return "  \"%s\": []" % key
+    return "  \"%s\": [\n%s\n  ]" % (key, ",\n".join("    " + json.dumps(g) for g in gates))
+print("{\n" + ",\n".join(block(k) for k in ("fast", "full")) + "\n}")
+'
 }
 
 do_detect() {
@@ -166,10 +336,10 @@ do_detect() {
   probe_all "$TARGET"
   say ""
   say "$N_PASS of $N_CAND candidate(s) pass here."
-  [ "$N_UNKNOWN" -gt 0 ] && say "$N_UNKNOWN gave no verdict inside ${PROBE_TIMEOUT}s. That is unknown, not failing — re-run with a larger ARM_TIMEOUT before concluding anything about them."
-  if [ "${#PASS_FULL[@]}" -eq 0 ]; then
-    say "Nothing would be written: the 'full' tier would be empty, and an armed config that"
-    say "gates nothing certifies everything. Give this repo one command that passes first."
+  [ "$N_UNKNOWN" -gt 0 ] && say "$N_UNKNOWN gave no verdict inside ${PROBE_TIMEOUT}s. That is unknown, not failing: re-run with a larger ARM_TIMEOUT before concluding anything about them."
+  if [ "$N_SUBST" -eq 0 ]; then
+    say "Nothing would be written: no lint, typecheck or test command passes, and policy gates do not count."
+    say "An armed config that gates nothing certifies everything. Give this repo one command that passes first."
     return 1
   fi
   say ""
@@ -178,52 +348,61 @@ do_detect() {
 
 do_write() {
   probe_all "$TARGET" quiet
-  if [ "${#PASS_FULL[@]}" -eq 0 ]; then
-    say "REFUSING: no 'full' gate passes in $TARGET ($N_PASS of $N_CAND candidates pass)."
+  if [ "$N_SUBST" -eq 0 ]; then
+    say "REFUSING: no lint, typecheck or test command passes in $TARGET ($N_PASS of $N_CAND candidates pass; policy gates do not count)."
     [ "$N_UNKNOWN" -gt 0 ] && say "$N_UNKNOWN candidate(s) were still running at ${PROBE_TIMEOUT}s and gave no verdict. Try: ARM_TIMEOUT=1800 arm write"
-    say "Writing an armed config with an empty full tier would report enforcement that is"
-    say "not happening. Run 'arm detect' to see what was rejected and why."
+    say "An armed config with nothing but policy gates would report enforcement that is not happening."
+    say "Run 'arm detect' to see what was rejected and why."
     return 1
   fi
   mkdir -p "$TARGET/.claude"
-  local out="$TARGET/.claude/gates.json"
-  if [ -s "$out" ]; then
-    emit_config > "$out.new"
-    say "$out EXISTS — wrote $out.new. Merge it; clobbering a project's real gate config is"
-    say "exactly the irreversible surprise this kit exists to prevent."
+  local out="$TARGET/.claude/gates.json" cfg r
+  cfg="$(emit_config)"
+  if [ -s "$out" ] && [ "$cfg" = "$(cat "$out")" ]; then
+    say "already armed: $out matches what passes now"
+  elif [ -s "$out" ]; then
+    printf '%s\n' "$cfg" > "$out.new"
+    say "$out exists: wrote $out.new. Merge it; overwriting a project's gate config is the irreversible surprise this avoids."
   else
-    emit_config > "$out"
-    say "armed: $out  (${#PASS_FAST[@]} fast, ${#PASS_FULL[@]} full — all verified passing)"
+    printf '%s\n' "$cfg" > "$out"
+    say "armed: $out  (${#PASS_FAST[@]} fast, ${#PASS_FULL[@]} full, all verified passing)"
   fi
-  python3 -m json.tool "$out" >/dev/null 2>&1 || { say "BUG: emitted invalid JSON"; return 1; }
+  for r in ${PASS_FULL[@]+"${PASS_FULL[@]}"}; do
+    if [ "${r%%"$SEP"*}" = co-author ] && [ ! -f "$TARGET/.claude/gates/trailer-check.py" ] && [ -z "${ARM_INSTALLING:-}" ]; then
+      say "the co-author gate runs .claude/gates/trailer-check.py, which is not installed here yet: run kit/install.sh."
+    fi
+  done
   return 0
 }
 
-EXPECTED_CONTROLS=11
+EXPECTED_CONTROLS=20
 selftest() {
-  local tmp="${TMPDIR:-/tmp}/arm-selftest.$$" ok=0 ran=0
+  local tmp="${TMPDIR:-/tmp}/arm-selftest.$$" ok=0 ran=0 self
+  self="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/$(basename "${BASH_SOURCE[0]:-$0}")"
   mkdir -p "$tmp"
   chk() {
     ran=$((ran + 1))
     if [ "$2" = 0 ]; then ok=$((ok + 1)); printf '  ok    %s\n' "$1"
     else printf '  FAIL  %s\n' "$1"; fi
   }
-  local self; self="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/$(basename "${BASH_SOURCE[0]:-$0}")"
+  mkrepo() { mkdir -p "$1"; ( cd "$1" && git init -q . && git config user.email h@h && git config user.name h ); }
+  commit_all() { ( cd "$1" && git add -A >/dev/null 2>&1 && git commit -qm "${2:-init}" >/dev/null 2>&1 ); }
+  pkg() { mkdir -p "$1"; printf '%s' "$2" > "$1/package.json"; }
+  gate_names() { python3 -c 'import json,sys;print(",".join(g["name"] for g in json.load(open(sys.argv[1])).get(sys.argv[2],[])))' "$1/.claude/gates.json" "$2" 2>/dev/null; }
+  count_procs() { ps -axo command= | grep -c "[s]leep $1"; }
+  local green_pkg='{"scripts":{"test":"exit 0"}}' unique
 
-  mkdir -p "$tmp/green"
-  printf '%s\n' '{"scripts":{"test":"exit 0"}}' > "$tmp/green/package.json"
+  pkg "$tmp/green" "$green_pkg"
   bash "$self" write "$tmp/green" >/dev/null 2>&1
-  grep -q '"js-test"' "$tmp/green/.claude/gates.json" 2>/dev/null
-  chk "a passing command is written" $?
+  [ "$(gate_names "$tmp/green" full)|$(gate_names "$tmp/green" fast)" = "js-test|" ]
+  chk "a passing command is written to full, and only that" $?
 
-  mkdir -p "$tmp/red"
-  printf '%s\n' '{"scripts":{"test":"exit 1"}}' > "$tmp/red/package.json"
+  pkg "$tmp/red" '{"scripts":{"test":"exit 1"}}'
   bash "$self" write "$tmp/red" >/dev/null 2>&1
   [ ! -f "$tmp/red/.claude/gates.json" ]
   chk "a failing command is refused, and nothing is armed" $?
 
-  mkdir -p "$tmp/ph"
-  printf '%s\n' '{"scripts":{"test":"echo TODO"}}' > "$tmp/ph/package.json"
+  pkg "$tmp/ph" '{"scripts":{"test":"echo TODO"}}'
   local ph_out; ph_out="$(bash "$self" detect "$tmp/ph" 2>&1)"
   printf '%s' "$ph_out" | grep -q 'placeholder'
   chk "a placeholder is rejected as a placeholder, not run" $?
@@ -234,69 +413,142 @@ selftest() {
   chk "an undetectable repo is refused rather than armed empty" $?
 
   mkdir -p "$tmp/exists/.claude"
-  printf '%s\n' '{"scripts":{"test":"exit 0"}}' > "$tmp/exists/package.json"
-  printf '%s\n' '{"_mine":true,"fast":[],"full":[{"name":"x","cmd":"exit 0"}],"deferred":[]}' \
-    > "$tmp/exists/.claude/gates.json"
+  pkg "$tmp/exists" "$green_pkg"
+  printf '%s\n' '{"_mine":true,"fast":[],"full":[{"name":"x","cmd":"exit 0"}]}' > "$tmp/exists/.claude/gates.json"
   bash "$self" write "$tmp/exists" >/dev/null 2>&1
   grep -q '_mine' "$tmp/exists/.claude/gates.json" && [ -f "$tmp/exists/.claude/gates.json.new" ]
   chk "an existing config survives; the new one lands beside it" $?
 
-  local sg; sg="$(cd "$(dirname "$self")/.." && pwd)/hooks/stop-gate.sh"
-  ( cd "$tmp/green" && git init -q . && git config user.email h@h && git config user.name h \
-    && git add -A >/dev/null 2>&1 && git commit -qm init >/dev/null 2>&1 )
+  local red_rc green_rc
+  green_rc=$( CLAUDE_PROJECT_DIR="$tmp/green" bash "$KIT_ROOT/bin/verify" full >/dev/null 2>&1; echo $? )
   python3 - "$tmp/green/.claude/gates.json" <<'PY'
 import json, sys
 p = sys.argv[1]; d = json.load(open(p))
 d["full"] = [{"name": "always-red", "cmd": "exit 1"}]
 json.dump(d, open(p, "w"))
 PY
-  local rc; rc=$( cd "$tmp/green" && CLAUDE_PROJECT_DIR="$tmp/green" bash "$sg" </dev/null >/dev/null 2>&1; echo $? )
-  [ "$rc" = 2 ]
-  chk "the written config is the shape the Stop gate consumes (red -> exit 2)" $?
+  red_rc=$( CLAUDE_PROJECT_DIR="$tmp/green" bash "$KIT_ROOT/bin/verify" full >/dev/null 2>&1; echo $? )
+  [ "$green_rc $red_rc" = "0 1" ]
+  chk "the written config is the shape the runner consumes (green 0, red 1)" $?
 
   mkdir -p "$tmp/script"
   printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$tmp/script/selftest.sh"
   chmod +x "$tmp/script/selftest.sh"
   bash "$self" write "$tmp/script" >/dev/null 2>&1
-  grep -q 'selftest.sh' "$tmp/script/.claude/gates.json" 2>/dev/null
+  [ "$(gate_names "$tmp/script" full)" = "script-selftest.sh" ]
   chk "a manifest-less repo arms through its script entrypoint" $?
 
+  mkdir -p "$tmp/fakebin" "$tmp/pyt/tests" "$tmp/jst/test"
+  printf '#!/bin/sh\nexit 0\n' > "$tmp/fakebin/pytest"; chmod +x "$tmp/fakebin/pytest"
+  : > "$tmp/pyt/tests/test_a.py"; : > "$tmp/jst/test/smoke.test.js"
+  local py_out js_out
+  py_out="$(PATH="$tmp/fakebin:$PATH" bash "$self" detect "$tmp/pyt" 2>&1)"
+  js_out="$(PATH="$tmp/fakebin:$PATH" bash "$self" detect "$tmp/jst" 2>&1)"
+  [ "$(printf '%s' "$py_out" | grep -c 'full   py-test-bare')$(printf '%s' "$js_out" | grep -c 'full   py-test-bare')" = "10" ]
+  chk "bare pytest is offered where python tests exist and not for a test directory of another language" $?
+
+  unique=$((70000 + RANDOM))
   mkdir -p "$tmp/slow"
-  printf '%s\n' '#!/usr/bin/env bash' 'sleep 30' 'exit 0' > "$tmp/slow/selftest.sh"
+  printf '%s\n' '#!/usr/bin/env bash' "sleep $unique &" "sleep $unique" 'exit 0' > "$tmp/slow/selftest.sh"
   chmod +x "$tmp/slow/selftest.sh"
   local slow_out; slow_out="$(ARM_TIMEOUT=2 bash "$self" detect "$tmp/slow" 2>&1)"
   printf '%s' "$slow_out" | grep -q 'NO VERDICT' \
     && ! printf '%s' "$slow_out" | grep -q 'REJECTED (exit' \
     && [ ! -f "$tmp/slow/.claude/gates.json" ]
   chk "a probe that outlives the budget is NO VERDICT, not REJECTED, and arms nothing" $?
+  [ "$(count_procs "$unique")" = 0 ]
+  chk "a timed-out probe leaves none of its processes behind" $?
 
-  mkdir -p "$tmp/ledger/.claude/work"
-  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$tmp/ledger/selftest.sh"
-  chmod +x "$tmp/ledger/selftest.sh"
-  local with_led without_led
-  with_led="$(bash "$self" detect "$tmp/ledger" 2>&1)"
-  without_led="$(bash "$self" detect "$tmp/script" 2>&1)"
-  printf '%s' "$with_led" | grep -q 'ledger-open' \
-    && ! printf '%s' "$without_led" | grep -q 'ledger-open'
-  chk "the ledger gate is armed only where a ledger is in use" $?
+  unique=$((70000 + RANDOM))
+  ARM_TIMEOUT=$unique bash "$self" detect "$tmp/green" >/dev/null 2>&1
+  [ "$(count_procs "$unique")" = 0 ]
+  chk "probing leaves no timer process behind" $?
 
   mkdir -p "$tmp/contract/.claude"
   printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$tmp/contract/selftest.sh"
   chmod +x "$tmp/contract/selftest.sh"
   printf '%s\n' '{"outcomes":[{"name":"o","expect":"e","check":"exit 0","control":"exit 1"}]}' \
     > "$tmp/contract/.claude/acceptance.json"
-  local with_out without_out
-  with_out="$(bash "$self" detect "$tmp/contract" 2>&1)"
-  without_out="$(bash "$self" detect "$tmp/script" 2>&1)"
-  ! printf '%s' "$with_out" | grep -q 'acceptance' \
-    && ! printf '%s' "$without_out" | grep -q 'acceptance'
+  local contract_out; contract_out="$(bash "$self" detect "$tmp/contract" 2>&1)"
+  ! printf '%s' "$contract_out" | grep -q 'acceptance'
   chk "no acceptance gate is armed: verify done runs the contract itself" $?
 
-  mkdir -p "$tmp/mono/web"
-  printf '%s' '{"scripts":{"test":"node -e 0"}}' > "$tmp/mono/web/package.json"
-  local mono_out; mono_out="$(bash "$self" detect "$tmp/mono" 2>/dev/null)"
-  printf '%s' "$mono_out" | grep -qF '{"name":"web-js-test","cmd":"cd web && npm test --silent","surface":["web/**"]}'
-  chk "an app one level down is armed with cd and its own surface" $?
+  pkg "$tmp/mono/web" "$green_pkg"
+  pkg "$tmp/mono/apps/web" "$green_pkg"
+  pkg "$tmp/mono/packages/ui" "$green_pkg"
+  pkg "$tmp/mono/deep/a/b" "$green_pkg"
+  pkg "$tmp/mono/node_modules/x" "$green_pkg"
+  bash "$self" write "$tmp/mono" >/dev/null 2>&1
+  python3 - "$tmp/mono/.claude/gates.json" <<'PY'
+import json, sys
+want = [
+    {"name": "apps-web-js-test", "cmd": "cd apps/web && npm test --silent", "surface": ["apps/web/**"]},
+    {"name": "packages-ui-js-test", "cmd": "cd packages/ui && npm test --silent", "surface": ["packages/ui/**"]},
+    {"name": "web-js-test", "cmd": "cd web && npm test --silent", "surface": ["web/**"]},
+]
+sys.exit(0 if json.load(open(sys.argv[1]))["full"] == want else 1)
+PY
+  chk "apps one and two levels down are armed with cd and their own surface; deeper and node_modules are not" $?
+
+  pkg "$tmp/odd/my app" "$green_pkg"
+  pkg "$tmp/odd/it's" "$green_pkg"
+  bash "$self" write "$tmp/odd" >/dev/null 2>&1
+  python3 - "$tmp/odd/.claude/gates.json" <<'PY'
+import json, sys
+want = [
+    {"name": "it-s-js-test", "cmd": "cd 'it'\\''s' && npm test --silent", "surface": ["it's/**"]},
+    {"name": "my-app-js-test", "cmd": "cd 'my app' && npm test --silent", "surface": ["my app/**"]},
+]
+sys.exit(0 if json.load(open(sys.argv[1]))["full"] == want else 1)
+PY
+  chk "directory names with spaces and quotes are quoted, probed and written as valid JSON" $?
+
+  pkg "$tmp/tiers" '{"scripts":{"lint":"exit 0","typecheck":"sh -c \"exit 0\"","test":"sh -c \"exit 00\""}}'
+  bash "$self" write "$tmp/tiers" >/dev/null 2>&1
+  [ "$(gate_names "$tmp/tiers" fast)|$(gate_names "$tmp/tiers" full)" = "js-lint,js-typecheck|js-lint,js-typecheck,js-test" ]
+  chk "lint and typecheck run at done: they are in full as well as fast" $?
+
+  pkg "$tmp/dup" '{"scripts":{"lint":"exit 0","typecheck":"exit 0","test":"sh -c \"exit 0\""}}'
+  bash "$self" write "$tmp/dup" >/dev/null 2>&1
+  [ "$(gate_names "$tmp/dup" full)" = "js-lint,js-test" ]
+  chk "a command that repeats an earlier gate is not armed twice" $?
+
+  mkrepo "$tmp/policy"; mkdir -p "$tmp/policy/.claude"
+  printf 'Co-Authored-By\n' > "$tmp/policy/.claude/forbidden-trailers"
+  commit_all "$tmp/policy"
+  bash "$self" write "$tmp/policy" >/dev/null 2>&1
+  [ "$?" -ne 0 ] && [ ! -f "$tmp/policy/.claude/gates.json" ]
+  chk "policy gates alone never arm a config" $?
+
+  pkg "$tmp/policy" "$green_pkg"
+  commit_all "$tmp/policy" pkg
+  bash "$self" write "$tmp/policy" >/dev/null 2>&1
+  [ "$(gate_names "$tmp/policy" full)" = "js-test,co-author" ] \
+    && grep -q '"cmd": "python3 .claude/gates/trailer-check.py"' "$tmp/policy/.claude/gates.json"
+  chk "co-author is armed beside a real gate when forbidden-trailers exists" $?
+
+  mkrepo "$tmp/nopolicy"; pkg "$tmp/nopolicy" "$green_pkg"; commit_all "$tmp/nopolicy"
+  bash "$self" write "$tmp/nopolicy" >/dev/null 2>&1
+  [ "$(gate_names "$tmp/nopolicy" full)" = "js-test" ]
+  chk "co-author is not armed without forbidden-trailers" $?
+
+  mkrepo "$tmp/fx"
+  pkg "$tmp/fx" '{"scripts":{"lint":"printf z > cache.bin","test":"printf x > package-lock.json && printf y > tracked.txt"}}'
+  printf 'cache.bin\n' > "$tmp/fx/.gitignore"
+  printf 'orig' > "$tmp/fx/tracked.txt"; printf 'orig' > "$tmp/fx/other.txt"
+  commit_all "$tmp/fx"
+  printf 'mine' > "$tmp/fx/wip.txt"; printf 'edited' > "$tmp/fx/other.txt"
+  local fx_out fx_state=""
+  fx_out="$(bash "$self" write "$tmp/fx" 2>&1)"
+  [ ! -e "$tmp/fx/package-lock.json" ] && fx_state="$fx_state removed"
+  [ "$(cat "$tmp/fx/tracked.txt")" = orig ] && fx_state="$fx_state restored"
+  [ "$(cat "$tmp/fx/wip.txt")" = mine ] && fx_state="$fx_state kept-untracked"
+  [ "$(cat "$tmp/fx/other.txt")" = edited ] && fx_state="$fx_state kept-edit"
+  [ -e "$tmp/fx/cache.bin" ] && fx_state="$fx_state left-ignored"
+  printf '%s' "$fx_out" | grep -q 'created package-lock.json (removed)' && fx_state="$fx_state noted"
+  [ "$(printf '%s' "$fx_out" | grep -c 'left 1 ignored')" = 1 ] && fx_state="$fx_state said-once"
+  [ "$fx_state" = " removed restored kept-untracked kept-edit left-ignored noted said-once" ]
+  chk "a probe's own files are removed and restored, your work and ignored files are untouched" $?
 
   rm -rf "$tmp"
   [ "$ran" -eq "$EXPECTED_CONTROLS" ] || { printf '  FAIL  ran %s controls, expected %s\n' "$ran" "$EXPECTED_CONTROLS"; ok=-1; }
@@ -306,9 +558,8 @@ PY
 }
 
 case "$CMD" in
-  surface)  surface_plan "$TARGET" ;;
   detect)   do_detect ;;
   write)    do_write ;;
   selftest) selftest ;;
-  *) say "usage: arm {detect|write|surface} [dir] | arm selftest"; exit 2 ;;
+  *) say "usage: arm {detect|write} [dir] | arm selftest"; exit 2 ;;
 esac

@@ -337,7 +337,7 @@ def privilege_rules(allow, deny, adjacent):
                 "git commit -m 'use sudo'", "which sudo", "command -v sudo", "type sudo", "man sudo", "echo 'sudo ls' > x.sh",
                 "cat > i.sh <<'EOF'\nsudo apt-get update\nEOF", "printf 'sudo x' | tee s.sh", "echo \"sudo reboot\" | cat", "ls sudo",
                 "pseudo x", "git config --global alias.s sudo", "echo chmod 777 f", "git commit -m 'chmod 777'"):
-        allow(cmd)
+        allow(cmd, "feat", "secrets")
 
 
 def suppression_rules(allow, deny, adjacent):
@@ -370,7 +370,7 @@ def suppression_rules(allow, deny, adjacent):
                 "go build || true", "go vet ./... || true", "make -C tests build || true",
                 "cat > ci.sh <<'EOF'\npytest || true\nEOF", "echo 'pytest || true' >> ci.sh", "git log --grep='|| true'",
                 "npm test 2>&1 | tail -5", "pytest -q --maxfail=1", "cd app; npm test"):
-        allow(cmd)
+        allow(cmd, "feat", "secrets")
 
 
 def snapshot_rules(allow, deny, adjacent):
@@ -382,7 +382,7 @@ def snapshot_rules(allow, deny, adjacent):
     for cmd in ("jest", "jest --ci", "vitest run", "mocha -u tdd", "npm install -u", "npm run build -- -u", "yarn upgrade -u",
                 "git commit -m 'jest -u'", "grep -rn 'updateSnapshot' src", "echo jest -u", "pnpm up -u", "pip install -U x",
                 "git log --grep=--update-snapshots", "echo '--update-snapshots'"):
-        allow(cmd)
+        allow(cmd, "feat", "secrets")
 
 
 def secret_rules(allow, deny, adjacent):
@@ -395,7 +395,8 @@ def secret_rules(allow, deny, adjacent):
                 "while read l; do echo $l; done < .env", "cat < ~/.netrc", "echo $(cat .env)", "bash -c 'cat .env'", "cat .env | grep X",
                 "diff .env .env.example", "jq . ~/.config/gh/hosts.yml", "cat ${HOME}/.npmrc", "tac .env", "nl .env", "cat -n .env",
                 "grep -e KEY .env", "cd app && cat .env", "cat ~/.ssh/id_rsa > /tmp/k"):
-        deny(cmd, K)
+        deny(cmd, K, "secrets")
+        allow(cmd, "feat")
     for cmd in ("cat .env.example", "cat .env.sample", "cat .env.template", "cat ~/.ssh/id_rsa.pub", "ls -la .env", "ls ~/.aws/",
                 "test -f .env", "[ -f .env ]", "touch .env", "echo FOO=1 >> .env", "echo FOO=1 > .env", "cp .env.example .env",
                 "git add .env.example", "git check-ignore .env", "printenv | grep -i key", "env | sort", "printenv HOME",
@@ -405,7 +406,11 @@ def secret_rules(allow, deny, adjacent):
                 "cat ~/.ssh/known_hosts", "cat ~/.gitconfig", "git commit -m 'cat .env'", "echo 'cat .env'", "cat .npmrc",
                 "cat project/.netrc", "head -c 100 ~/.ssh/id_rsa.pub", "rg 'API_KEY' src", "sed -i 's/a/b/' package.json",
                 "awk '{print}' notes.txt", "cat notes.txt | grep .env"):
-        allow(cmd)
+        allow(cmd, "feat", "secrets")
+    allow("cat .env.staging", "feat", "secrets-custom")
+    allow("grep DATABASE_URL .env.staging", "secrets-custom")
+    deny("cat .env.production", K, "secrets-custom")
+    deny("cat .env.staging", K, "secrets")
 
 
 def trailer_rules(allow, deny, adjacent):
@@ -457,7 +462,7 @@ def parser_shapes(allow, deny, adjacent):
                 "cmd 2>&1 | tee log", "echo $'\\x41'", "ls <(echo a)", "diff <(ls a) <(ls b)", "true || false", "! false",
                 "(", ")", "( )", "echo (a)", "if x; then y", "done", "fi", "echo ok &", "echo a;b", "echo $(echo $(echo a))",
                 "echo \"a $(echo \"b\") c\"", "echo '\"'", "echo \"'\"", "git commit -m \"it's fine\"", "printf '%s\\n' \"$x\""):
-        allow(cmd)
+        allow(cmd, "feat", "secrets")
 
 
 def context_rules(allow, deny, adjacent):
@@ -535,7 +540,7 @@ def everyday(allow, deny, adjacent):
                 "export FOO=bar && npm start", "FOO=bar BAZ=qux node app.js", "echo done; exit 0", "true; exit 0", "exit 1",
                 "git status --short | wc -l", "git log --oneline -5 --format='%h %s'", "sqlite3 app.db '.tables'",
                 "sqlite3 app.db 'select count(*) from t'", "mysql -e 'show tables'", "chmod 600 ~/.ssh/id_rsa", "chmod -R 755 dist"):
-        allow(cmd)
+        allow(cmd, "feat", "secrets")
 
 
 def build(allow, deny, adjacent):

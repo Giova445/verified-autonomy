@@ -60,7 +60,7 @@ blocks: pushes and merges into protected branches (`.claude/protected-branches`,
 and `master`); approving a pull request; recursive force deletes of `/`, `~` or an unset
 variable; `git reset --hard`; `git clean -f`; destructive SQL; `sudo`; `chmod 777`;
 `terraform destroy`; `|| true` or `--exit-zero` on a test or lint command; snapshot
-re-recording; and reading secret files such as `~/.aws/credentials`.
+re-recording; and, only in repos that opt in with `.claude/protected-files`, reading secret files.
 
 ## What it does not protect against
 

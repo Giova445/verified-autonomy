@@ -1,7 +1,7 @@
-# CLAUDE.md — verified-autonomy
+# CLAUDE.md: verified-autonomy
 
-A Claude Code plugin that makes "done" something the harness proves: a Stop hook refuses the
-turn while gates are red, and a PreToolUse hook blocks irreversible commands.
+A Claude Code plugin. A Stop hook refuses to end a turn while a changed repo fails its gates
+or its product contract. A PreToolUse hook blocks a short list of irreversible commands.
 
 ## Verify before claiming done
 
@@ -9,34 +9,32 @@ turn while gates are red, and a PreToolUse hook blocks irreversible commands.
 bash selftest.sh
 ```
 
-Exit 0 and `SELF-TEST PASSED`. Needs `python3`, `git`, `node`, `pytest`, and Playwright
+It must end `SELF-TEST PASSED`. It needs `python3`, `git`, `node`, `pytest` and Playwright
 (`npm install` in this repo). A suite that cannot run reports `NOTRUN`, never a pass.
 
 ## Layout
 
 ```
-hooks/            stop-gate.sh, deny-dangerous.sh (+ inert-mask.py, push-targets.py),
-                  scan-diff-cheats.sh, session-start.sh, hooks.json
-bin/              verify (the gate runner), arm, arm-surface.py, scope,
-                  ledger, escalate, worktree-guard,
-                  test-delta, holdout, mutate-changed, ambiguity, ratchet, ruff-changed
-benchmark/gates/  acceptance.py + drive.mjs (deliverable contract), pin-check.py,
-                  trailer-check.py, identity-preflight.py
-kit/              install.sh copies from the repo root; templates and adapters
-skills/, agents/  plugin skills and the verifier agent
-docs/             architecture brief and gate ladder
+hooks/            Stop, PreToolUse and SessionStart hooks, and hooks.json
+bin/              verify (the gate runner), arm (arms gates from commands that pass),
+                  scope (gate surfaces), discover (maps the product)
+benchmark/gates/  acceptance.py and drive.mjs: the product contract and its browser driver
+kit/              install.sh copies the runner and drivers into a repo
+skills/           gate and setup, the only two skills
+agents/           the verifier agent
+docs/             how-it-works.md
 ```
-
-`bin/verify` is a plain CLI so the Stop hook, Codex and CI all run the same command.
 
 ## Rules
 
-- No code comments. A single line only when the why is genuinely non-obvious.
-- A gate gets 2–3 controls: one case it must catch, one it must allow, one load-bearing edge.
-- Expected sets are declared literally, never derived from the thing under test.
-- Unreadable or missing config is never a pass.
-- Protected branches live in `.claude/protected-branches` (default `main`, `master`).
-- No commit carries a `Co-Authored-By` trailer, here or in any project the kit installs into.
-- Project-agnostic, because this is headed for open source: no project, company, customer or
-  domain names, no measurements from a specific codebase, no absolute machine paths. Examples
-  use neutral domains (search, invoices, sign-in).
+- Delete more than you add. A new rule, check or line of docs needs a reason it earns its cost.
+- No code comments. One short line only when the why is not obvious.
+- Every shipped claim (README, skill text, hook messages) must be true against the code.
+- A check declares its expected values literally, never derived from the code under test.
+- Every rule gets a control that must fail. Prove it by sabotage: break the code, watch it fail.
+- A missing or unreadable config or helper is never a pass. A harness that could not run says
+  CANNOT RUN, never FAILS or holds.
+- Test Stop-hook behavior as sequences of consecutive stops, not single calls.
+- Project-agnostic: no project, company or customer names, no measurements from one codebase,
+  no absolute machine paths. Examples use neutral domains.
+- No `Co-Authored-By` trailer on any commit in this repo.

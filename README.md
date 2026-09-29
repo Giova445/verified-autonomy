@@ -1,77 +1,13 @@
 # Verified Autonomy
 
-**A complete architecture for autonomous coding agents** — 14 workflow skills, mechanical
-enforcement, and an adjudication layer. The agent cannot claim completion while the code's
-gates are red or the product does not do what was asked: a `Stop` hook exits 2 and refuses
-the turn.
+A Claude Code plugin that makes "done" something the harness proves, not something the agent
+claims. When an agent tries to end a turn in a repo it changed, a `Stop` hook runs the repo's
+engineering gates and its product contract, and refuses while either is red. The refusal names
+each open expectation in the user's words. A turn that only read code, or changed nothing, is
+not judged: no gate runs and no app starts. What it does and does not protect against is in
+[docs/how-it-works.md](docs/how-it-works.md).
 
-Skills libraries ask the model to be disciplined. This one asks *and* removes the option
-where removing it is possible.
-
----
-
-## Why
-
-An agent that writes code and also decides whether that code is finished is not a reliable
-judge of it. Across frontier models in 2026, **45–48% of failing agent trajectories reported
-success — falling to 3% when an independent verifier was present** (arXiv:2606.09863).
-
-That delta is the argument. Not that agents scheme, but that an unverified self-report is
-wrong about half the time when it matters. No LLM-judge configuration tested detected it
-above AUROC 0.65, while a cheap TF-IDF detector reached 0.83–0.95 — deterministic checks
-beat model judgment on exactly this question.
-
-Two findings sharpen it. Reasoning does not help: the *highest* false-success rate measured
-(79%) came from a reasoning model whose traces "rationalize completion rather than verify
-environment state." And self-verification performs *below* generation accuracy — 41.9% vs
-54.7% — with the gap widening as capability grows (ICML 2026).
-
-### What this is not
-
-We ran 51 controlled trials attempting to elicit active gate-cheating — a test contradicting
-its spec, an editable gate config, a 50%-flaky race with a one-line `@flaky` escape — and
-observed **zero instances**. That is consistent with the published 0.7–4% baseline for
-unambiguous, inference-time, well-scaffolded conditions; reward hacking is primarily a
-*training-time* artifact (0.7–4% pre-RL → 70%+ after ~50 RL steps against the grader).
-
-**So these gates defend against an agent that sincerely believes it is done, not against an
-adversary.** Anti-cheating enforcement is not a claim this project can support. Independent
-verification is. See [docs/01-evidence-base.md](docs/01-evidence-base.md) §1.4–1.7 for the
-null result, its statistical bounds (95% CI upper bound 5.6% pooled, 26–35% per condition),
-and an adversarial review of its defects.
-
-## The three layers
-
-| Layer | Mechanism | Can the agent bypass it? |
-|---|---|---|
-| 1 — Persuasion | `CLAUDE.md`, `AGENTS.md`, skills | Yes, trivially |
-| 2 — **Enforcement** | **Hooks, permissions, sandbox** | **No — client-side, pre-model** |
-| 3 — Adjudication | CI, branch protection, review | No — outside the trust boundary |
-
-Anthropic's own docs draw the line: *"Settings rules are enforced by the client regardless
-of what Claude decides to do. CLAUDE.md instructions shape Claude's behavior but are not a
-hard enforcement layer."*
-
-This plugin is layer 2.
-
-## What "done" means
-
-`./bin/verify done` exits 0. It has two halves, and both must pass:
-
-| Half | Source | Passes when |
-|---|---|---|
-| Engineering | `.claude/gates.json` | every gate command exits 0 |
-| Product | `.claude/acceptance.json` | every outcome holds against the running product |
-
-Green engineering gates say the code is consistent. They do not say the product does what
-was asked, so a project with no product contract is never done. When `done` refuses, it
-names each open expectation in the user's words, and the agent continues with those or says
-what blocks one. After three refusals in a row it asks for a blocked report, then lets the
-turn end so a person can review it.
-
-## Setup
-
-### 1. Install the plugin, once per machine
+## Install
 
 In Claude Code:
 
@@ -80,208 +16,106 @@ In Claude Code:
 /plugin install verified-autonomy@verified-autonomy
 ```
 
-Restart Claude Code. The plugin is safe to install globally. In a repo it has not armed, no
-gate runs and nothing blocks; the session only learns that the `setup` skill exists.
-
-### 2. Arm a repo: say one sentence
-
-In Claude Code, inside the repo:
+Restart Claude Code. In a repo that is not armed no gate runs, though the deny rules still
+apply. Then, in the repo, say:
 
 > set up verified-autonomy
 
-The `setup` skill does the rest on a branch, with no manual steps:
+The `setup` skill works on a branch. It arms only lint, typecheck and test commands that pass
+today, writes `.claude/acceptance.json` (the journeys a user would call the product), proves
+each against the running product, and commits. It never merges.
 
-| Step | What happens |
+## What the agent sees
+
+The `Stop` hook runs `bin/verify done`, and the agent can run `./bin/verify done` itself. A
+failed gate prints its command, exit code and last lines. Each product outcome gets one verdict:
+
+| Verdict | Meaning |
 |---|---|
-| Engineering gates | installs the runner and hooks, runs every lint, typecheck and test command it finds at the root and one directory down, and keeps only the ones that pass today. A subdirectory's gates get a `surface`, so they run only when the diff touches that app |
-| Map the product | `bin/discover` lists how to serve each app (command, port, readiness probe), its pages, endpoints, CLIs, existing e2e specs and docs. The agent also reads the README, specs, issues and recent PRs |
-| Write the contract | `.claude/acceptance.json`: the three to eight journeys a user would call the product, in the user's words, each checked against the running product and paired with a control that must fail |
-| Prove it | `./bin/verify product` starts the app, waits for it, runs every check in a real browser or over HTTP, saves a screenshot per outcome, and stops the app |
-| Commit | runs the self-test and commits on `chore/arm-verified-autonomy`, with no co-author trailer. It pushes and opens a PR where it may; it never merges |
+| `holds` | the check passed, and its control, if any, failed |
+| `FAILS` | the check ran and the product did not do it |
+| `NOT PROVEN` | the control passed too, so the check cannot tell broken from working |
+| `CANNOT RUN` | the check exited 75, or the app would not start |
+| `BLOCKED` | an outcome declares a credential in `needs` and it is not set |
+| `NO VERDICT` | the check ran out of time |
+| `WRONG BUILD` | the environment runs another commit |
+| `REFUSED` | the outcome lacks a name, an `expect` or a `check` |
 
-It stops to ask only when a credential is needed and the repo has none, when more than one
-environment could be authoritative, or when an outcome fails because the product itself is
-broken.
+After three refusals in a row the agent is asked for a blocked report, then the stop is allowed.
 
-The same happens without the sentence: when `done` refuses because no contract exists, the
-refusal points the agent at `setup`.
+## What it writes
 
-### What it writes
-
-`.claude/gates.json`, every entry already passing once in the repo:
-
-```json
-{ "full": [
-  { "name": "unit",         "cmd": "npm test --silent" },
-  { "name": "api-js-test",  "cmd": "cd api && pytest -q", "surface": ["api/**"] }
-] }
-```
+`.claude/gates.json` lists the engineering gates, each already passing once in the repo. A gate
+with a `surface` (a list of globs) runs only when the diff touches it.
 
 `.claude/acceptance.json`, the product contract:
 
 ```json
 {
   "environments": {
-    "local": {
-      "start": "cd web && npm run dev",
-      "ready": "curl -fsS -o /dev/null http://localhost:3000/"
-    }
+    "local": { "start": "npm run dev -- --port $PORT", "ready": "/" }
   },
   "outcomes": [
     {
       "name": "search finds a customer",
       "expect": "Typing a customer's name lists that customer and no one else",
       "env": "local",
-      "check": "node .claude/gates/drive.mjs http://localhost:3000/customers .claude/checks/search.json",
-      "control": "node .claude/gates/drive.mjs http://localhost:3000/customers .claude/checks/search-wrong-name.json"
+      "check": "node .claude/gates/drive.mjs $BASE_URL/customers .claude/checks/search.json",
+      "control": "node .claude/gates/drive.mjs $BASE_URL/customers .claude/checks/search-wrong-name.json"
     }
   ]
 }
 ```
 
-- **`start` / `ready`**: the harness runs `start`, polls `ready` until it passes (default
-  180s, `ACCEPT_READY_TIMEOUT`), runs the outcomes, then stops the app. Its output goes to
-  `.claude/evidence/server-<env>.log`. If `ready` already passes before `start`, something
-  else is serving there and would be checked instead of this build, so the outcomes read
-  CANNOT RUN. Declare `"reuse": true` only when that process is this build.
-- **`check`** exits 0 when the outcome holds, 1 when it does not, and 2 when it cannot run
-  at all. Exit 2 reads as CANNOT RUN, never as a failure of the code.
-- **`control`** is a variant that must fail, proving the check can tell a broken product
-  from a working one. It is optional, and outcomes without one are reported as such.
-- **`drive.mjs`** drives a real browser from a JSON list of steps: `fill`, `click`,
-  `visible`, `hidden`, `enabled`, `disabled`, `text`, `count`, `consoleClean`,
-  `noOverflow`, `focusable`. It finds Playwright at the root or one directory down (a monorepo's
-  web app), or at `PLAYWRIGHT_PATH`. A page it cannot reach because the app is not running
-  exits 2 (CANNOT RUN); a missing local file fails, because the artifact itself is missing.
-- **Remote environments** such as staging add `vars` for the base URL and a `provenance`
-  probe that prints the deployed commit. A deployment running a different commit reads as
-  WRONG BUILD, not as a pass.
+- `start`, `ready`: the harness starts the app on a free `$PORT`, waits for `ready`, runs the
+  outcomes, and stops the app. Its log is `.claude/evidence/server-<env>.log`.
+- `check` exits 0 when the outcome holds and 75 when it cannot run. Any other exit is a failure.
+- `control` (optional) is a variant that must fail, proving the check can tell broken from
+  working.
+- `needs` lists environment variables an outcome or environment requires.
+- `drive.mjs` drives a real browser from a JSON list of steps and saves a screenshot to
+  `.claude/evidence/shots/`.
+- A remote environment can declare a `provenance` probe that prints the deployed commit.
 
-### Optional settings
+## Optional settings
 
-| File or variable | Effect |
+| Setting | Effect |
 |---|---|
 | `.claude/protected-branches` | branches agents may not push or merge into (default `main`, `master`) |
-| `VERIFIED_AUTONOMY_UNATTENDED=1` | adds guidance against stopping early, for runs nobody is watching |
 | `GATE_MAX_BLOCKS` | refusals before the blocked report (default 3) |
-| `kit/ci/verify.yml` | copy to `.github/workflows/` so CI runs the same `./bin/verify done` |
-
-### By hand, if you want to
-
-```bash
-bash "$(ls -d ~/.claude/plugins/cache/verified-autonomy/verified-autonomy/*/ | sort -V | tail -1)kit/install.sh" .
-python3 bin/discover .          # the product map
-./bin/verify product            # the contract alone
-bash .claude/hooks/selftest.sh  # prove the hooks fire
-```
-
-## The loop an agent runs
-
-```bash
-./bin/verify preflight        # graph health, open assumptions
-./bin/verify blast <symbol>   # who calls this, before changing it
-./bin/verify fast             # after each edit
-./bin/verify product          # the product half alone
-./bin/verify done             # exit 0 or it is not done
-```
+| `ACCEPT_TIMEOUT`, `ACCEPT_READY_TIMEOUT` | seconds allowed for one check, and for the app to become ready |
+| `VERIFY_CACHE=0` | judge even when nothing changed since the last verdict |
+| `VERIFY_SCOPE=0` | run gates whose surface the diff does not touch |
+| `PLAYWRIGHT_PATH` | where `drive.mjs` finds Playwright when it is not in the repo |
+| `VERIFIED_AUTONOMY_UNATTENDED=1` | adds guidance against ending a turn early |
 
 ## Updating
 
 ```bash
-claude plugin marketplace update verified-autonomy
-claude plugin update verified-autonomy@verified-autonomy
+for d in ~/.claude*/; do
+  [ -d "$d/plugins" ] || continue
+  CLAUDE_CONFIG_DIR="$d" claude plugin marketplace update verified-autonomy
+  CLAUDE_CONFIG_DIR="$d" claude plugin update verified-autonomy@verified-autonomy
+done
 ```
 
-Restart Claude Code, then re-run step 2 in each project to refresh its copies. Existing
-`gates.json` and `AGENTS.md` are left alone.
+Restart Claude Code. To refresh a repo's copy of the runner, say "set up verified-autonomy"
+again. It keeps every existing gate and outcome.
 
 ## Troubleshooting
 
 | You see | Meaning | Do |
 |---|---|---|
-| `no product expectations are declared` | the project has no `.claude/acceptance.json` | say "set up verified-autonomy", or run the `setup` skill |
-| `NOT PROVEN` on an outcome | its control passed too, so the check cannot tell broken from working | make the check stricter |
-| `CANNOT RUN` | the check exited 2: environment, not code | read `.claude/evidence/server-<env>.log`, fix `start`/`ready`, or provide the credential it names |
+| `no product expectations are declared` | the repo has no `.claude/acceptance.json` | say "set up verified-autonomy" |
+| `REFUSING TO CERTIFY` | `.claude/gates.json` is unreadable, empty, or holds a placeholder command | fix the file |
+| `CANNOT RUN` | the check exited 75 or the app never became ready | read `.claude/evidence/server-<env>.log`; fix `start` and `ready` |
+| `BLOCKED` | a variable named in `needs` is not set | set it |
 | `WRONG BUILD` | the environment runs a different commit | deploy this commit, then re-run |
-| `CIRCUIT BREAKER` | three refusals in a row, each after a change | the agent writes a blocked report; the next stop is allowed |
-| `unchanged since the last check (refused)` | nothing changed since a refusal was reported | allowed at once, without re-running anything; the gates run again when the repo changes |
-| `unchanged since the last check (green)` | nothing changed since the gates last passed | allowed at once, reusing that verdict; `VERIFY_CACHE=0` forces a full run |
-| `this session has not changed this repo` | a turn that only read code, answered a question, or worked elsewhere | allowed at once: there is nothing to judge |
-| a hook blocks a routine command | a deny rule matched | the message names the rule; push to a feature branch, not a protected one |
+| asked for a blocked report | three refusals in a row | the agent writes it; the next stop is allowed |
+| a stop is allowed and no gate ran | nothing changed since the turn began or since the last verdict | none; gates run again when the repo changes |
+| a routine command is blocked | a deny rule matched | the message names the rule; push a feature branch, not a protected one |
 
-## What the hooks do
-
-| Hook | Behavior |
-|---|---|
-| `Stop` / `SubagentStop` | Runs `bin/verify done`. **Exit 2 while the engineering or the product half is red**; the reason returns to the agent, naming each open expectation. It only judges turns that changed the repo: a stop on a repo this session has not changed, or one unchanged since the last check, returns at once without running a gate or booting the app, so reading code costs nothing and a refusal is never repeated. "Unchanged" compares HEAD, the diff, untracked contents, the gate config, the contract and the runner itself, and ignores agent-tooling output such as `.claude-flow/` and `.agents/`. Time limit 15 minutes. |
-| `PreToolUse` | Blocks pushes and merges into protected branches, `reset --hard`, `clean -f`, destructive SQL, self-approval, credential reads, exit-code suppression on a test command, and commits carrying a `Co-Authored-By` trailer. Force-pushing your own branch is allowed. |
-| `SessionStart` | Injects the contract in armed repos and records the repo's state for this session; in an unarmed git repo, one line pointing at `setup`. |
-
-Plus: a cheat scanner that diffs for the documented ways agents fake green (skipped tests,
-deleted assertions, `|| true`, retry-to-green, snapshot re-recording), a never-worse-than-
-baseline ratchet for turning gates on against a codebase that fails them today, and a
-`co-author` gate that refuses unpushed commits carrying a trailer.
-
-## Skills, and what backs each one
-
-A skill is a request; a mechanism is a guarantee.
-
-| Skill | Mechanically backed by |
-|---|---|
-| `setup` | arms only commands that pass; the contract must reach `holds` with failing controls before it is committed |
-| `brainstorming` | open assumptions block `verify preflight`; criteria become contract outcomes |
-| `writing-plans` | judgment |
-| `using-worktrees` | pushes to protected branches are blocked |
-| `test-driven-development` | the product outcome fails first; cheat scanner on the tests |
-| `executing-plans` | progress ledger on disk, survives compaction |
-| `orchestrating` | ledger claims file scope before a worker writes |
-| `systematic-debugging` | flaky detection against a clean base commit |
-| `dispatching-agents` | judgment |
-| `gate` | **`Stop` hook exit 2 while either half is red** |
-| `blast` | graph query; fails loudly when no index exists |
-| `requesting-review` | the reviewer cannot clear a red gate; compares screenshots with expectations |
-| `finishing-a-branch` | merges into protected branches are blocked; CI re-runs every gate |
-| `pressure-testing` | deterministic scoring, not an LLM judge |
-| `verified-autonomy` | bootstrap, injected only in repos that opted in |
-
-Where the second column says "judgment", that is deliberate: those are decisions a machine
-cannot make.
-
-## Cross-harness
-
-Enforcement lives in `bin/verify`, a plain CLI — **not** in a hook. Claude Code's `Stop`
-hook, Codex via `AGENTS.md`, and CI all call the same command, so "done" cannot mean
-different things in different places. Codex has no blocking hook, so CI is its real gate.
-
-## Documentation
-
-Sixteen documents in [`docs/`](docs/INDEX.md) — evidence base, architecture, definition of
-done, gate ladder, test scenario catalog, guardrails, autonomy levels, adoption playbook,
-graph engineering, tools and rules, operationalization, PR lifecycle, operator guide, a
-comparison with [obra/superpowers](https://github.com/obra/superpowers), a premise audit and
-a verification checklist.
-
-## Relationship to Superpowers
-
-They are not competitors. Superpowers is layer 1 executed about as well as layer 1 can be —
-14 pressure-tested skills covering brainstorming, planning, TDD discipline, and debugging
-method. It ships exactly one hook (`SessionStart`), which cannot block.
-
-Their own guidance draws the same boundary this plugin acts on:
-
-> Mechanical constraints (if it's enforceable with regex/validation, automate it — save
-> documentation for judgment calls)
-
-Run both. Superpowers makes the agent want to do the right thing; this makes it unable to
-do otherwise.
-
-## Honest limits
-
-- Green gates ≠ correct code. Roughly half of test-passing agent patches were rejected by
-  real maintainers (METR, Mar 2026). Human review still carries design quality.
-- Gates only catch cheats they enumerate.
-- Detectors decay across model generations — recalibrate.
-- This costs more per task in tokens and CI minutes.
+Superpowers teaches an agent good process. This plugin only checks the result. Run both.
 
 ## License
 

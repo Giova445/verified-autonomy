@@ -8,7 +8,7 @@ Then check the diff, in order:
 1. **A check that cannot fail.** Every new or changed rule has a control it must catch. If you
    can revert the fix and the suite stays green, the control tests nothing.
 2. **A silent pass.** Missing, unreadable or empty config, an absent helper, a probe that times
-   out: each must refuse or say CANNOT RUN, never report green.
+   out: each must refuse or report CANNOT RUN or NO VERDICT, never green.
 3. **An expectation read from the subject.** A check whose expected values come from the code
    it checks goes green when that code shrinks.
 4. **A deny rule that blocks routine work.** Test a new pattern against the ordinary form of the

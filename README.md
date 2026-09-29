@@ -27,8 +27,8 @@ each against the running product, and commits. It never merges.
 
 ## What the agent sees
 
-The `Stop` hook runs `./bin/verify done`. A failed gate prints its command, exit code and last
-lines. Each product outcome gets one verdict:
+The `Stop` hook runs `bin/verify done`, and the agent can run `./bin/verify done` itself. A
+failed gate prints its command, exit code and last lines. Each product outcome gets one verdict:
 
 | Verdict | Meaning |
 |---|---|
@@ -113,7 +113,7 @@ again. It keeps every existing gate and outcome.
 | `WRONG BUILD` | the environment runs a different commit | deploy this commit, then re-run |
 | asked for a blocked report | three refusals in a row | the agent writes it; the next stop is allowed |
 | a stop is allowed and no gate ran | nothing changed since the turn began or since the last verdict | none; gates run again when the repo changes |
-| `BLOCKED by deny-dangerous.sh` | a deny rule matched | the message names the rule; push a feature branch, not a protected one |
+| a routine command is blocked | a deny rule matched | the message names the rule; push a feature branch, not a protected one |
 
 Superpowers teaches an agent good process. This plugin only checks the result. Run both.
 

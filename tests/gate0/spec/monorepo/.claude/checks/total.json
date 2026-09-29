@@ -1,0 +1,14 @@
+[
+  {
+    "count": {
+      "selector": "#orders li",
+      "equals": 5
+    }
+  },
+  {
+    "text": {
+      "selector": "#orders ~ #total",
+      "equals": "Total: $880"
+    }
+  }
+]

@@ -1,0 +1,47 @@
+[
+  {
+    "text": {
+      "selector": "role=heading",
+      "equals": "Orders"
+    }
+  },
+  {
+    "visible": "role=searchbox[name=\"Search by customer\"]"
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 5
+    }
+  },
+  {
+    "text": {
+      "selector": "main li:nth-child(1)",
+      "equals": "Alice Nguyen Standing desk $480"
+    }
+  },
+  {
+    "text": {
+      "selector": "main li:nth-child(2)",
+      "equals": "Bob Ferreira Monitor arm $95"
+    }
+  },
+  {
+    "text": {
+      "selector": "main li:nth-child(3)",
+      "equals": "Alice Nguyen Desk mat $35"
+    }
+  },
+  {
+    "text": {
+      "selector": "main li:nth-child(4)",
+      "equals": "Chidi Okafor Webcam $120"
+    }
+  },
+  {
+    "text": {
+      "selector": "main li:nth-child(5)",
+      "equals": "Dana Whitfield Headset $150"
+    }
+  }
+]

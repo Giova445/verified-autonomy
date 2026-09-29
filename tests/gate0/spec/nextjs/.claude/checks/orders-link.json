@@ -1,0 +1,16 @@
+[
+  {
+    "click": "role=link[name=\"Orders\"]"
+  },
+  {
+    "url": {
+      "equals": "/orders"
+    }
+  },
+  {
+    "text": {
+      "selector": "role=heading",
+      "equals": "Orders"
+    }
+  }
+]

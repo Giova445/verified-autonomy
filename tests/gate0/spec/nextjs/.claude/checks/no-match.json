@@ -1,0 +1,38 @@
+[
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": "zed"
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 0
+    }
+  },
+  {
+    "text": {
+      "selector": "text=No orders match",
+      "equals": "No orders match zed"
+    }
+  },
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": "Xavier"
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 0
+    }
+  },
+  {
+    "text": {
+      "selector": "text=No orders match",
+      "equals": "No orders match Xavier"
+    }
+  }
+]

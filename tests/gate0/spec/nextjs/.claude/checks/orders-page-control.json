@@ -1,0 +1,24 @@
+[
+  {
+    "text": {
+      "selector": "role=heading",
+      "equals": "Orders"
+    }
+  },
+  {
+    "visible": "role=searchbox[name=\"Search by customer\"]"
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 5
+    }
+  },
+  {
+    "text": {
+      "selector": "main li:nth-child(1)",
+      "equals": "Alice Nguyen Standing desk 480"
+    },
+    "timeout": 1000
+  }
+]

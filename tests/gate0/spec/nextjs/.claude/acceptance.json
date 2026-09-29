@@ -1,0 +1,74 @@
+{
+  "environments": {
+    "local": {
+      "build": "CIRCLE_NODE_TOTAL=1 npm run build",
+      "start": "npm run start -- --port $PORT",
+      "ready": "/"
+    }
+  },
+  "outcomes": [
+    {
+      "name": "home names the shop admin and offers Orders",
+      "env": "local",
+      "expect": "Ticket criterion 1: The home page (`/`) shows the heading \"Shop admin\" and a link \"Orders\"",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/home.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/home-control.json"
+    },
+    {
+      "name": "the Orders link opens the orders page",
+      "env": "local",
+      "expect": "Ticket criterion 1: a link \"Orders\" that opens `/orders`",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/orders-link.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/orders-link-control.json"
+    },
+    {
+      "name": "orders page lists every order in id order",
+      "env": "local",
+      "expect": "Ticket criterion 2: `/orders` shows the heading \"Orders\", a search box labelled \"Search by customer\", and one row per order in the id order above. A row shows customer, item and total with a dollar sign, e.g. \"Alice Nguyen Standing desk $480\".",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/orders-page.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/orders-page-control.json"
+    },
+    {
+      "name": "orders page shows Loading orders and a disabled box while loading, then neither",
+      "env": "local",
+      "expect": "Ticket criterion 3: While orders are loading, the page shows \"Loading orders\" and the search box is disabled. When loading finishes the message is gone and the box can be typed in.",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/loading.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/loading-control.json"
+    },
+    {
+      "name": "typing part of a customer name narrows the list",
+      "env": "local",
+      "expect": "Ticket criterion 4: Typing narrows the list to orders whose customer name contains the text.",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/search-part-of-name.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/search-part-of-name-control.json"
+    },
+    {
+      "name": "search ignores case and surrounding spaces",
+      "env": "local",
+      "expect": "Ticket criterion 4: Case and surrounding spaces do not matter: \"ali\" and \" ALICE \" both leave only Alice Nguyen's two orders.",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/search-case-and-spaces.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/search-case-and-spaces-control.json"
+    },
+    {
+      "name": "search looks at customer names only",
+      "env": "local",
+      "expect": "Ticket criterion 5: Search looks at customer names only: \"desk\", an item word, shows no orders.",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/search-customer-only.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/search-customer-only-control.json"
+    },
+    {
+      "name": "no match shows No orders match and what was typed",
+      "env": "local",
+      "expect": "Ticket criterion 6: When nothing matches, no rows are shown and the page says \"No orders match\" followed by what was typed, e.g. \"No orders match zed\".",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/no-match.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/no-match-control.json"
+    },
+    {
+      "name": "clearing the box brings back all five orders and hides the message",
+      "env": "local",
+      "expect": "Ticket criterion 7: Clearing the box brings back all five orders and hides that message.",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/clear.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/orders\" .claude/checks/clear-control.json"
+    }
+  ]
+}

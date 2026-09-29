@@ -1,0 +1,59 @@
+[
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": "desk"
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 0
+    }
+  },
+  {
+    "goto": "/orders"
+  },
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": "Webcam"
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 0
+    }
+  },
+  {
+    "goto": "/orders"
+  },
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": "480"
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 0
+    }
+  },
+  {
+    "goto": "/orders"
+  },
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": "1004"
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 0
+    }
+  }
+]

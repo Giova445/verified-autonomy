@@ -1,0 +1,44 @@
+[
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": "zed"
+    }
+  },
+  {
+    "visible": "text=No orders match zed"
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 0
+    }
+  },
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": ""
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 5
+    }
+  },
+  {
+    "text": {
+      "selector": "main li:nth-child(1)",
+      "equals": "Alice Nguyen Standing desk $480"
+    }
+  },
+  {
+    "text": {
+      "selector": "main li:nth-child(5)",
+      "equals": "Dana Whitfield Headset $150"
+    }
+  },
+  {
+    "hidden": "text=No orders match"
+  }
+]

@@ -1,0 +1,17 @@
+[
+  {
+    "click": "role=link[name=\"Orders\"]"
+  },
+  {
+    "url": {
+      "equals": "/customers"
+    },
+    "timeout": 1000
+  },
+  {
+    "text": {
+      "selector": "role=heading",
+      "equals": "Orders"
+    }
+  }
+]

@@ -1,0 +1,35 @@
+[
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": "qzx"
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 2
+    },
+    "timeout": 1000
+  },
+  {
+    "text": {
+      "selector": "main li:nth-child(1)",
+      "equals": "Alice Nguyen Standing desk $480"
+    },
+    "timeout": 1000
+  },
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": "wvk"
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 1
+    },
+    "timeout": 1000
+  }
+]

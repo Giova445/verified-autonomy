@@ -1,0 +1,15 @@
+[
+  {
+    "text": {
+      "selector": "role=heading",
+      "equals": "Dashboard"
+    },
+    "timeout": 1000
+  },
+  {
+    "text": {
+      "selector": "role=link[name=\"Orders\"]",
+      "equals": "Orders"
+    }
+  }
+]

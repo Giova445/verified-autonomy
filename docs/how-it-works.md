@@ -100,8 +100,10 @@ screenshots to `.claude/evidence/shots/`.
 `exit_code`, `verdict` (`green`, `red`, `config`, `noverdict`, `product` or `empty`), `gates`
 (`name`, `exit_code`, `duration_ms`, `skipped` for each; `null` where a gate did not run or gave
 no answer) and `product` (`status`, and each outcome's `name` and `verdict` when the product
-check ran). Every value is measured by the run. A run killed by a signal writes no line, and a
-log that cannot be written warns and does not change the run.
+check ran; a `CANNOT RUN` outcome also carries its `reason`, `unspecified` when the harness named
+none, and its `status` when the step exited with one; no other verdict carries either). Every
+value is measured by the run: an older `product.json` is never read into it. A run killed by a
+signal writes no line, and a log that cannot be written warns and does not change the run.
 
 ## Limits
 

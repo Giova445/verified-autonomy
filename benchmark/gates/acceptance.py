@@ -14,6 +14,7 @@ CONTRACT = ".claude/acceptance.json"
 EVIDENCE = os.path.join(".claude", "evidence")
 CANNOT_RUN, NOT_FOUND = 75, (126, 127)
 FULL_SHA, HEX_RUN = re.compile(r"\b[0-9a-f]{40}\b"), re.compile(r"\b[0-9a-f]{7,39}\b")
+REASONS = ("build_failed", "start_failed", "environment", "check_cannot_run", "contract_invalid", "harness_error")
 SERVERS, LIVE = [], set()
 limit = lambda name, default: float(os.environ.get(name) or default)
 clean = lambda text: re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")
@@ -48,6 +49,19 @@ def tail(text, n=3):
 
 def res(verdict, detail, **more):
     return dict(more, verdict=verdict, detail=detail)
+
+def cannot(reason, detail, **more):
+    return res("CANNOT RUN", detail, reason=reason, **more)
+
+def unable(reason, detail, **more):
+    return False, detail, dict(more, reason=reason)
+
+def shown(cmd, width=120):
+    flat = " ".join(cmd.split())
+    return flat if len(flat) <= width else flat[:width - 3] + "..."
+
+def signal_of(rc):
+    return -rc if rc < 0 else rc - 128 if rc > 128 else None
 
 def load(root):
     path = os.path.join(root, CONTRACT)
@@ -180,9 +194,9 @@ def build(env, root, name, extra, values, left):
     with open(os.path.join(root, EVIDENCE, "build-%s.log" % clean(name)), "w", encoding="utf-8") as log:
         log.write(out)
     if code is None:
-        return False, "`build` gave no answer in %ds" % wait
+        return unable("build_failed", "`build` (`%s`) gave no answer in %ds" % (shown(cmd), wait), command=cmd, status=None, timeout=int(wait))
     if code != 0:
-        return False, "`build` exited %d%s" % (code, tail(out))
+        return unable("build_failed", "`build` (`%s`) exited %d%s" % (shown(cmd), code, tail(out)), command=cmd, status=code)
     if key:
         with open(stamp, "w") as fh:
             fh.write(key + "\n")
@@ -192,21 +206,21 @@ def boot(env, root, name, extra, left, procs):
     if not env.get("start"):
         return True, ""
     if not env.get("ready"):
-        return False, "declares `start` with no `ready` probe, so nothing says when it is up"
+        return unable("contract_invalid", "declares `start` with no `ready` probe, so nothing says when it is up")
     values = dict(env.get("vars") or {}, port=extra["PORT"], base_url=extra["BASE_URL"])
     start, ready = substitute(env["start"], values), substitute(env["ready"], values)
     if is_ready(ready, root, extra):
         if env.get("reuse"):
             return True, "already up, reused as declared"
-        return False, ("`ready` passes before `start` ran, so something else is already serving there and would "
-                       "be checked instead of this build. Stop it, or declare \"reuse\": true if that is this build")
+        return unable("environment", "`ready` passes before `start` ran, so something else is already serving there and would "
+                      "be checked instead of this build. Stop it, or declare \"reuse\": true if that is this build")
     built = build(env, root, name, extra, values, left)
     if not built[0]:
         return built
     if not env.get("reuse") and answering(extra["PORT"]):
-        return False, ("something is accepting connections on port %s just before `start`, so `start` could not bind it and "
-                       "whatever answers would be checked instead of this build. Stop it, or declare \"reuse\": true "
-                       "if that is this build" % extra["PORT"])
+        return unable("environment", "something is accepting connections on port %s just before `start`, so `start` could not bind it and "
+                      "whatever answers would be checked instead of this build. Stop it, or declare \"reuse\": true "
+                      "if that is this build" % extra["PORT"])
     with open(os.path.join(root, EVIDENCE, "server-%s.log" % clean(name)), "w") as log:
         p = subprocess.Popen(start, shell=True, cwd=root, stdin=subprocess.DEVNULL, stdout=log,
                              stderr=subprocess.STDOUT, env=dict(os.environ, **extra), start_new_session=True)
@@ -218,11 +232,18 @@ def boot(env, root, name, extra, left, procs):
     deadline = time.time() + wait
     while time.time() < deadline:
         if p.poll() is not None:
-            return False, "`start` exited %d before `ready` passed (see %s)" % (p.returncode, log.name)
+            return start_exit(p.returncode, start, log.name)
         if is_ready(ready, root, extra):
             return True, "started, ready"
         time.sleep(0.5)
-    return False, "`ready` never passed in %ds (see %s)" % (wait, log.name)
+    return unable("start_failed", "`ready` never passed in %ds (see %s)" % (wait, log.name), command=start, status=None, timeout=int(wait))
+
+def start_exit(rc, start, log):
+    sig = signal_of(rc)
+    detail = "`start` exited %d before `ready` passed%s (see %s)" % (rc, " (signal %d)" % sig if sig else "", log)
+    if sig:
+        return unable("environment", detail, command=start, status=None, signal=sig)
+    return unable("start_failed", detail, command=start, status=rc)
 
 def bring_up(name, env, ctx):
     extra = {}
@@ -294,7 +315,7 @@ def stopped_during(ctx, name, extra, expected, stage, consequence, said):
         return None
     if found[0] is not None:
         return res("FAILS", "the app exited with status %d during the %s (see %s)%s" % (found[0], stage, server_log(name), said))
-    return res("CANNOT RUN", "the app stopped during the %s (environment '%s': %s), %s%s" % (stage, name, found[1], consequence, said))
+    return cannot("environment", "the app stopped during the %s (environment '%s': %s), %s%s" % (stage, name, found[1], consequence, said))
 
 def malformed(o):
     if not isinstance(o, dict):
@@ -325,13 +346,13 @@ def judge(o, ctx, shot, log):
         bring_up(name, env, ctx)
     up, prov, extra = ctx["resolved"][name]
     if not up[0]:
-        return res("CANNOT RUN", "environment '%s' did not come up: %s" % (name, up[1]))
+        return cannot(detail="environment '%s' did not come up: %s" % (name, up[1]), **up[2])
     if not prov[0]:
         return res("WRONG BUILD", "environment '%s': %s" % (name, prov[1]))
     expected = expects_port(ctx, name, env, extra)
     gone = lost(ctx, name, extra, expected)
     if gone:
-        return res("CANNOT RUN", "environment '%s' stopped before this outcome ran: %s, so there was no app to check" % (name, gone[1]))
+        return cannot("environment", "environment '%s' stopped before this outcome ran: %s, so there was no app to check" % (name, gone[1]))
     values = dict(env.get("vars") or {}, port=extra.get("PORT", ""), base_url=extra.get("BASE_URL", ""))
     used = [0]
 
@@ -348,7 +369,7 @@ def judge(o, ctx, shot, log):
     if code is None:
         return res("NO VERDICT", "check still running at %ds" % used[0])
     if code == CANNOT_RUN:
-        return res("CANNOT RUN", "the check exited %d (could not run), so nothing was learned about the deliverable%s" % (code, said))
+        return cannot("check_cannot_run", "the check exited %d (could not run), so nothing was learned about the deliverable%s" % (code, said), stage="check")
     if code != 0:
         return res("FAILS", "check exited %d%s" % (code, said))
     if not o.get("control"):
@@ -360,7 +381,7 @@ def judge(o, ctx, shot, log):
     if code is None:
         return res("NO VERDICT", "control still running at %ds" % used[0])
     if code == CANNOT_RUN:
-        return res("CANNOT RUN", "the control exited %d (could not run), so the check is not shown able to fail%s" % (code, said))
+        return cannot("check_cannot_run", "the control exited %d (could not run), so the check is not shown able to fail%s" % (code, said), stage="control")
     if code == 0 or code in NOT_FOUND:
         why = "the control passed (exit 0)" if code == 0 else "the control did not run (exit %d)" % code
         return res("NOT PROVEN", "%s - this check is not shown able to tell a broken artifact from a whole one%s" % (why, said))
@@ -420,7 +441,7 @@ def report_run(root, results_path):
         try:
             r = judge(o, ctx, shot, log)
         except Exception as exc:
-            r = res("CANNOT RUN", "harness error: %s: %s" % (type(exc).__name__, exc))
+            r = cannot("harness_error", "harness error: %s: %s" % (type(exc).__name__, exc))
         o = o if isinstance(o, dict) else {}
         if log:
             r["log"] = os.path.join(EVIDENCE, slug + ".log")
@@ -428,16 +449,16 @@ def report_run(root, results_path):
                 fh.write("".join(log))
         results.append(dict(r, name=o.get("name"), expect=o.get("expect"), controlled=bool(o.get("control")),
                             shot=shot if os.path.exists(shot) else None))
-        print("  %-11s [%s] %s\n              expected: %s\n              %s%s" % (
-            r["verdict"], o.get("env") or "here", o.get("name") or "(unnamed)", o.get("expect") or "(not stated)",
+        print("  %-11s [%s] %s%s\n              expected: %s\n              %s%s" % (
+            r["verdict"], o.get("env") or "here", o.get("name") or "(unnamed)", "  reason=%s" % r["reason"] if r.get("reason") else "",
+            o.get("expect") or "(not stated)",
             r["detail"], "\n              full output: %s" % r["log"] if r.get("log") else ""))
     save(results_path, "ok", results)
     bad = [r for r in results if r["verdict"] != "holds"]
-    count = lambda verdict: sum(1 for r in results if r["verdict"] == verdict)
     print("\n%s" % ("%d of %d outcome(s) not established." % (len(bad), len(results)) if bad
                     else "All %d declared outcome(s) hold." % len(results)))
-    if count("CANNOT RUN"):
-        print("%d could not be checked: an environment problem, not a code problem." % count("CANNOT RUN"))
+    if cannot_summary(results):
+        print(cannot_summary(results))
     if blocked_on(results):
         print("blocked on: %s" % ", ".join(blocked_on(results)))
     loose = sum(1 for r in results if not r["controlled"])
@@ -446,6 +467,19 @@ def report_run(root, results_path):
     return 1 if bad else 0
 
 blocked_on = lambda results: list(dict.fromkeys(n for r in results for n in r.get("blocked", [])))
+
+def reason_of(result):
+    return result.get("reason") if result.get("reason") in REASONS else "unspecified"
+
+def cannot_summary(results):
+    counts = {}
+    for r in results:
+        if r.get("verdict") == "CANNOT RUN":
+            counts[reason_of(r)] = counts.get(reason_of(r), 0) + 1
+    if not counts:
+        return None
+    return "%d could not be checked: %s" % (sum(counts.values()), ", ".join(
+        "%d %s" % (counts[k], k) for k in REASONS + ("unspecified",) if k in counts))
 
 ABSENT = """product : NOT PROVEN - no product expectations are declared (.claude/acceptance.json is absent).
   Green engineering gates say the code is consistent, not that the product does what was asked.
@@ -477,7 +511,11 @@ def summarize(path):
         loose = sum(1 for o in outs if not o.get("controlled"))
         return "held", ["%d product expectation(s) hold%s" % (len(outs), ", %d uncontrolled" % loose if loose else "")]
     lines = ["product : %d of %d expectation(s) not established. Still open:" % (len(bad), len(outs))]
-    lines += ["  - %s: %s  (%s: %s)" % (o.get("name"), o.get("expect"), o.get("verdict"), o.get("detail")) for o in bad]
+    lines += ["  - %s: %s  (%s%s: %s)" % (o.get("name"), o.get("expect"), o.get("verdict"),
+                                         " reason=%s" % reason_of(o) if o.get("verdict") == "CANNOT RUN" else "",
+                                         o.get("detail")) for o in bad]
+    if cannot_summary(bad):
+        lines.append(cannot_summary(bad))
     if blocked_on(bad):
         lines.append("blocked on: %s" % ", ".join(blocked_on(bad)))
     return "open", lines + ["Continue with them. If one is blocked, say what is blocking it."]
@@ -771,6 +809,80 @@ def selftest():
         built("t4") == ("CANNOT RUN", 3) and not os.path.exists(os.path.join(tmp, "build", EVIDENCE, "build-local.stamp"))
         and built("t4")[1] == 4)
 
+    def rows(run):
+        return json.load(open(run[3]))["outcomes"]
+
+    def why(run, i=0):
+        return rows(run)[i].get("reason")
+
+    fresh = {"VERIFY_TREE": "", "VERIFY_PASSED": "[]"}
+    run = go("why-build", {"environments": {"local": {"build": "echo boom; exit 3", "start": "touch started; exec sleep 60", "ready": "test -f started"}},
+                           "outcomes": [out("exit 0", "exit 1", env="local")]}, fresh)
+    r = rows(run)[0]
+    chk("a build that exits 3 is CANNOT RUN, reason build_failed with status 3 and its command, in product.json and on the printed line",
+        r["verdict"] == "CANNOT RUN" and r["reason"] == "build_failed" and r["status"] == 3 and r["command"] == "echo boom; exit 3"
+        and "`build` (`echo boom; exit 3`) exited 3; it said: boom" in r["detail"] and "reason=build_failed" in run[1]
+        and not os.path.exists(os.path.join(run[2], "started")))
+    run = go("why-build-slow", {"environments": {"local": {"build": "sleep 30", "start": "exec sleep 60", "ready": "exit 1"}},
+                                "outcomes": [out("exit 0", "exit 1", env="local")]}, dict(fresh, ACCEPT_BUILD_TIMEOUT="1"))
+    r = rows(run)[0]
+    chk("a build that gives no answer in time is build_failed with the timeout and no status",
+        r["reason"] == "build_failed" and r["timeout"] == 1 and r["status"] is None and "gave no answer in 1s" in r["detail"])
+    run = local("exit 3", "exit 1")
+    r = rows(run)[0]
+    chk("a `start` that exits 3 before `ready` is start_failed with status 3 and its command",
+        r["verdict"] == "CANNOT RUN" and r["reason"] == "start_failed" and r["status"] == 3 and r["command"] == "exit 3"
+        and "reason=start_failed" in run[1])
+    run = local("exec sleep 60", "exit 1", {"ACCEPT_READY_TIMEOUT": "1"})
+    r = rows(run)[0]
+    chk("a `ready` that never passes is start_failed with the timeout and no status",
+        r["reason"] == "start_failed" and r["timeout"] == 1 and r["status"] is None and "never passed in 1s" in r["detail"])
+    run = local("kill -9 $$", "exit 1")
+    r = rows(run)[0]
+    chk("a `start` ended by a signal before `ready` is environment, with the signal and no status",
+        r["reason"] == "environment" and r["signal"] == 9 and r["status"] is None and "(signal 9)" in r["detail"])
+    run = go("why-noready", {"environments": {"local": {"start": "touch started"}}, "outcomes": [out("exit 0", "exit 1", env="local")]})
+    chk("a `start` declared with no `ready` is contract_invalid, and nothing is started",
+        why(run) == "contract_invalid" and verdicts(run) == ["CANNOT RUN"] and not os.path.exists(os.path.join(run[2], "started")))
+    served = local("touch started", "exit 0")
+    taken = watched("why-taken", [out("python3 probe.py", "exit 1", env="local")], dict(LOCAL, build=OCCUPY))
+    sh("kill $(cat occupier.pid)", taken[2], timeout=5)
+    chk("a port already served before `start`, or taken during `build`, is environment",
+        why(served) == "environment" and why(taken) == "environment" and "already serving" in served[1] and "accepting connections" in taken[1])
+    runs = [watched("why-dies-during", [out("python3 probe.py && python3 stop.py && python3 probe.py", "exit 1", env="local")]),
+            watched("why-dies-control", [out("python3 probe.py", "python3 stop.py; exit 1", env="local")]),
+            watched("why-dies-idle", [out("python3 probe.py", "exit 1", env="local"), out("kill -9 $(cat pid); sleep 0.5", "exit 1", name="k"),
+                                      out("python3 probe.py", "exit 1", env="local", name="b")])]
+    chk("an app SIGKILLed during a check, during a control or between outcomes is environment, and only the outcomes it cost carry a reason",
+        [why(runs[0]), why(runs[1])] == ["environment"] * 2 and [why(runs[2], i) for i in range(3)] == [None, None, "environment"]
+        and "killed by signal 9" in runs[0][1] + runs[1][1])
+    runs = [go("why-check75", {"outcomes": [out("exit 75", "exit 1")]}), go("why-control75", {"outcomes": [out("exit 0", "exit 75")]})]
+    chk("a check that exits 75 and a control that exits 75 are check_cannot_run, naming which one",
+        [(why(r), rows(r)[0]["stage"]) for r in runs] == [("check_cannot_run", "check"), ("check_cannot_run", "control")]
+        and "reason=check_cannot_run" in runs[0][1])
+    d, rp = repo("why-harness", {"outcomes": [out("exit 0", "exit 1")]}), os.path.join(tmp, "why-harness.json")
+    with redirect_stdout(io.StringIO()), patch.object(me, "judge", side_effect=RuntimeError("kaput")):
+        report(d, rp)
+    chk("an exception inside the harness is CANNOT RUN with reason harness_error",
+        json.load(open(rp))["outcomes"][0]["reason"] == "harness_error" and "kaput" in json.load(open(rp))["outcomes"][0]["detail"])
+    run = go("why-mixed", {"environments": {"a": {"build": "exit 3", "start": "exec sleep 60", "ready": "exit 1"},
+                                            "b": {"start": "touch started", "ready": "exit 0"}},
+                           "outcomes": [out("exit 0", "exit 1", env="a"), out("exit 0", "exit 1", env="b", name="b"),
+                                        out("exit 0", "exit 1", name="c"), out("exit 1", "exit 1", name="d"), out("exit 0", name="e", needs=["VA_T_NONE"])]}, fresh)
+    text = "\n".join(summarize(run[3])[1])
+    chk("the printed run and summarize() count what could not be checked by reason, exit 1; only CANNOT RUN outcomes carry a reason",
+        verdicts(run) == ["CANNOT RUN", "CANNOT RUN", "holds", "FAILS", "BLOCKED"] and run[0] == 1
+        and "2 could not be checked: 1 build_failed, 1 environment" in run[1] and "2 could not be checked: 1 build_failed, 1 environment" in text
+        and "reason=build_failed" in text and "reason=environment" in text
+        and [("reason" in r) for r in rows(run)] == [True, True, False, False, False])
+    legacy = os.path.join(tmp, "legacy.json")
+    with open(legacy, "w") as fh:
+        json.dump({"contract": "ok", "outcomes": [{"name": "n", "expect": "e", "verdict": "CANNOT RUN", "detail": "d", "controlled": False},
+                                                  {"name": "m", "expect": "e", "verdict": "CANNOT RUN", "detail": "d", "reason": "made-up"}]}, fh)
+    legacy_text = "\n".join(summarize(legacy)[1])
+    chk("a CANNOT RUN result with no reason, or one this harness does not know, is counted as unspecified, never dropped",
+        "2 could not be checked: 2 unspecified" in legacy_text and legacy_text.count("reason=unspecified") == 2)
+
     run = go("evidence", {"outcomes": [out('test -n "$ACCEPT_SHOT" && touch "$ACCEPT_SHOT"', "exit 1"),
                                        out("exit 1", "exit 1", name="Search results", expect="lists only matches")]})
     rs, st = json.load(open(run[3]))["outcomes"], summarize(run[3])
@@ -779,7 +891,7 @@ def selftest():
         and any("Search results: lists only matches" in l for l in st[1]) and summarize(go("absent", None)[3])[0] == "absent")
 
     shutil.rmtree(tmp, ignore_errors=True)
-    expected = 48
+    expected = 60
     print("\nSELF-TEST %s" % ("PASSED  (%d checks)" % expected if passed == ran == expected else "FAILED  (%d of %d checks)" % (passed, expected)))
     return 0 if passed == ran == expected else 1
 

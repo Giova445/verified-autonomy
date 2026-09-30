@@ -36,11 +36,23 @@ Before a PR, say "prove it" (the `prove` skill), or run:
 | `holds` | the check passed, and its control, if any, failed |
 | `FAILS` | the check ran and the product did not do it, or the app exited by itself with a status during the run |
 | `NOT PROVEN` | the control passed too, so the check cannot tell broken from working |
-| `CANNOT RUN` | the check exited 75, the app would not start, or the app was killed or lost its port during the run |
+| `CANNOT RUN` | the check exited 75, the app would not build or start, or the app was killed or lost its port during the run. Its `reason` says which |
 | `BLOCKED` | an outcome declares a credential in `needs` and it is not set |
 | `NO VERDICT` | the check ran out of time |
 | `WRONG BUILD` | the environment runs another commit |
 | `REFUSED` | the outcome lacks a name, an `expect` or a `check` |
+
+Every `CANNOT RUN` carries a `reason` in `.claude/evidence/product.json`, on its printed line, and
+in a count (`2 could not be checked: 1 build_failed, 1 environment`):
+
+| `reason` | Meaning |
+|---|---|
+| `build_failed` | the environment's `build` exited non-zero (command and status recorded) or gave no answer in time |
+| `start_failed` | `start` exited before `ready` passed, or `ready` never passed (status or timeout recorded) |
+| `environment` | the port was already served or taken, the app was ended by a signal, or its port stopped answering |
+| `check_cannot_run` | the check or its control exited 75 |
+| `contract_invalid` | `start` is declared with no `ready` |
+| `harness_error` | `acceptance.py` itself raised |
 
 ## The contract
 

@@ -57,6 +57,18 @@ ticket states it.
   comes after the request was answered is blamed on the outcome running then, and one that
   comes after the last check or control has returned is not seen. `start` must stay in the
   foreground.
+- Why a CANNOT RUN. Each one carries a `reason` in `.claude/evidence/product.json`, on its
+  printed line (`reason=build_failed`) and in a count (`2 could not be checked: 1 build_failed,
+  1 environment`), so a broken build reads differently from a broken machine. `build_failed`: the
+  environment's `build` exited non-zero, or gave no answer in time (`command` and `status` or
+  `timeout` are recorded). `start_failed`: `start` exited before `ready` passed, or `ready` never
+  passed (`status` or `timeout`). `environment`: the port was already served or taken, the app was
+  ended by a signal (before `ready`, between outcomes, or during a check or control), or its port
+  stopped answering. `check_cannot_run`: the check or the control exited 75 (`stage` says which).
+  `contract_invalid`: `start` is declared with no `ready`. `harness_error`: `acceptance.py` itself
+  raised. The reason names the step that could not run, not a proven cause: a signal can be an
+  out-of-memory kill or a crash, and a `start` that dies binding a port taken a moment earlier
+  reads `start_failed`. It changes no verdict and no exit code.
 - `outcomes`: `name`, `expect` (the user's words), `check`, and optionally `control`, `needs`
   and `env`. A check exits 0 when the outcome holds and 75 when it cannot run. Any other exit
   fails. A control is a variant that must fail. If it passes, the check proves nothing.

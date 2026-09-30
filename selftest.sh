@@ -139,6 +139,10 @@ chk "skills: only prove and setup ship" "$(ls "$PLUGIN/skills" | tr '\n' ' ')" "
 chk "docs: only how-it-works ships" "$(ls "$PLUGIN/docs" | tr '\n' ' ')" "how-it-works.md "
 missing=""; for v in $(sed -n '/^## Optional settings/,/^## Updating/p' "$PLUGIN/README.md" | grep -oE '`[A-Z][A-Z_]+' | tr -d '`' | sort -u); do grep -rqw "$v" "$PLUGIN/bin" "$PLUGIN/hooks" "$PLUGIN/benchmark/gates" || missing="$missing $v"; done
 chk "every setting the README names exists in the code" "${missing:-none}" "none"
+undocumented=""; for v in $(python3 -B -c 'import importlib.util, sys
+spec = importlib.util.spec_from_file_location("acceptance", sys.argv[1]); mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+print(" ".join(mod.REASONS))' "$PLUGIN/benchmark/gates/acceptance.py"); do grep -q "\`$v\`" "$PLUGIN/README.md" && grep -q "\`$v\`" "$PLUGIN/docs/how-it-works.md" || undocumented="$undocumented $v"; done
+chk "every CANNOT RUN reason the code sets is documented in the README and the docs" "${undocumented:-none}" "none"
 
 echo
 suite "arm"             bash    "$PLUGIN/bin/arm"             selftest

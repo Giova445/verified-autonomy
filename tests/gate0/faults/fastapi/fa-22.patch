@@ -1,0 +1,13 @@
+diff --git a/app/main.py b/app/main.py
+index 3d672be..c76723c 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -12,7 +12,7 @@ ORDERS = [
+ 
+ 
+ @app.get("/health")
+-def health():
++def health()
+     return {"status": "ok"}
+ 
+ 

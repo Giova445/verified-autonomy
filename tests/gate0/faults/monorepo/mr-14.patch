@@ -1,0 +1,12 @@
+diff --git a/apps/web/src/app.js b/apps/web/src/app.js
+index d280df3..fdbb34a 100644
+--- a/apps/web/src/app.js
++++ b/apps/web/src/app.js
+@@ -21,7 +21,6 @@ fetch("/orders.json")
+   .then((response) => response.json())
+   .then((orders) => {
+     loading.remove();
+-    search.disabled = false;
+     search.addEventListener("input", () => render(orders, search.value));
+     render(orders, "");
+   });

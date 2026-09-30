@@ -1,0 +1,219 @@
+[
+  {
+    "id": "si-01",
+    "category": "auth bypass or lockout",
+    "statement": "Any password at all logs a user in, even a completely wrong one.",
+    "breaks_run": false,
+    "patch": "si-01.patch"
+  },
+  {
+    "id": "si-02",
+    "category": "auth bypass or lockout",
+    "statement": "Signing in with an email that was never registered still logs you in.",
+    "breaks_run": false,
+    "patch": "si-02.patch"
+  },
+  {
+    "id": "si-03",
+    "category": "auth bypass or lockout",
+    "statement": "The one registered user can never sign in; entering the exact correct password is always treated as wrong, and any wrong password is accepted.",
+    "breaks_run": false,
+    "patch": "si-03.patch"
+  },
+  {
+    "id": "si-04",
+    "category": "dead handler",
+    "statement": "Clicking \"Sign out\" sends you back to the login page, but your session cookie still works and you're still actually signed in.",
+    "breaks_run": false,
+    "patch": "si-04.patch"
+  },
+  {
+    "id": "si-05",
+    "category": "broken link/route",
+    "statement": "After signing out, you're sent to a page that doesn't exist (/signed-out) instead of back to the sign-in page.",
+    "breaks_run": false,
+    "patch": "si-05.patch"
+  },
+  {
+    "id": "si-06",
+    "category": "broken link/route",
+    "statement": "After signing in, the redirect to /orders leads to a 404 instead of the orders page.",
+    "breaks_run": false,
+    "patch": "si-06.patch"
+  },
+  {
+    "id": "si-07",
+    "category": "broken link/route",
+    "statement": "Visiting the site's root URL redirects to a broken /order path instead of the real /orders page.",
+    "breaks_run": false,
+    "patch": "si-07.patch"
+  },
+  {
+    "id": "si-08",
+    "category": "wrong field displayed",
+    "statement": "Each order in the list shows the price twice instead of showing the item name and its price.",
+    "breaks_run": false,
+    "patch": "si-08.patch"
+  },
+  {
+    "id": "si-09",
+    "category": "wrong computation",
+    "statement": "Every price in the orders list shows as a tiny fraction of the real amount, e.g. $4.8 instead of $480.",
+    "breaks_run": false,
+    "patch": "si-09.patch"
+  },
+  {
+    "id": "si-10",
+    "category": "crash on edge case",
+    "statement": "Submitting the sign-in form with the password field left out of the request crashes the server with an error page instead of showing \"Wrong email or password\".",
+    "breaks_run": false,
+    "patch": "si-10.patch"
+  },
+  {
+    "id": "si-11",
+    "category": "auth bypass or lockout",
+    "statement": "Every sign-in attempt succeeds and lands on the orders page, no matter what email or password you type.",
+    "breaks_run": false,
+    "patch": "si-11.patch"
+  },
+  {
+    "id": "si-12",
+    "category": "loading/empty/error state wrong",
+    "statement": "After a failed sign-in, the login page reloads with no error message at all, leaving the user unsure why it didn't work.",
+    "breaks_run": false,
+    "patch": "si-12.patch"
+  },
+  {
+    "id": "si-13",
+    "category": "auth bypass or lockout",
+    "statement": "Every sign-in reuses the exact same session token, so signing in as anyone signs out (and takes over the session of) whoever was previously signed in on any device.",
+    "breaks_run": false,
+    "patch": "si-13.patch"
+  },
+  {
+    "id": "si-14",
+    "category": "broken link/route",
+    "statement": "Submitting the sign-in form does nothing useful; it posts to /signin, a path the server never registered, so the browser gets a 404 instead of signing in.",
+    "breaks_run": false,
+    "patch": "si-14.patch"
+  },
+  {
+    "id": "si-15",
+    "category": "broken link/route",
+    "statement": "Clicking \"Sign out\" fails with a 404 because the form posts to /log-out instead of /logout.",
+    "breaks_run": false,
+    "patch": "si-15.patch"
+  },
+  {
+    "id": "si-16",
+    "category": "crash on edge case",
+    "statement": "After signing in, the orders page crashes with a server error instead of showing your order list.",
+    "breaks_run": false,
+    "patch": "si-16.patch"
+  },
+  {
+    "id": "si-17",
+    "category": "mocked or hardcoded data",
+    "statement": "The orders page always says \"Signed in as User\" instead of showing the actual signed-in email address.",
+    "breaks_run": false,
+    "patch": "si-17.patch"
+  },
+  {
+    "id": "si-18",
+    "category": "dead handler",
+    "statement": "After a successful sign-in, you're redirected to the orders page but immediately bounced back to the login screen because no session cookie was ever set.",
+    "breaks_run": false,
+    "patch": "si-18.patch"
+  },
+  {
+    "id": "si-19",
+    "category": "build or start breaks",
+    "statement": "The whole sign-in service fails to start at all.",
+    "breaks_run": true,
+    "patch": "si-19.patch"
+  },
+  {
+    "id": "si-20",
+    "category": "auth bypass or lockout",
+    "statement": "Nobody can sign in anymore, even with the exact right password, because the password check now uses different hashing parameters than the stored password hash.",
+    "breaks_run": false,
+    "patch": "si-20.patch"
+  },
+  {
+    "id": "si-21",
+    "category": "broken link/route",
+    "statement": "Visiting /login (the address every redirect points to) fails with a Method Not Allowed error; the sign-in page moved to /log-in without updating the redirects.",
+    "breaks_run": false,
+    "patch": "si-21.patch"
+  },
+  {
+    "id": "si-22",
+    "category": "dead handler",
+    "statement": "Submitting the sign-in form always fails with a Method Not Allowed error because the server no longer accepts POST on /login.",
+    "breaks_run": false,
+    "patch": "si-22.patch"
+  },
+  {
+    "id": "si-23",
+    "category": "wrong field displayed",
+    "statement": "Each order in the list is labeled with its price instead of its order number, e.g. \"#480\" instead of \"#2001\".",
+    "breaks_run": false,
+    "patch": "si-23.patch"
+  },
+  {
+    "id": "si-24",
+    "category": "off-by-one",
+    "statement": "The first order in a customer's history never shows up in their order list.",
+    "breaks_run": false,
+    "patch": "si-24.patch"
+  },
+  {
+    "id": "si-25",
+    "category": "auth bypass or lockout",
+    "statement": "Visiting /orders without signing in doesn't redirect to the login page anymore; it crashes with a server error because the signed-out guard was removed.",
+    "breaks_run": false,
+    "patch": "si-25.patch"
+  },
+  {
+    "id": "si-26",
+    "category": "auth bypass or lockout",
+    "statement": "Nobody can sign in anymore, even with the correct password, because the stored salt is now read as raw text instead of the hex bytes it's stored as.",
+    "breaks_run": false,
+    "patch": "si-26.patch"
+  },
+  {
+    "id": "si-27",
+    "category": "dead handler",
+    "statement": "Clicking the \"Sign in\" button does nothing at all; the form is never submitted.",
+    "breaks_run": false,
+    "patch": "si-27.patch"
+  },
+  {
+    "id": "si-28",
+    "category": "dead handler",
+    "statement": "Clicking \"Sign out\" does nothing at all; the form never submits so the session stays open.",
+    "breaks_run": false,
+    "patch": "si-28.patch"
+  },
+  {
+    "id": "si-29",
+    "category": "auth bypass or lockout",
+    "statement": "Signing in always fails with \"Wrong email or password\", even with correct credentials, because the email field's name no longer matches what the server reads from the form.",
+    "breaks_run": false,
+    "patch": "si-29.patch"
+  },
+  {
+    "id": "si-30",
+    "category": "build or start breaks",
+    "statement": "The whole sign-in service fails to start because the user database file is corrupted JSON.",
+    "breaks_run": true,
+    "patch": "si-30.patch"
+  },
+  {
+    "id": "si-31",
+    "category": "auth bypass or lockout",
+    "statement": "Nobody can sign in anymore, even with the correct password, because the login check now hashes the password differently than how it was originally stored.",
+    "breaks_run": false,
+    "patch": "si-31.patch"
+  }
+]

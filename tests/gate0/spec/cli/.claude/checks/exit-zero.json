@@ -1,0 +1,16 @@
+{
+  "check": [
+    {"args": ["list"], "exit": 0},
+    {"args": ["total"], "exit": 0},
+    {"args": ["list", "--search", "alice"], "exit": 0},
+    {"args": ["total", "--search", "ALICE"], "exit": 0},
+    {"args": ["list", "--search", "zed"], "exit": 0},
+    {"args": ["total", "--search", "zed"], "exit": 0}
+  ],
+  "control": [
+    {"args": [], "exit": 0},
+    {"args": ["frobnicate"], "exit": 0},
+    {"args": ["list", "--search"], "exit": 0},
+    {"args": ["list", "extra"], "exit": 0}
+  ]
+}

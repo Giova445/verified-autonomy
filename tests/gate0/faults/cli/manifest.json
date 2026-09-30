@@ -1,0 +1,226 @@
+[
+  {
+    "id": "cli-01",
+    "category": "dead handler",
+    "statement": "Running `orders total` prints nothing; the total is silently swallowed.",
+    "breaks_run": false,
+    "patch": "cli-01.patch"
+  },
+  {
+    "id": "cli-02",
+    "category": "mocked or hardcoded data",
+    "statement": "`orders list --search NAME` always lists every order, ignoring the search term.",
+    "breaks_run": false,
+    "patch": "cli-02.patch"
+  },
+  {
+    "id": "cli-03",
+    "category": "wrong field in search/filter",
+    "statement": "Searching by customer name like \"Alice\" returns no results because the search actually matches the item field.",
+    "breaks_run": false,
+    "patch": "cli-03.patch"
+  },
+  {
+    "id": "cli-04",
+    "category": "search/filter behavior wrong",
+    "statement": "Searching \"alice\" (lowercase) finds nothing because the search is now case-sensitive.",
+    "breaks_run": false,
+    "patch": "cli-04.patch"
+  },
+  {
+    "id": "cli-05",
+    "category": "off-by-one",
+    "statement": "`orders total` undercounts by leaving out the last order in the list.",
+    "breaks_run": false,
+    "patch": "cli-05.patch"
+  },
+  {
+    "id": "cli-06",
+    "category": "off-by-one",
+    "statement": "`orders list` never shows the first matching order.",
+    "breaks_run": false,
+    "patch": "cli-06.patch"
+  },
+  {
+    "id": "cli-07",
+    "category": "wrong sort",
+    "statement": "`orders list` reorders rows by price instead of showing them in the original order.",
+    "breaks_run": false,
+    "patch": "cli-07.patch"
+  },
+  {
+    "id": "cli-08",
+    "category": "dead handler",
+    "statement": "Passing `--search NAME` is accepted but the name is thrown away, so results are never filtered.",
+    "breaks_run": false,
+    "patch": "cli-08.patch"
+  },
+  {
+    "id": "cli-09",
+    "category": "stale deploy or wrong build",
+    "statement": "The CLI ships a stale, shorter snapshot of the order list baked in at build time; new orders added to the data module never show up in `orders list`.",
+    "breaks_run": false,
+    "patch": "cli-09.patch"
+  },
+  {
+    "id": "cli-10",
+    "category": "mocked or hardcoded data",
+    "statement": "`orders total` always prints \"Total: 880.00\" no matter which orders are shown.",
+    "breaks_run": false,
+    "patch": "cli-10.patch"
+  },
+  {
+    "id": "cli-11",
+    "category": "works in dev but not on the production build",
+    "statement": "In a production build (NODE_ENV=production) the total loses its cents formatting, e.g. \"Total: 880\" instead of \"Total: 880.00\".",
+    "breaks_run": false,
+    "patch": "cli-11.patch"
+  },
+  {
+    "id": "cli-12",
+    "category": "wrong exit code / error handling",
+    "statement": "Running an invalid command like `orders foo` prints the usage error but exits successfully (status 0) instead of failing.",
+    "breaks_run": false,
+    "patch": "cli-12.patch"
+  },
+  {
+    "id": "cli-13",
+    "category": "wrong computation",
+    "statement": "`orders total` adds up order IDs instead of order totals, producing a nonsense grand total.",
+    "breaks_run": false,
+    "patch": "cli-13.patch"
+  },
+  {
+    "id": "cli-14",
+    "category": "wrong field displayed",
+    "statement": "`orders list` prints the item name in the customer column and the customer name in the item column.",
+    "breaks_run": false,
+    "patch": "cli-14.patch"
+  },
+  {
+    "id": "cli-15",
+    "category": "crash",
+    "statement": "`orders total` crashes with a stack trace instead of printing a total, for any search (including no search at all).",
+    "breaks_run": false,
+    "patch": "cli-15.patch"
+  },
+  {
+    "id": "cli-16",
+    "category": "loading/empty/error state wrong",
+    "statement": "Searching for a customer with no orders shows a blank list instead of \"No orders match ...\".",
+    "breaks_run": false,
+    "patch": "cli-16.patch"
+  },
+  {
+    "id": "cli-17",
+    "category": "wrong field in search/filter",
+    "statement": "Typing a customer's name into search returns nothing; search actually matches against the numeric order ID.",
+    "breaks_run": false,
+    "patch": "cli-17.patch"
+  },
+  {
+    "id": "cli-18",
+    "category": "stale deploy or wrong build",
+    "statement": "Installing the CLI (npm link/npm i -g) points the `orders` command at dist/orders.mjs, a build output that was never generated, so the installed command can't be found.",
+    "breaks_run": false,
+    "patch": "cli-18.patch"
+  },
+  {
+    "id": "cli-19",
+    "category": "wrong computation",
+    "statement": "Every total is off by one cent too high.",
+    "breaks_run": false,
+    "patch": "cli-19.patch"
+  },
+  {
+    "id": "cli-20",
+    "category": "wrong sort",
+    "statement": "Search results for a customer with multiple orders show them in reverse order instead of original order.",
+    "breaks_run": false,
+    "patch": "cli-20.patch"
+  },
+  {
+    "id": "cli-21",
+    "category": "mocked or hardcoded data",
+    "statement": "`orders list` never shows more than the first two orders, even when more match.",
+    "breaks_run": false,
+    "patch": "cli-21.patch"
+  },
+  {
+    "id": "cli-22",
+    "category": "search/filter behavior wrong",
+    "statement": "A search query with a trailing space (e.g. \"Alice \") matches nothing even though \"Alice\" would.",
+    "breaks_run": false,
+    "patch": "cli-22.patch"
+  },
+  {
+    "id": "cli-23",
+    "category": "crash",
+    "statement": "`orders list` crashes with a TypeError instead of printing any rows.",
+    "breaks_run": false,
+    "patch": "cli-23.patch"
+  },
+  {
+    "id": "cli-24",
+    "category": "dead handler",
+    "statement": "`orders total --search NAME` reports the grand total of every order, not just the ones matching the search.",
+    "breaks_run": false,
+    "patch": "cli-24.patch"
+  },
+  {
+    "id": "cli-25",
+    "category": "search/filter behavior wrong",
+    "statement": "Searching \"alice\" in lowercase finds nothing because the stored customer name \"Alice Nguyen\" is compared without lowercasing it.",
+    "breaks_run": false,
+    "patch": "cli-25.patch"
+  },
+  {
+    "id": "cli-26",
+    "category": "broken link/route",
+    "statement": "Running `orders list` prints just the total, and `orders total` prints the row listing; the two commands are swapped.",
+    "breaks_run": false,
+    "patch": "cli-26.patch"
+  },
+  {
+    "id": "cli-27",
+    "category": "off-by-one",
+    "statement": "`orders list` prints the last matching order twice.",
+    "breaks_run": false,
+    "patch": "cli-27.patch"
+  },
+  {
+    "id": "cli-28",
+    "category": "wrong computation",
+    "statement": "Every total is inflated by 10% above the sum of the listed orders.",
+    "breaks_run": false,
+    "patch": "cli-28.patch"
+  },
+  {
+    "id": "cli-29",
+    "category": "dead handler",
+    "statement": "`orders list --search Alice` fails with a usage error; the flag-detection logic checks the arguments in the wrong order.",
+    "breaks_run": false,
+    "patch": "cli-29.patch"
+  },
+  {
+    "id": "cli-30",
+    "category": "wrong sort",
+    "statement": "`orders list` reorders rows alphabetically by customer name instead of showing them in original order.",
+    "breaks_run": false,
+    "patch": "cli-30.patch"
+  },
+  {
+    "id": "cli-31",
+    "category": "mocked or hardcoded data",
+    "statement": "Searching for any missing customer shows the fixed message \"No orders match Nobody\" instead of naming the actual query.",
+    "breaks_run": false,
+    "patch": "cli-31.patch"
+  },
+  {
+    "id": "cli-32",
+    "category": "build or start breaks",
+    "statement": "The CLI fails to start at all: `orders list` and `orders total` both crash immediately with a module load error.",
+    "breaks_run": true,
+    "patch": "cli-32.patch"
+  }
+]

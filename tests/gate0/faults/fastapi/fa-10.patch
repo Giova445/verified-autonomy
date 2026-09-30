@@ -1,0 +1,13 @@
+diff --git a/app/main.py b/app/main.py
+index 3d672be..6b03a9d 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -23,7 +23,7 @@ def list_orders(q: str = ""):
+ 
+ 
+ @app.get("/api/orders/{order_id}")
+-def get_order(order_id: int):
++def get_order(order_id: str):
+     for order in ORDERS:
+         if order["id"] == order_id:
+             return order

@@ -1,0 +1,13 @@
+diff --git a/app/orders/page.js b/app/orders/page.js
+index 5800863..cc92bb5 100644
+--- a/app/orders/page.js
++++ b/app/orders/page.js
+@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
+ 
+ export default function OrdersPage() {
+   const [orders, setOrders] = useState(null);
+-  const [query, setQuery] = useState("");
++  const [query, setQuery] = useState("zzz-no-match");
+ 
+   useEffect(() => {
+     fetch("/api/orders")

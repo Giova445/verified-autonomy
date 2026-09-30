@@ -1,0 +1,15 @@
+diff --git a/bin/orders.mjs b/bin/orders.mjs
+index 3d5d35f..e637d68 100644
+--- a/bin/orders.mjs
++++ b/bin/orders.mjs
+@@ -1,5 +1,9 @@
+ #!/usr/bin/env node
+-import { formatRow, formatTotal, orders, search } from "../src/orders.mjs";
++import { formatRow, formatTotal, search } from "../src/orders.mjs";
++const orders = [
++  { id: 1001, customer: "Alice Nguyen", item: "Standing desk", total: 480 },
++  { id: 1002, customer: "Bob Ferreira", item: "Monitor arm", total: 95 },
++];
+ 
+ const USAGE = "usage: orders {list|total} [--search NAME]";
+ 

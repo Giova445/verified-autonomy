@@ -1,0 +1,10 @@
+{
+  "check": [
+    {"args": [], "exit": "nonzero", "stdout_lines": [], "stderr_lines": ["usage: orders {list|total} [--search NAME]"]},
+    {"args": ["--search", "alice"], "exit": "nonzero", "stdout_lines": [], "stderr_lines": ["usage: orders {list|total} [--search NAME]"]}
+  ],
+  "control": [
+    {"args": ["list"], "exit": "nonzero", "stdout_lines": [], "stderr_lines": ["usage: orders {list|total} [--search NAME]"]},
+    {"args": ["total"], "exit": "nonzero", "stdout_lines": [], "stderr_lines": ["usage: orders {list|total} [--search NAME]"]}
+  ]
+}

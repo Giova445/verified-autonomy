@@ -1,0 +1,13 @@
+diff --git a/src/orders.mjs b/src/orders.mjs
+index 0953980..e7c5eda 100644
+--- a/src/orders.mjs
++++ b/src/orders.mjs
+@@ -12,7 +12,7 @@ export function search(query) {
+ }
+ 
+ export function formatRow(order) {
+-  return `${order.id}  ${order.customer.padEnd(15)}  ${order.item.padEnd(14)}  ${order.total.toFixed(2)}`;
++  return `${order.id}  ${order.item.padEnd(15)}  ${order.customer.padEnd(14)}  ${order.total.toFixed(2)}`;
+ }
+ 
+ export function formatTotal(rows) {

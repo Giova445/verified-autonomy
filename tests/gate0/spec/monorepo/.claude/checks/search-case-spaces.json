@@ -1,0 +1,26 @@
+[
+  {
+    "fill": {
+      "selector": "input[aria-label='Search by customer']",
+      "value": "  KAFOR  "
+    }
+  },
+  {
+    "count": {
+      "selector": "#orders li",
+      "equals": 1
+    }
+  },
+  {
+    "text": {
+      "selector": "#orders li:nth-child(1)",
+      "equals": "Chidi Okafor Webcam $120"
+    }
+  },
+  {
+    "text": {
+      "selector": "#total",
+      "equals": "Total: $120"
+    }
+  }
+]

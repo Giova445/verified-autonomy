@@ -1,0 +1,34 @@
+[
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": "zed"
+    }
+  },
+  {
+    "visible": "text=No orders match zed"
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 0
+    }
+  },
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": "zzq"
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 5
+    },
+    "timeout": 1000
+  },
+  {
+    "hidden": "text=No orders match",
+    "timeout": 1000
+  }
+]

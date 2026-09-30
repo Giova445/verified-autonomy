@@ -1,0 +1,8 @@
+{
+  "check": [
+    {"args": ["total", "--search", "ALICE"], "exit": 0, "stdout_lines": ["Total: 515.00"], "stderr_lines": []}
+  ],
+  "control": [
+    {"args": ["total", "--search", "QQQ"], "exit": 0, "stdout_lines": ["Total: 515.00"], "stderr_lines": []}
+  ]
+}

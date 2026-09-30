@@ -1,0 +1,9 @@
+diff --git a/data/users.json b/data/users.json
+index ce602cb..bee4dce 100644
+--- a/data/users.json
++++ b/data/users.json
+@@ -20,4 +20,3 @@
+       }
+     ]
+   }
+-}

@@ -1,0 +1,13 @@
+diff --git a/app/orders/page.js b/app/orders/page.js
+index 5800863..efa9fc8 100644
+--- a/app/orders/page.js
++++ b/app/orders/page.js
+@@ -12,7 +12,7 @@ export default function OrdersPage() {
+       .then(setOrders);
+   }, []);
+ 
+-  const needle = query.trim().toLowerCase();
++  const needle = query.trim();
+   const shown = (orders ?? []).filter((order) => order.customer.toLowerCase().includes(needle));
+ 
+   return (

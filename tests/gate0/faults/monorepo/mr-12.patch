@@ -1,0 +1,13 @@
+diff --git a/apps/web/build.mjs b/apps/web/build.mjs
+index 1999c4d..4bb4dea 100644
+--- a/apps/web/build.mjs
++++ b/apps/web/build.mjs
+@@ -1,7 +1,7 @@
+ import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+ import { dirname, join } from "node:path";
+ import { fileURLToPath } from "node:url";
+-import { orders } from "../../packages/orders/index.js";
++import { orders } from "../../packages/order/index.js";
+ 
+ const here = dirname(fileURLToPath(import.meta.url));
+ const dist = join(here, "dist");

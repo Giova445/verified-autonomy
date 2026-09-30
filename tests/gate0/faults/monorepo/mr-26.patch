@@ -1,0 +1,13 @@
+diff --git a/apps/web/src/app.js b/apps/web/src/app.js
+index d280df3..01f4c47 100644
+--- a/apps/web/src/app.js
++++ b/apps/web/src/app.js
+@@ -17,7 +17,7 @@ function render(orders, query) {
+   total.textContent = `Total: $${shown.reduce((sum, order) => sum + order.total, 0)}`;
+ }
+ 
+-fetch("/orders.json")
++fetch("/orders-data.json")
+   .then((response) => response.json())
+   .then((orders) => {
+     loading.remove();

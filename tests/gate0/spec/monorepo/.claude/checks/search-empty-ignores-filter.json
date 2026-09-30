@@ -1,0 +1,35 @@
+[
+  {
+    "fill": {
+      "selector": "input[aria-label='Search by customer']",
+      "value": "chidi"
+    }
+  },
+  {
+    "count": {
+      "selector": "#orders li",
+      "equals": 1
+    },
+    "timeout": 1000
+  },
+  {
+    "fill": {
+      "selector": "input[aria-label='Search by customer']",
+      "value": "zed"
+    }
+  },
+  {
+    "count": {
+      "selector": "#orders li",
+      "equals": 5
+    },
+    "timeout": 1000
+  },
+  {
+    "text": {
+      "selector": "#total",
+      "equals": "Total: $880"
+    },
+    "timeout": 1000
+  }
+]

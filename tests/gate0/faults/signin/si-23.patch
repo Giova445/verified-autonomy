@@ -1,0 +1,13 @@
+diff --git a/app/main.py b/app/main.py
+index 6c1034c..d08b997 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -74,7 +74,7 @@ def orders(request: Request):
+     if not email:
+         return RedirectResponse("/login", status_code=303)
+     rows = "".join(
+-        f"<li class=\"order\">#{order['id']} {escape(order['item'])} ${order['total']}</li>"
++        f"<li class=\"order\">#{order['total']} {escape(order['item'])} ${order['total']}</li>"
+         for order in USERS[email]["orders"]
+     )
+     return page("Your orders", f"""<h1>Your orders</h1>

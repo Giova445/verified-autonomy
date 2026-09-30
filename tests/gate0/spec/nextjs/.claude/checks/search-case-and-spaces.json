@@ -1,0 +1,62 @@
+[
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": " ALICE "
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 2
+    }
+  },
+  {
+    "text": {
+      "selector": "main li:nth-child(1)",
+      "equals": "Alice Nguyen Standing desk $480"
+    }
+  },
+  {
+    "text": {
+      "selector": "main li:nth-child(2)",
+      "equals": "Alice Nguyen Desk mat $35"
+    }
+  },
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": "  okafor"
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 1
+    }
+  },
+  {
+    "text": {
+      "selector": "main li:nth-child(1)",
+      "equals": "Chidi Okafor Webcam $120"
+    }
+  },
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": "DANA  "
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 1
+    }
+  },
+  {
+    "text": {
+      "selector": "main li:nth-child(1)",
+      "equals": "Dana Whitfield Headset $150"
+    }
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "text": {
+      "selector": "role=heading",
+      "equals": "Shop admin"
+    }
+  },
+  {
+    "text": {
+      "selector": "role=link[name=\"Orders\"]",
+      "equals": "Orders"
+    }
+  }
+]

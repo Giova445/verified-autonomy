@@ -1,0 +1,10 @@
+diff --git a/app/page.js b/app/page.js
+index aabcee4..9bbab9f 100644
+--- a/app/page.js
++++ b/app/page.js
+@@ -1,4 +1,4 @@
+-import Link from "next/link";
++import Link from "next/links";
+ 
+ export default function Home() {
+   return (

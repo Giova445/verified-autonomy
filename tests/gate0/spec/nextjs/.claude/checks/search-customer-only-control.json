@@ -1,0 +1,15 @@
+[
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": "Chidi"
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 0
+    },
+    "timeout": 1000
+  }
+]

@@ -1,0 +1,13 @@
+diff --git a/app/orders/page.js b/app/orders/page.js
+index 5800863..bd536b6 100644
+--- a/app/orders/page.js
++++ b/app/orders/page.js
+@@ -35,7 +35,7 @@ export default function OrdersPage() {
+           </li>
+         ))}
+       </ul>
+-      {orders !== null && shown.length === 0 ? <p id="empty">No orders match {query}</p> : null}
++      {false ? <p id="empty">No orders match {query}</p> : null}
+     </main>
+   );
+ }

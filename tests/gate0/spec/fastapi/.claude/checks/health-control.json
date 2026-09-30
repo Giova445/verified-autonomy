@@ -1,0 +1,11 @@
+{
+  "requests": [
+    {
+      "path": "/healthz",
+      "status": 200,
+      "body_has": {
+        "status": "ok"
+      }
+    }
+  ]
+}

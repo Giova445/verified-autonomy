@@ -1,0 +1,13 @@
+diff --git a/app/main.py b/app/main.py
+index 6c1034c..ab75704 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -45,7 +45,7 @@ def home():
+ 
+ @app.get("/login", response_class=HTMLResponse)
+ def login_form(error: str = ""):
+-    message = "<p id=\"error\" role=\"alert\">Wrong email or password</p>" if error else ""
++    message = ""
+     return page("Sign in", f"""<h1>Sign in</h1>{message}
+ <form method="post" action="/login">
+ <label>Email <input id="email" name="email" type="email" autocomplete="username"></label>

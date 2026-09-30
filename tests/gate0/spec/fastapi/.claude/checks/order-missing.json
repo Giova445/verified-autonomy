@@ -1,0 +1,18 @@
+{
+  "requests": [
+    {
+      "path": "/api/orders/9999",
+      "status": 404,
+      "body": {
+        "detail": "order not found"
+      }
+    },
+    {
+      "path": "/api/orders/1006",
+      "status": 404,
+      "body": {
+        "detail": "order not found"
+      }
+    }
+  ]
+}

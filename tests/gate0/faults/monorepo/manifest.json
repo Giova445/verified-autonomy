@@ -1,0 +1,212 @@
+[
+  {
+    "id": "mr-01",
+    "category": "dead handler",
+    "statement": "Typing into the search box does nothing; the order list never filters.",
+    "breaks_run": false,
+    "patch": "mr-01.patch"
+  },
+  {
+    "id": "mr-02",
+    "category": "wrong field in search/filter",
+    "statement": "Searching by customer name matches nothing because the filter checks the item field instead.",
+    "breaks_run": false,
+    "patch": "mr-02.patch"
+  },
+  {
+    "id": "mr-03",
+    "category": "mocked or hardcoded data",
+    "statement": "The deployed site always shows one fake \"Test User\" order no matter what's in the real order data.",
+    "breaks_run": false,
+    "patch": "mr-03.patch"
+  },
+  {
+    "id": "mr-04",
+    "category": "works in dev but not on the production build",
+    "statement": "The deployed page never loads its script; the build forgot to copy app.js into the output, so the browser gets a 404 and the search box stays disabled forever.",
+    "breaks_run": false,
+    "patch": "mr-04.patch"
+  },
+  {
+    "id": "mr-05",
+    "category": "off-by-one",
+    "statement": "The total shown on the page undercounts because it leaves out the last order in the filtered list.",
+    "breaks_run": false,
+    "patch": "mr-05.patch"
+  },
+  {
+    "id": "mr-06",
+    "category": "wrong sort",
+    "statement": "Orders on the page are sorted by price, most expensive first, instead of appearing in their original order.",
+    "breaks_run": false,
+    "patch": "mr-06.patch"
+  },
+  {
+    "id": "mr-07",
+    "category": "loading/empty/error state wrong",
+    "statement": "The \"Loading orders\" message never goes away, even after the orders have loaded and search is enabled.",
+    "breaks_run": false,
+    "patch": "mr-07.patch"
+  },
+  {
+    "id": "mr-08",
+    "category": "broken link/route",
+    "statement": "Loading the site's homepage returns 404 Not Found because the server looks for home.html instead of index.html.",
+    "breaks_run": false,
+    "patch": "mr-08.patch"
+  },
+  {
+    "id": "mr-09",
+    "category": "crash on edge case",
+    "statement": "Requesting any file that doesn't exist crashes the server with an unhandled exception instead of returning 404.",
+    "breaks_run": false,
+    "patch": "mr-09.patch"
+  },
+  {
+    "id": "mr-10",
+    "category": "stale deploy or wrong build",
+    "statement": "If PORT isn't set, the server doesn't fail clearly; it silently starts listening on a random port that nothing can find.",
+    "breaks_run": false,
+    "patch": "mr-10.patch"
+  },
+  {
+    "id": "mr-11",
+    "category": "mocked or hardcoded data",
+    "statement": "Every order on the page shows the item name \"Widget\", no matter what was actually ordered.",
+    "breaks_run": false,
+    "patch": "mr-11.patch"
+  },
+  {
+    "id": "mr-12",
+    "category": "build or start breaks",
+    "statement": "Running the production build fails outright with a module-not-found error, so there is nothing to deploy.",
+    "breaks_run": true,
+    "patch": "mr-12.patch"
+  },
+  {
+    "id": "mr-13",
+    "category": "works in dev but not on the production build",
+    "statement": "The built site's data file is named orders-data.json but the page still requests /orders.json, so the order list never loads (404) after a production build, even though the same files work if served ad hoc in a dev sandbox.",
+    "breaks_run": false,
+    "patch": "mr-13.patch"
+  },
+  {
+    "id": "mr-14",
+    "category": "dead handler",
+    "statement": "The search box never becomes usable; it stays greyed out even after orders finish loading.",
+    "breaks_run": false,
+    "patch": "mr-14.patch"
+  },
+  {
+    "id": "mr-15",
+    "category": "wrong computation",
+    "statement": "Typing a search still shows the total for every order, not just the ones matching the search.",
+    "breaks_run": false,
+    "patch": "mr-15.patch"
+  },
+  {
+    "id": "mr-16",
+    "category": "broken link/route",
+    "statement": "The page never runs its script because the tag points at /main.js, a file the server never serves.",
+    "breaks_run": false,
+    "patch": "mr-16.patch"
+  },
+  {
+    "id": "mr-17",
+    "category": "crash on edge case",
+    "statement": "Searching for a customer with no orders crashes the page's script instead of showing a $0 total.",
+    "breaks_run": false,
+    "patch": "mr-17.patch"
+  },
+  {
+    "id": "mr-18",
+    "category": "wrong sort",
+    "statement": "The order list shows results in reverse order compared to the underlying data.",
+    "breaks_run": false,
+    "patch": "mr-18.patch"
+  },
+  {
+    "id": "mr-19",
+    "category": "build or start breaks",
+    "statement": "Package installs no longer link the web app's workspace at all, so the build can't find its own app directory.",
+    "breaks_run": true,
+    "patch": "mr-19.patch"
+  },
+  {
+    "id": "mr-20",
+    "category": "build or start breaks",
+    "statement": "Running the deploy's build script fails immediately: it looks for build.js, but the real script is build.mjs.",
+    "breaks_run": true,
+    "patch": "mr-20.patch"
+  },
+  {
+    "id": "mr-21",
+    "category": "wrong field displayed",
+    "statement": "Each row on the page shows the item name before the customer's name, reversed from what the page is supposed to show.",
+    "breaks_run": false,
+    "patch": "mr-21.patch"
+  },
+  {
+    "id": "mr-22",
+    "category": "wrong computation",
+    "statement": "The total on the page shows a garbled number like \"0480095\" instead of the correct sum, because of a string-concatenation bug.",
+    "breaks_run": false,
+    "patch": "mr-22.patch"
+  },
+  {
+    "id": "mr-23",
+    "category": "stale deploy or wrong build",
+    "statement": "The server stops declaring a content type for the orders data file, serving it as application/octet-stream instead of application/json.",
+    "breaks_run": false,
+    "patch": "mr-23.patch"
+  },
+  {
+    "id": "mr-24",
+    "category": "search/filter behavior wrong",
+    "statement": "Searching for a customer's last name (like \"Nguyen\") finds nothing; only matches at the very start of the name work now.",
+    "breaks_run": false,
+    "patch": "mr-24.patch"
+  },
+  {
+    "id": "mr-25",
+    "category": "build or start breaks",
+    "statement": "The build fails outright: the shared orders module has invalid syntax, so nothing can be built or served.",
+    "breaks_run": true,
+    "patch": "mr-25.patch"
+  },
+  {
+    "id": "mr-26",
+    "category": "loading/empty/error state wrong",
+    "statement": "The orders page never finishes loading; it fetches a data file that doesn't exist, and there is no error message, just the loading spinner forever.",
+    "breaks_run": false,
+    "patch": "mr-26.patch"
+  },
+  {
+    "id": "mr-27",
+    "category": "works in dev but not on the production build",
+    "statement": "Every price on the deployed site is 100x too large (e.g. $48000 instead of $480) because the build multiplies totals by 100 before writing the data file.",
+    "breaks_run": false,
+    "patch": "mr-27.patch"
+  },
+  {
+    "id": "mr-28",
+    "category": "build or start breaks",
+    "statement": "`npm start` always tries to bind to port 80, which fails with a permissions error on any machine that isn't running as root.",
+    "breaks_run": true,
+    "patch": "mr-28.patch"
+  },
+  {
+    "id": "mr-29",
+    "category": "off-by-one",
+    "statement": "The order list only ever shows every other matching order; roughly half of them silently disappear.",
+    "breaks_run": false,
+    "patch": "mr-29.patch"
+  },
+  {
+    "id": "mr-30",
+    "category": "dead handler",
+    "statement": "The page's script can't find the order list container (id was renamed), so nothing ever renders even though the data loads fine.",
+    "breaks_run": false,
+    "patch": "mr-30.patch"
+  }
+]

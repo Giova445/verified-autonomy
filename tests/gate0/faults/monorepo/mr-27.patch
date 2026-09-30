@@ -1,0 +1,11 @@
+diff --git a/apps/web/build.mjs b/apps/web/build.mjs
+index 1999c4d..b65827d 100644
+--- a/apps/web/build.mjs
++++ b/apps/web/build.mjs
+@@ -10,5 +10,5 @@ rmSync(dist, { recursive: true, force: true });
+ mkdirSync(dist, { recursive: true });
+ copyFileSync(join(here, "src", "index.html"), join(dist, "index.html"));
+ copyFileSync(join(here, "src", "app.js"), join(dist, "app.js"));
+-writeFileSync(join(dist, "orders.json"), JSON.stringify(orders));
++writeFileSync(join(dist, "orders.json"), JSON.stringify(orders.map((o) => ({ ...o, total: o.total * 100 }))));
+ console.log(`built ${orders.length} orders into ${dist}`);

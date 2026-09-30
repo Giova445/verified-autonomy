@@ -103,6 +103,9 @@ make_repo(){
   ensure_tmp
   d="$(mktemp -d "$TMP/$name.XXXXXX")" && d="$(cd "$d" && pwd -P)"
   cp -R "$FIXTURES/$name/." "$d/"
+  if [ "${G4_CONTRACTS:-}" = "spec" ]; then
+    rm -rf "$d/.claude" && cp -R "$GATE0/spec/$name/.claude" "$d/.claude" || return 1
+  fi
   if grep -rqs 'drive\.mjs' "$d/.claude"; then
     mkdir -p "$d/.claude/gates" && cp "$DRIVE" "$d/.claude/gates/drive.mjs"
   fi

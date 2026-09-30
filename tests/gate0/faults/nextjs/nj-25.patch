@@ -1,0 +1,11 @@
+diff --git a/app/api/orders/route.js b/app/api/orders/route.js
+index aa48ddd..19b40d2 100644
+--- a/app/api/orders/route.js
++++ b/app/api/orders/route.js
+@@ -1,5 +1,5 @@
+ import { orders } from "../../../lib/orders.js";
+ 
+ export function GET() {
+-  return Response.json(orders);
++  return Response.json(orders.map((o) => ({ ...o, amount: o.total, total: undefined })));
+ }

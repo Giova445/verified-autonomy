@@ -1,0 +1,13 @@
+diff --git a/src/orders.mjs b/src/orders.mjs
+index 0953980..e94b55b 100644
+--- a/src/orders.mjs
++++ b/src/orders.mjs
+@@ -8,7 +8,7 @@ export const orders = [
+ 
+ export function search(query) {
+   const needle = query.trim().toLowerCase();
+-  return orders.filter((order) => order.customer.toLowerCase().includes(needle));
++  return orders.filter((order) => order.customer.includes(needle));
+ }
+ 
+ export function formatRow(order) {

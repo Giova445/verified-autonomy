@@ -1,0 +1,40 @@
+{
+  "requests": [
+    {
+      "path": "/api/orders?q=BOB",
+      "status": 200,
+      "body": [
+        {
+          "id": 1002,
+          "customer": "Bob Ferreira",
+          "item": "Monitor arm",
+          "total": 95
+        }
+      ]
+    },
+    {
+      "path": "/api/orders?q=%20bob%20",
+      "status": 200,
+      "body": [
+        {
+          "id": 1002,
+          "customer": "Bob Ferreira",
+          "item": "Monitor arm",
+          "total": 95
+        }
+      ]
+    },
+    {
+      "path": "/api/orders?q=%20OKAFOR%20",
+      "status": 200,
+      "body": [
+        {
+          "id": 1004,
+          "customer": "Chidi Okafor",
+          "item": "Webcam",
+          "total": 120
+        }
+      ]
+    }
+  ]
+}

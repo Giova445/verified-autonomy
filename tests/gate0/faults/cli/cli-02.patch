@@ -1,0 +1,13 @@
+diff --git a/bin/orders.mjs b/bin/orders.mjs
+index 3d5d35f..1536723 100644
+--- a/bin/orders.mjs
++++ b/bin/orders.mjs
+@@ -17,7 +17,7 @@ if (parsed.error) {
+   process.exit(2);
+ }
+ 
+-const rows = parsed.query ? search(parsed.query) : orders;
++const rows = orders;
+ if (parsed.command === "list") {
+   if (rows.length === 0) console.log(`No orders match ${parsed.query}`);
+   for (const order of rows) console.log(formatRow(order));

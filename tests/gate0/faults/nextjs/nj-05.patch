@@ -1,0 +1,13 @@
+diff --git a/app/orders/page.js b/app/orders/page.js
+index 5800863..be3ba45 100644
+--- a/app/orders/page.js
++++ b/app/orders/page.js
+@@ -27,7 +27,7 @@ export default function OrdersPage() {
+         disabled={orders === null}
+         onChange={(event) => setQuery(event.target.value)}
+       />
+-      {orders === null ? <p id="loading">Loading orders</p> : null}
++      {true ? <p id="loading">Loading orders</p> : null}
+       <ul id="orders">
+         {shown.map((order) => (
+           <li key={order.id} className="order">

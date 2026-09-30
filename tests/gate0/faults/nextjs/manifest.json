@@ -1,0 +1,212 @@
+[
+  {
+    "id": "nj-01",
+    "category": "dead handler",
+    "statement": "Typing in the search box does nothing; the order list never filters as you type.",
+    "breaks_run": false,
+    "patch": "nj-01.patch"
+  },
+  {
+    "id": "nj-02",
+    "category": "wrong field in search/filter",
+    "statement": "Searching by customer name matches nothing; the filter actually checks the item field.",
+    "breaks_run": false,
+    "patch": "nj-02.patch"
+  },
+  {
+    "id": "nj-03",
+    "category": "mocked or hardcoded data",
+    "statement": "The orders page always shows one fake \"Test User\" order, no matter what's really in the order data.",
+    "breaks_run": false,
+    "patch": "nj-03.patch"
+  },
+  {
+    "id": "nj-04",
+    "category": "off-by-one",
+    "statement": "The last matching order for any search is always missing from the results.",
+    "breaks_run": false,
+    "patch": "nj-04.patch"
+  },
+  {
+    "id": "nj-05",
+    "category": "loading/empty/error state wrong",
+    "statement": "The \"Loading orders\" message never goes away, even after the orders have finished loading and are visible on the page.",
+    "breaks_run": false,
+    "patch": "nj-05.patch"
+  },
+  {
+    "id": "nj-06",
+    "category": "loading/empty/error state wrong",
+    "statement": "Searching for a customer with no orders shows a blank list with no \"No orders match\" message at all.",
+    "breaks_run": false,
+    "patch": "nj-06.patch"
+  },
+  {
+    "id": "nj-07",
+    "category": "broken link/route",
+    "statement": "Clicking \"Orders\" from the admin home page leads to a 404 instead of the orders page.",
+    "breaks_run": false,
+    "patch": "nj-07.patch"
+  },
+  {
+    "id": "nj-08",
+    "category": "wrong sort",
+    "statement": "Orders on the page are sorted by price, highest first, instead of their normal order.",
+    "breaks_run": false,
+    "patch": "nj-08.patch"
+  },
+  {
+    "id": "nj-09",
+    "category": "works in dev but not on the production build",
+    "statement": "The orders list works when developing locally but comes back completely empty once the app is built for production.",
+    "breaks_run": false,
+    "patch": "nj-09.patch"
+  },
+  {
+    "id": "nj-10",
+    "category": "stale deploy or wrong build",
+    "statement": "The two newest orders (Chidi Okafor's webcam and Dana Whitfield's headset) never appear anywhere in the app; it's serving an outdated snapshot of the order data.",
+    "breaks_run": false,
+    "patch": "nj-10.patch"
+  },
+  {
+    "id": "nj-11",
+    "category": "build or start breaks",
+    "statement": "The whole app fails to build: the orders page throws while rendering its initial (still-loading) state, and the production build never completes.",
+    "breaks_run": true,
+    "patch": "nj-11.patch"
+  },
+  {
+    "id": "nj-12",
+    "category": "wrong field displayed",
+    "statement": "Each row shows the item name where the customer's name should be, and vice versa.",
+    "breaks_run": false,
+    "patch": "nj-12.patch"
+  },
+  {
+    "id": "nj-13",
+    "category": "dead handler",
+    "statement": "The search box is disabled as soon as orders finish loading; you can only type into it before the data has arrived.",
+    "breaks_run": false,
+    "patch": "nj-13.patch"
+  },
+  {
+    "id": "nj-14",
+    "category": "search/filter behavior wrong",
+    "statement": "Typing a lowercase name like \"alice\" finds nothing, because the search is now case-sensitive.",
+    "breaks_run": false,
+    "patch": "nj-14.patch"
+  },
+  {
+    "id": "nj-15",
+    "category": "broken link/route",
+    "statement": "The orders page never loads any data; the API now only accepts POST requests, so the browser's normal GET request gets a 405 error.",
+    "breaks_run": false,
+    "patch": "nj-15.patch"
+  },
+  {
+    "id": "nj-16",
+    "category": "build or start breaks",
+    "statement": "The whole app fails to build; a broken tag in the root layout stops the production build from completing.",
+    "breaks_run": true,
+    "patch": "nj-16.patch"
+  },
+  {
+    "id": "nj-17",
+    "category": "build or start breaks",
+    "statement": "The production build fails because static export was turned on, but the app has a live API route (/api/orders) that static export can't support.",
+    "breaks_run": true,
+    "patch": "nj-17.patch"
+  },
+  {
+    "id": "nj-19",
+    "category": "build or start breaks",
+    "statement": "The admin home page fails to build/render at all because of a bad import; nothing loads.",
+    "breaks_run": true,
+    "patch": "nj-19.patch"
+  },
+  {
+    "id": "nj-20",
+    "category": "wrong field displayed",
+    "statement": "The browser tab always shows \"Untitled\" instead of \"Orders\" as the page title.",
+    "breaks_run": false,
+    "patch": "nj-20.patch"
+  },
+  {
+    "id": "nj-21",
+    "category": "build or start breaks",
+    "statement": "The whole app fails to build; the admin home page references an undefined variable, and the production build never completes.",
+    "breaks_run": true,
+    "patch": "nj-21.patch"
+  },
+  {
+    "id": "nj-22",
+    "category": "dead handler",
+    "statement": "The orders page never loads any data at all; it's stuck on \"Loading orders\" forever.",
+    "breaks_run": false,
+    "patch": "nj-22.patch"
+  },
+  {
+    "id": "nj-23",
+    "category": "wrong sort",
+    "statement": "The order list shows results in reverse order from normal.",
+    "breaks_run": false,
+    "patch": "nj-23.patch"
+  },
+  {
+    "id": "nj-24",
+    "category": "mocked or hardcoded data",
+    "statement": "Every order everywhere in the app shows \"Sample Customer\" as the buyer, regardless of who actually ordered it.",
+    "breaks_run": false,
+    "patch": "nj-24.patch"
+  },
+  {
+    "id": "nj-25",
+    "category": "wrong field in search/filter",
+    "statement": "Every order on the page shows a blank instead of a price because the API renamed the price field from total to amount without updating the page.",
+    "breaks_run": false,
+    "patch": "nj-25.patch"
+  },
+  {
+    "id": "nj-26",
+    "category": "stale deploy or wrong build",
+    "statement": "`npm start` always binds to port 3999 no matter what port the deployment expects, so the live site is unreachable at its real address.",
+    "breaks_run": false,
+    "patch": "nj-26.patch"
+  },
+  {
+    "id": "nj-27",
+    "category": "loading/empty/error state wrong",
+    "statement": "The orders page loads with an invisible pre-filled search filter, so it looks empty until you clear a search box that appears blank.",
+    "breaks_run": false,
+    "patch": "nj-27.patch"
+  },
+  {
+    "id": "nj-28",
+    "category": "search/filter behavior wrong",
+    "statement": "A search with a leading space never matches, even though the same text without the space would.",
+    "breaks_run": false,
+    "patch": "nj-28.patch"
+  },
+  {
+    "id": "nj-29",
+    "category": "works in dev but not on the production build",
+    "statement": "The production build now uses a different bundler than the one this app was written for, and it fails (or behaves differently) as a result.",
+    "breaks_run": false,
+    "patch": "nj-29.patch"
+  },
+  {
+    "id": "nj-30",
+    "category": "build or start breaks",
+    "statement": "The whole app fails to build: the admin home page's \"Orders\" link is missing its href, and Next.js can't prerender the page without one.",
+    "breaks_run": true,
+    "patch": "nj-30.patch"
+  },
+  {
+    "id": "nj-31",
+    "category": "loading/empty/error state wrong",
+    "statement": "Right when the page opens, it briefly claims \"No orders match\" before any data has even loaded, instead of showing a loading message.",
+    "breaks_run": false,
+    "patch": "nj-31.patch"
+  }
+]

@@ -1,0 +1,88 @@
+{
+  "outcomes": [
+    {
+      "name": "list prints every order",
+      "expect": "Ticket criterion 1: \"`orders list` prints one line per order in the id order above, each showing id, customer, item and total, in that order, with the total to two decimals (the first line carries 1001, Alice Nguyen, Standing desk, 480.00).\" Criterion 7: \"The successful runs above exit with status 0.\"",
+      "check": "python3 .claude/checks/cli.py .claude/checks/list-all.json check",
+      "control": "python3 .claude/checks/cli.py .claude/checks/list-all.json control"
+    },
+    {
+      "name": "total sums every order",
+      "expect": "Ticket criterion 2: \"`orders total` prints one line, `Total: 880.00`.\" Criterion 7: \"The successful runs above exit with status 0.\"",
+      "check": "python3 .claude/checks/cli.py .claude/checks/total-all.json check",
+      "control": "python3 .claude/checks/cli.py .claude/checks/total-all.json control"
+    },
+    {
+      "name": "search limits list to one customer",
+      "expect": "Ticket criterion 3: \"`--search NAME` limits either command to orders whose customer name contains NAME, ignoring case and surrounding spaces. `orders list --search alice` prints the two Alice Nguyen lines; `orders total --search ALICE` prints `Total: 515.00`.\" Proved here: the list example.",
+      "check": "python3 .claude/checks/cli.py .claude/checks/search-list.json check",
+      "control": "python3 .claude/checks/cli.py .claude/checks/search-list.json control"
+    },
+    {
+      "name": "search limits total to one customer",
+      "expect": "Ticket criterion 3: \"`--search NAME` limits either command to orders whose customer name contains NAME, ignoring case and surrounding spaces. `orders list --search alice` prints the two Alice Nguyen lines; `orders total --search ALICE` prints `Total: 515.00`.\" Proved here: the total example.",
+      "check": "python3 .claude/checks/cli.py .claude/checks/search-total.json check",
+      "control": "python3 .claude/checks/cli.py .claude/checks/search-total.json control"
+    },
+    {
+      "name": "search matches inside a customer name",
+      "expect": "Ticket criterion 3: \"`--search NAME` limits either command to orders whose customer name contains NAME, ignoring case and surrounding spaces. `orders list --search alice` prints the two Alice Nguyen lines; `orders total --search ALICE` prints `Total: 515.00`.\" Proved here: contains, so a piece from the middle of a name, or a full name with its space, finds that customer.",
+      "check": "python3 .claude/checks/cli.py .claude/checks/search-inside-name.json check",
+      "control": "python3 .claude/checks/cli.py .claude/checks/search-inside-name.json control"
+    },
+    {
+      "name": "search ignores surrounding spaces",
+      "expect": "Ticket criterion 3: \"`--search NAME` limits either command to orders whose customer name contains NAME, ignoring case and surrounding spaces. `orders list --search alice` prints the two Alice Nguyen lines; `orders total --search ALICE` prints `Total: 515.00`.\" Proved here: spaces around NAME.",
+      "check": "python3 .claude/checks/cli.py .claude/checks/search-spaces.json check",
+      "control": "python3 .claude/checks/cli.py .claude/checks/search-spaces.json control"
+    },
+    {
+      "name": "search looks at customer names only",
+      "expect": "Ticket criterion 4: \"Search looks at customer names only: `orders list --search desk` finds nothing.\" Proved here for the item, id and total columns, on list and on total.",
+      "check": "python3 .claude/checks/cli.py .claude/checks/search-customer-only.json check",
+      "control": "python3 .claude/checks/cli.py .claude/checks/search-customer-only.json control"
+    },
+    {
+      "name": "list says when nothing matches",
+      "expect": "Ticket criterion 5: \"When nothing matches, `list` prints `No orders match NAME` (for example `No orders match zed`) and `total` prints `Total: 0.00`.\" Proved here: list. Criterion 7: \"The successful runs above exit with status 0.\"",
+      "check": "python3 .claude/checks/cli.py .claude/checks/nothing-matches-list.json check",
+      "control": "python3 .claude/checks/cli.py .claude/checks/nothing-matches-list.json control"
+    },
+    {
+      "name": "total is zero when nothing matches",
+      "expect": "Ticket criterion 5: \"When nothing matches, `list` prints `No orders match NAME` (for example `No orders match zed`) and `total` prints `Total: 0.00`.\" Proved here: total. Criterion 7: \"The successful runs above exit with status 0.\"",
+      "check": "python3 .claude/checks/cli.py .claude/checks/nothing-matches-total.json check",
+      "control": "python3 .claude/checks/cli.py .claude/checks/nothing-matches-total.json control"
+    },
+    {
+      "name": "no command prints usage",
+      "expect": "Ticket criterion 6: \"No command, an unknown command, `--search` without a name, or extra arguments prints `usage: orders {list|total} [--search NAME]` on the error stream, prints no orders, and exits with a non-zero status.\" Proved here: no command.",
+      "check": "python3 .claude/checks/cli.py .claude/checks/usage-no-command.json check",
+      "control": "python3 .claude/checks/cli.py .claude/checks/usage-no-command.json control"
+    },
+    {
+      "name": "unknown command prints usage",
+      "expect": "Ticket criterion 6: \"No command, an unknown command, `--search` without a name, or extra arguments prints `usage: orders {list|total} [--search NAME]` on the error stream, prints no orders, and exits with a non-zero status.\" Proved here: an unknown command.",
+      "check": "python3 .claude/checks/cli.py .claude/checks/usage-unknown-command.json check",
+      "control": "python3 .claude/checks/cli.py .claude/checks/usage-unknown-command.json control"
+    },
+    {
+      "name": "search without a name prints usage",
+      "expect": "Ticket criterion 6: \"No command, an unknown command, `--search` without a name, or extra arguments prints `usage: orders {list|total} [--search NAME]` on the error stream, prints no orders, and exits with a non-zero status.\" Proved here: --search without a name.",
+      "check": "python3 .claude/checks/cli.py .claude/checks/usage-search-without-name.json check",
+      "control": "python3 .claude/checks/cli.py .claude/checks/usage-search-without-name.json control"
+    },
+    {
+      "name": "extra arguments print usage",
+      "expect": "Ticket criterion 6: \"No command, an unknown command, `--search` without a name, or extra arguments prints `usage: orders {list|total} [--search NAME]` on the error stream, prints no orders, and exits with a non-zero status.\" Proved here: extra arguments.",
+      "check": "python3 .claude/checks/cli.py .claude/checks/usage-extra-arguments.json check",
+      "control": "python3 .claude/checks/cli.py .claude/checks/usage-extra-arguments.json control"
+    },
+    {
+      "name": "successful runs exit 0",
+      "expect": "Ticket criterion 7: \"The successful runs above exit with status 0.\" Proved here for list and total, with and without --search, matching or not.",
+      "check": "python3 .claude/checks/cli.py .claude/checks/exit-zero.json check",
+      "control": "python3 .claude/checks/cli.py .claude/checks/exit-zero.json control"
+    }
+  ]
+}

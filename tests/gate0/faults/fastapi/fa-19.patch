@@ -1,0 +1,16 @@
+diff --git a/app/main.py b/app/main.py
+index 3d672be..c720bd4 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -16,6 +16,11 @@ def health():
+     return {"status": "ok"}
+ 
+ 
++@app.get("/api/orders")
++def list_orders_empty():
++    return []
++
++
+ @app.get("/api/orders")
+ def list_orders(q: str = ""):
+     needle = q.strip().lower()

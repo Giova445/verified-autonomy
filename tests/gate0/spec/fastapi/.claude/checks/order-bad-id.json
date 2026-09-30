@@ -1,0 +1,12 @@
+{
+  "requests": [
+    {
+      "path": "/api/orders/abc",
+      "status_class": 4
+    },
+    {
+      "path": "/api/orders/1004abc",
+      "status_class": 4
+    }
+  ]
+}

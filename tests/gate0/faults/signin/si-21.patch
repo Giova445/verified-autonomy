@@ -1,0 +1,13 @@
+diff --git a/app/main.py b/app/main.py
+index 6c1034c..70879f7 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -43,7 +43,7 @@ def home():
+     return RedirectResponse("/orders", status_code=303)
+ 
+ 
+-@app.get("/login", response_class=HTMLResponse)
++@app.get("/log-in", response_class=HTMLResponse)
+ def login_form(error: str = ""):
+     message = "<p id=\"error\" role=\"alert\">Wrong email or password</p>" if error else ""
+     return page("Sign in", f"""<h1>Sign in</h1>{message}

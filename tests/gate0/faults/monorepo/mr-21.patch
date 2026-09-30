@@ -1,0 +1,13 @@
+diff --git a/apps/web/src/app.js b/apps/web/src/app.js
+index d280df3..e8ab766 100644
+--- a/apps/web/src/app.js
++++ b/apps/web/src/app.js
+@@ -10,7 +10,7 @@ function render(orders, query) {
+     ...shown.map((order) => {
+       const item = document.createElement("li");
+       item.className = "order";
+-      item.textContent = `${order.customer} ${order.item} $${order.total}`;
++      item.textContent = `${order.item} ${order.customer} $${order.total}`;
+       return item;
+     }),
+   );

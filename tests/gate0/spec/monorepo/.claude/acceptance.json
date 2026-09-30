@@ -1,0 +1,74 @@
+{
+  "environments": {
+    "local": {
+      "build": "npm install --no-audit --no-fund && npm run build --workspace @fixture/web",
+      "start": "npm run start --workspace @fixture/web",
+      "ready": "/"
+    }
+  },
+  "outcomes": [
+    {
+      "name": "orders page lists every order",
+      "expect": "Acceptance criterion 1: `/` shows the heading \"Orders\", a search box labelled \"Search by customer\", and one row per order in the id order above, each reading customer, item, then total with a dollar sign, e.g. \"Alice Nguyen Standing desk $480\".",
+      "env": "local",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/orders-list.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/orders-list-wrong-order.json"
+    },
+    {
+      "name": "total is the sum of the rows shown",
+      "expect": "Acceptance criterion 2: Below the list a line reads \"Total: $880\", the sum of the rows shown.",
+      "env": "local",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/total.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/total-wrong.json"
+    },
+    {
+      "name": "loading state shows a message and disables search",
+      "expect": "Acceptance criterion 3 (first sentence): While orders are loading, the page shows \"Loading orders\" and the search box is disabled.",
+      "env": "local",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/loading.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/loading-enabled.json"
+    },
+    {
+      "name": "search opens up once orders are loaded",
+      "expect": "Acceptance criterion 3 (second sentence): Once loaded, the message disappears and the box can be typed in.",
+      "env": "local",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/loaded.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/loaded-nomatch.json"
+    },
+    {
+      "name": "typing a customer narrows the rows and the total follows",
+      "expect": "Acceptance criterion 4: Typing narrows the rows to orders whose customer name contains the text, ignoring case and surrounding spaces, and the total follows the rows: \"alice\" shows orders 1001 and 1003 and \"Total: $515\".",
+      "env": "local",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/search-alice.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/search-alice-nomatch.json"
+    },
+    {
+      "name": "search ignores case and surrounding spaces",
+      "expect": "Acceptance criterion 4: Typing narrows the rows to orders whose customer name contains the text, ignoring case and surrounding spaces, and the total follows the rows.",
+      "env": "local",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/search-case-spaces.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/search-case-spaces-nomatch.json"
+    },
+    {
+      "name": "search looks at customer names only",
+      "expect": "Acceptance criterion 5: Search looks at customer names only: \"desk\", an item word, shows no rows and \"Total: $0\".",
+      "env": "local",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/search-customer-only.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/search-customer-only-item-matches.json"
+    },
+    {
+      "name": "no match empties the list and zeroes the total",
+      "expect": "Acceptance criterion 6: When nothing matches (for example \"zed\"), the list is empty and the total reads \"Total: $0\".",
+      "env": "local",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/search-empty.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/search-empty-ignores-filter.json"
+    },
+    {
+      "name": "clearing the box restores every order",
+      "expect": "Acceptance criterion 7: Clearing the box restores all five rows and \"Total: $880\".",
+      "env": "local",
+      "check": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/search-clear.json",
+      "control": "node .claude/gates/drive.mjs \"$BASE_URL/\" .claude/checks/search-clear-not-cleared.json"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+diff --git a/app/main.py b/app/main.py
+index 6c1034c..008adbf 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -58,7 +58,7 @@ def login_form(error: str = ""):
+ async def login(request: Request):
+     form = parse_qs((await request.body()).decode())
+     email = (form.get("email") or [""])[0]
+-    password = (form.get("password") or [""])[0]
++    password = form.get("password")[0]
+     if not password_ok(email, password):
+         return RedirectResponse("/login?error=1", status_code=303)
+     token = secrets.token_hex(16)

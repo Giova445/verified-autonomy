@@ -1,0 +1,13 @@
+diff --git a/app/page.js b/app/page.js
+index aabcee4..6e88091 100644
+--- a/app/page.js
++++ b/app/page.js
+@@ -3,7 +3,7 @@ import Link from "next/link";
+ export default function Home() {
+   return (
+     <main>
+-      <h1>Shop admin</h1>
++      <h1>{title}</h1>
+       <Link href="/orders">Orders</Link>
+     </main>
+   );

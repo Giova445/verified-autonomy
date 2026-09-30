@@ -1,0 +1,13 @@
+diff --git a/app/layout.js b/app/layout.js
+index ccc1dd3..b052f3c 100644
+--- a/app/layout.js
++++ b/app/layout.js
+@@ -3,7 +3,7 @@ export const metadata = { title: "Orders" };
+ export default function RootLayout({ children }) {
+   return (
+     <html lang="en">
+-      <body>{children}</body>
++      <body>{children}</body></extra>
+     </html>
+   );
+ }

@@ -1,0 +1,9 @@
+{
+  "check": [
+    {"args": ["list"], "exit": 0, "stdout_rows": [["1001", "Alice Nguyen", "Standing desk", "480.00"], ["1002", "Bob Ferreira", "Monitor arm", "95.00"], ["1003", "Alice Nguyen", "Desk mat", "35.00"], ["1004", "Chidi Okafor", "Webcam", "120.00"], ["1005", "Dana Whitfield", "Headset", "150.00"]], "stderr_lines": []}
+  ],
+  "control": [
+    {"args": ["list", "--search", "qqq"], "exit": 0, "stdout_rows": [["1001", "Alice Nguyen", "Standing desk", "480.00"], ["1002", "Bob Ferreira", "Monitor arm", "95.00"], ["1003", "Alice Nguyen", "Desk mat", "35.00"], ["1004", "Chidi Okafor", "Webcam", "120.00"], ["1005", "Dana Whitfield", "Headset", "150.00"]], "stderr_lines": []},
+    {"args": ["list"], "exit": 0, "stdout_rows": [["1001", "Alice Nguyen", "Standing desk", "480"], ["1002", "Bob Ferreira", "Monitor arm", "95.00"], ["1003", "Alice Nguyen", "Desk mat", "35.00"], ["1004", "Chidi Okafor", "Webcam", "120.00"], ["1005", "Dana Whitfield", "Headset", "150.00"]], "stderr_lines": []}
+  ]
+}

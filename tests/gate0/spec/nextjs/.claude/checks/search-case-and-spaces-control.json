@@ -1,0 +1,41 @@
+[
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": " QZXV "
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 2
+    },
+    "timeout": 1000
+  },
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": "  wvkq"
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 1
+    },
+    "timeout": 1000
+  },
+  {
+    "fill": {
+      "selector": "role=searchbox[name=\"Search by customer\"]",
+      "value": "JHGF  "
+    }
+  },
+  {
+    "count": {
+      "selector": "main li",
+      "equals": 1
+    },
+    "timeout": 1000
+  }
+]

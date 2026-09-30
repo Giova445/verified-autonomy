@@ -1,0 +1,17 @@
+diff --git a/app/orders/page.js b/app/orders/page.js
+index 5800863..89abe04 100644
+--- a/app/orders/page.js
++++ b/app/orders/page.js
+@@ -6,11 +6,7 @@ export default function OrdersPage() {
+   const [orders, setOrders] = useState(null);
+   const [query, setQuery] = useState("");
+ 
+-  useEffect(() => {
+-    fetch("/api/orders")
+-      .then((response) => response.json())
+-      .then(setOrders);
+-  }, []);
++  useEffect(() => {}, []);
+ 
+   const needle = query.trim().toLowerCase();
+   const shown = (orders ?? []).filter((order) => order.customer.toLowerCase().includes(needle));

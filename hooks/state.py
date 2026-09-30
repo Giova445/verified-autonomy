@@ -559,13 +559,24 @@ def gate_record(gate):
     return {"name": gate.get("gate"), "exit_code": gate.get("exit_code"),
             "duration_ms": None if skipped else gate.get("duration_ms"), "skipped": skipped}
 
+def cannot_run_fields(outcome):
+    if outcome.get("verdict") != "CANNOT RUN":
+        return {}
+    reason, status = outcome.get("reason"), outcome.get("status")
+    fields = {"reason": reason if isinstance(reason, str) and reason else "unspecified"}
+    if isinstance(status, int) and not isinstance(status, bool):
+        fields["status"] = status
+    return fields
+
+def outcome_record(outcome):
+    return dict({"name": outcome.get("name"), "verdict": outcome.get("verdict")}, **cannot_run_fields(outcome))
+
 def product_record(ctx, prod):
     outcomes = []
     if prod.get("measured"):
         data = load_json(os.path.join(ctx.evidence, "product.json"))
         listed = data.get("outcomes") if isinstance(data, dict) else None
-        outcomes = [{"name": o.get("name"), "verdict": o.get("verdict")}
-                    for o in listed or [] if isinstance(o, dict)]
+        outcomes = [outcome_record(o) for o in listed or [] if isinstance(o, dict)]
     return {"status": prod["status"], "outcomes": outcomes}
 
 def run_record(ctx, sub, begun, result):

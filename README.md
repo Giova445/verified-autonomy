@@ -75,6 +75,10 @@ in a count (`2 could not be checked: 1 build_failed, 1 environment`):
 
 - `start`, `ready`: the harness starts the app on a free `$PORT` (with
   `BASE_URL=http://localhost:$PORT`), waits for `ready`, runs the outcomes, and stops the app.
+  A `ready` URL path passes when the server answers it with any HTTP status (100 to 599, a 404
+  or 405 included), not only a 2xx: a server that answers is up, and the outcome's check judges
+  the page. A refused or reset connection, or no answer in 3 s, is not ready. (Before this change
+  a ready page that answered 404 or 405 was CANNOT RUN; its check now runs and FAILS.)
   `start` stays in the foreground: the harness watches that process, and an outcome it finds
   dead is CANNOT RUN, never FAILS or holds. A port already answering before `start` is CANNOT
   RUN too, unless the environment declares `"reuse": true`. Environments with no `start`, or

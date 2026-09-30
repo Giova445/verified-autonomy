@@ -8,6 +8,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 CONTRACT = ".claude/acceptance.json"
@@ -159,13 +160,22 @@ def answering(port):
             pass
     return None
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
 def is_ready(ready, root, extra):
     if not ready.startswith("/"):
         return sh(ready, root, extra, timeout=10)[0] == 0
     base = answering(extra["PORT"])
+    if not base:
+        return False
     try:
-        urllib.request.build_opener(urllib.request.ProxyHandler({})).open(base + ready, timeout=3).close()
+        urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect).open(base + ready, timeout=3).close()
         return True
+    except urllib.error.HTTPError as err:
+        err.close()
+        return 100 <= err.code <= 599
     except Exception:
         return False
 
@@ -791,6 +801,37 @@ def selftest():
     chk("a `reuse` environment is not refused for a port that answers after `build`: its `start` still runs",
         verdicts(run) == ["holds"] and os.path.exists(os.path.join(run[2], "hits")))
 
+    STATUS = ("import http.server, os, socket\nsocket.getfqdn = lambda name='': name\n"
+              "class H(http.server.BaseHTTPRequestHandler):\n    def do_GET(self):\n        code = int(self.path.rsplit('/', 1)[1])\n"
+              "        self.send_response(code)\n        if 300 <= code < 400:\n            self.send_header('Location', 'http://127.0.0.1:1/')\n"
+              "        self.send_header('Content-Length', '0')\n        self.end_headers()\n    def log_message(self, *args):\n        pass\n"
+              "http.server.ThreadingHTTPServer(('127.0.0.1', int(os.environ['PORT'])), H).serve_forever()\n")
+    FETCH = ("import os, sys, urllib.request\n"
+             "urllib.request.build_opener(urllib.request.ProxyHandler({})).open(os.environ['BASE_URL'] + sys.argv[1], timeout=5).read()\n")
+    SILENT = ("import os, socket\ns = socket.socket()\ns.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+              "s.bind(('127.0.0.1', int(os.environ['PORT'])))\ns.listen(8)\nheld = []\nwhile True:\n    held.append(s.accept()[0])\n")
+
+    def ready_probe(name, start, ready, wait, check="exit 0"):
+        d = scripts(repo(name))
+        for fname, body in (("status.py", STATUS), ("fetch.py", FETCH), ("silent.py", SILENT)):
+            with open(os.path.join(d, fname), "w") as fh:
+                fh.write(body)
+        return go(name, {"environments": {"local": {"start": start, "ready": ready}},
+                         "outcomes": [out(check, "exit 1", env="local")]}, {"ACCEPT_READY_TIMEOUT": str(wait)})
+
+    served = [ready_probe("ready-http%d" % c, "exec python3 status.py", "/s/%d" % c, 8, "python3 fetch.py /s/%d" % c) for c in (404, 405, 500, 302)]
+    chk("a `ready` path that answers with an HTTP error (404, 405, 500) is up: the outcome's own check runs and FAILS, never CANNOT RUN",
+        [verdicts(r) for r in served[:3]] == [["FAILS"]] * 3 and not any("never passed" in r[1] for r in served[:3]))
+    chk("a `ready` path that answers 302 to a host nothing serves is up too: the redirect is an answer, not followed",
+        verdicts(served[3]) == ["FAILS"] and "never passed" not in served[3][1])
+    refused = ready_probe("ready-refused", "exec sleep 60", "/", 1)
+    reset = ready_probe("ready-reset", "exec python3 listen.py", "/", 1)
+    chk("a `ready` path whose connection is refused or reset with no HTTP reply is still not ready: CANNOT RUN, bounded by ACCEPT_READY_TIMEOUT",
+        all(verdicts(r) == ["CANNOT RUN"] and "never passed in 1s" in r[1] for r in (refused, reset)))
+    hung = ready_probe("ready-hung", "exec python3 silent.py", "/", 1)
+    chk("a `ready` path whose server accepts but never answers is still not ready: CANNOT RUN, never held",
+        verdicts(hung) == ["CANNOT RUN"] and "never passed in 1s" in hung[1])
+
     def built(tree=None, passed=None, build="echo b >> builds; test -f fail-build && exit 4; true"):
         env = {"VERIFY_TREE": tree or "", "VERIFY_PASSED": json.dumps(passed or [])}
         run = go("build", {"environments": {"local": {"build": build, "start": "test -f fail-build || touch up; exec sleep 60",
@@ -891,7 +932,7 @@ def selftest():
         and any("Search results: lists only matches" in l for l in st[1]) and summarize(go("absent", None)[3])[0] == "absent")
 
     shutil.rmtree(tmp, ignore_errors=True)
-    expected = 60
+    expected = 64
     print("\nSELF-TEST %s" % ("PASSED  (%d checks)" % expected if passed == ran == expected else "FAILED  (%d of %d checks)" % (passed, expected)))
     return 0 if passed == ran == expected else 1
 

@@ -35,6 +35,13 @@ ticket states it.
   exports `BASE_URL=http://localhost:$PORT`, runs `build` unless this tree is already built,
   starts the app, waits for `ready`, runs every outcome, and stops the app. A failed build is
   CANNOT RUN.
+- `ready` is a URL path (`/health`) or a command. A URL path passes as soon as the server
+  answers it with any HTTP status, 100 to 599, a 404, 405 or 500 included: a server that answers
+  is up, and whether that page is right is for the outcome's check. A refused or reset
+  connection, or no answer in 3 s, is not ready. Before this change only a 2xx passed, so a
+  ready page that answered 404 or 405 was CANNOT RUN after `ACCEPT_READY_TIMEOUT`; now the
+  check runs against it and FAILS. A redirect is an answer and is not followed. A command passes
+  when it exits 0.
 - The environment can fail under a run. A port that already accepts connections just before
   `start` (taken during `build`, say) is CANNOT RUN, and `start` is not run beside it. The harness
   watches the `start` process and the port it answered on. An outcome whose app is gone before

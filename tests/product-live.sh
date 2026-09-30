@@ -58,11 +58,11 @@ run "$d"
 chk "a contract may still pin a port" "$(verdicts "$d")" "holds"
 
 d="$(repo)"
-contract "$d" '{"environments":{"never":{"start":"echo $PORT > port; exec '"$SERVE"'","ready":"/nope"}},
+contract "$d" '{"environments":{"never":{"start":"echo $PORT > port; exec '"$SERVE"'","ready":"test -f nope"}},
  "outcomes":[{"name":"o","expect":"e","env":"never","check":"exit 0","control":"exit 1"}]}'
 began=$SECONDS
 ( cd "$d" && ACCEPT_READY_TIMEOUT=2 python3 "$ACC" . --results "$d/r.json" ) > "$d/out.txt" 2>&1
-chk "a URL ready that never answers 2xx is CANNOT RUN within ACCEPT_READY_TIMEOUT, and the server is stopped" \
+chk "a ready that never passes is CANNOT RUN within ACCEPT_READY_TIMEOUT, and the server is stopped" \
   "$(verdicts "$d") $([ $((SECONDS - began)) -lt 12 ] && echo bounded) $(gone listening "$(cat "$d/port")" && echo stopped)" \
   "CANNOT RUN bounded stopped"
 

@@ -89,6 +89,10 @@ write_receipt(){
     echo "sha256 g9.sh: $(shasum -a 256 "$GATE0/g9.sh" | cut -d' ' -f1)"
     echo "sha256 lib.sh: $(shasum -a 256 "$GATE0/lib.sh" | cut -d' ' -f1)"
     echo "sha256 drive.mjs: $(shasum -a 256 "$DRIVE" | cut -d' ' -f1)"
+    echo "sha256 g9_report.py: $(shasum -a 256 "$GATE0/g9_report.py" | cut -d' ' -f1)"
+    echo "sha256 G9-PREREGISTRATION.md: $(shasum -a 256 "$GATE0/G9-PREREGISTRATION.md" 2>/dev/null | cut -d' ' -f1)"
+    echo "sha256 acceptance.py: $(shasum -a 256 "$PLUGIN/benchmark/gates/acceptance.py" | cut -d' ' -f1)"
+    echo "last commit touching G9-PREREGISTRATION.md: $(git -C "$PLUGIN" log -1 --format='%H %cI' -- tests/gate0/G9-PREREGISTRATION.md 2>/dev/null)"
     echo "kill line MB: $KILL_MB"
     echo "fixtures: $FIXTURE_LIST"
     echo "PLAYWRIGHT_PATH: ${PLAYWRIGHT_PATH:-}"
@@ -100,7 +104,7 @@ write_receipt(){
 wall_start="$(now)"
 write_receipt
 
-echo "G9: the spec agent's contracts against the seeded-fault corpus (catch rate >=80%)"
+echo "G9: the spec agent's contracts against the seeded-fault corpus (preregistered: pooled catch rate >=80% on behaviour faults, state and wrong-field clauses per fixture)"
 echo "contracts: $SPEC_DIR/<fixture>/.claude replaces each fixture's hand-written .claude"
 echo "results kept in $OUT_DIR"
 
@@ -261,8 +265,13 @@ echo "  faults: $grand_total  caught: $grand_caught  missed: $grand_missed  no_s
 echo "  wall time of the run: $(span "$wall_start" "$wall_end") s"
 
 echo
-python3 "$GATE0/g9_report.py" "$OUT_DIR" | tee "$OUT_DIR/report.txt"
-verdict="$(awk -F'[:(]' '/^G9 OVERALL:/ { gsub(/^ +| +$/, "", $2); v = $2 } END { print v }' "$OUT_DIR/report.txt")"
-chk "G9: the spec agent's outcomes catch at least 80% of faults, with the loading, empty, error and wrong-field faults" "${verdict:-unknown}" "MET"
+python3 "$GATE0/g9_report.py" "$OUT_DIR" ${G9_FIRST:+--first "$G9_FIRST"} ${G9_REPEAT:+--repeat "$G9_REPEAT"} ${G9_HAND_AFTER:+--hand-after "$G9_HAND_AFTER"} | tee "$OUT_DIR/report.txt"
+if [ -n "${G9_FAULTS:-}" ]; then
+  echo
+  echo "partial run (G9_FAULTS is set): no verdict is drawn from a subset of the corpus"
+else
+  verdict="$(awk '/^PREREGISTERED VERDICT: / { v = $0; sub(/^PREREGISTERED VERDICT: /, "", v); sub(/ \(.*/, "", v); print v; exit }' "$OUT_DIR/report.txt")"
+  chk "G9 preregistered verdict: pooled catch rate on behaviour faults at least 80%, each fixture's state and wrong-field clauses, no fixture rate bound below 80%" "${verdict:-unknown}" "MET"
+fi
 
 finish "G9 SPEC CONTRACTS"

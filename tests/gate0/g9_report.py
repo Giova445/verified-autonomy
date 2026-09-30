@@ -1,5 +1,8 @@
+import argparse
 import csv
+import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -34,6 +37,8 @@ STATE_FAULTS = {
 }
 
 WRONG_FIELD_CATEGORIES = ("wrong field displayed", "wrong field in search/filter")
+Z95 = 1.96
+VERDICT_WORDS = "holds|FAILS|NOT PROVEN|WRONG BUILD|CANNOT RUN|NO VERDICT|BLOCKED|REFUSED"
 
 
 def load_manifests():
@@ -44,13 +49,11 @@ def load_manifests():
     return out
 
 
-def load_spec_results(out_dir):
-    path = os.path.join(out_dir, "results.tsv")
-    rows = {}
+def load_results(path):
+    if os.path.isdir(path):
+        path = os.path.join(path, "results.tsv")
     with open(path, newline="") as handle:
-        for row in csv.DictReader(handle, delimiter="\t"):
-            rows[row["id"]] = row
-    return rows
+        return {row["id"]: row for row in csv.DictReader(handle, delimiter="\t")}
 
 
 def parse_g4(results_md):
@@ -79,6 +82,16 @@ def rate(caught, total):
     return 100.0 * caught / total if total else 0.0
 
 
+def wilson(caught, total, z=Z95):
+    if not total:
+        return 0.0, 0.0
+    p = caught / total
+    denom = 1 + z * z / total
+    centre = p + z * z / (2 * total)
+    margin = z * math.sqrt(p * (1 - p) / total + z * z / (4 * total * total))
+    return 100.0 * (centre - margin) / denom, 100.0 * (centre + margin) / denom
+
+
 def tally(kinds):
     total = len(kinds)
     caught = sum(1 for k in kinds if k == "caught")
@@ -86,239 +99,348 @@ def tally(kinds):
     return total, caught, missed, total - caught - missed
 
 
-def fmt_row(label, spec, hand):
-    st, sc, sm, sn = tally(spec)
-    ht, hc, hm, hn = tally(hand)
-    return "  %-40s SPEC %3d faults %3d caught %3d missed %3d no-signal %5.1f%%   HAND %3d caught %3d missed %3d no-signal %5.1f%%" % (
-        label, st, sc, sm, sn, rate(sc, st), hc, hm, hn, rate(hc, ht))
-
-
 def short(text, width):
     text = " ".join(text.split())
     return text if len(text) <= width else text[: width - 3] + "..."
 
 
-def kind_of(spec_rows, fault_id):
-    row = spec_rows.get(fault_id)
-    return row["kind"] if row else None
+def verdict_words(detail):
+    return re.findall(r"=(%s)(?= \| |$)" % VERDICT_WORDS, detail or "")
+
+
+def state_map_digest():
+    blob = json.dumps({"product_states": PRODUCT_STATES, "state_faults": STATE_FAULTS}, sort_keys=True)
+    return hashlib.sha256(blob.encode()).hexdigest()
+
+
+def split_population(entries):
+    behaviour = [i for i, e in entries.items() if not e["breaks_run"] and i not in NOT_A_DEFECT]
+    breaks = [i for i, e in entries.items() if e["breaks_run"]]
+    return behaviour, breaks
+
+
+def state_clause(fixture, kinds):
+    rows = []
+    for state, present in PRODUCT_STATES[fixture].items():
+        if present:
+            ids = STATE_FAULTS.get(fixture, {}).get(state, [])
+            rows.append((state, ids, [i for i in ids if kinds.get(i) == "caught"]))
+    if any(not ids for _, ids, _ in rows):
+        return rows, None
+    return rows, all(caught for _, _, caught in rows)
+
+
+def wrong_field_clause(fixture, manifests, kinds):
+    ids = [e["id"] for e in manifests[fixture] if e["category"] in WRONG_FIELD_CATEGORIES]
+    caught = [i for i in ids if kinds.get(i) == "caught"]
+    return ids, caught, (bool(caught) if ids else None)
+
+
+def fixture_result(fixture, entries, manifests, behaviour, kinds):
+    ids = [i for i in behaviour if entries[i]["fixture"] == fixture]
+    caught = sum(1 for i in ids if kinds.get(i) == "caught")
+    low, high = wilson(caught, len(ids))
+    states, states_ok = state_clause(fixture, kinds)
+    wf_ids, wf_caught, wf_ok = wrong_field_clause(fixture, manifests, kinds)
+    rate_fails = high < RATE_LINE
+    ok = None if states_ok is None or wf_ok is None else states_ok and wf_ok and not rate_fails
+    return {"ids": ids, "caught": caught, "low": low, "high": high, "rate_fails": rate_fails, "states": states,
+            "states_ok": states_ok, "wf_ids": wf_ids, "wf_caught": wf_caught, "wf_ok": wf_ok, "ok": ok}
+
+
+def break_class(row):
+    if row is None:
+        return "no result"
+    if row["kind"] == "missed":
+        return "holds"
+    if row["kind"] == "caught":
+        return "FAILS-type"
+    if (row.get("detail") or "").startswith("could not read"):
+        return "no result"
+    words = [w for w in verdict_words(row.get("detail")) if w != "holds"]
+    return "CANNOT RUN" if words and all(w == "CANNOT RUN" for w in words) else "other"
+
+
+def preregistered(entries, manifests, rows):
+    kinds = {i: r["kind"] for i, r in rows.items()}
+    behaviour, breaks = split_population(entries)
+    missing = [i for i in behaviour + breaks if i not in rows]
+    caught = sum(1 for i in behaviour if kinds.get(i) == "caught")
+    low, high = wilson(caught, len(behaviour))
+    pooled_ok = caught * 100 >= int(RATE_LINE) * len(behaviour)
+    fixtures = {f: fixture_result(f, entries, manifests, behaviour, kinds) for f in FIXTURES}
+    classes = {i: break_class(rows.get(i)) for i in breaks}
+    not_passed = sum(1 for c in classes.values() if c not in ("holds", "no result"))
+    counts = {c: sum(1 for v in classes.values() if v == c) for c in ("FAILS-type", "CANNOT RUN", "other", "holds", "no result")}
+    if missing or any(f["ok"] is None for f in fixtures.values()):
+        verdict = "NOT MEASURED"
+    else:
+        verdict = "MET" if pooled_ok and all(f["ok"] for f in fixtures.values()) else "NOT MET"
+    return {"behaviour": behaviour, "breaks": breaks, "missing": missing, "caught": caught, "low": low, "high": high,
+            "pooled_ok": pooled_ok, "fixtures": fixtures, "classes": classes, "not_passed": not_passed, "counts": counts,
+            "secondary_ok": not_passed == len(breaks) and bool(breaks), "verdict": verdict}
+
+
+def print_preregistered(result, digest):
+    behaviour, fixtures = result["behaviour"], result["fixtures"]
+    print("== PREREGISTERED (tests/gate0/G9-PREREGISTRATION.md) ==")
+    print("population: %d behaviour faults (manifest breaks_run=false, without %s) + %d break faults (breaks_run=true, scored on the secondary line only)" % (
+        len(behaviour), ",".join(sorted(NOT_A_DEFECT)), len(result["breaks"])))
+    print("state map digest (sha256 of PRODUCT_STATES + STATE_FAULTS as json, sorted keys): %s" % digest)
+    if result["missing"]:
+        print("MISSING pass-1 results for %d scored faults: %s" % (len(result["missing"]), " ".join(result["missing"])))
+    print("primary: pooled catch rate on behaviour faults %d/%d = %.1f%%, Wilson 95%% interval %.1f%% to %.1f%%, line %d%%: %s" % (
+        result["caught"], len(behaviour), rate(result["caught"], len(behaviour)), result["low"], result["high"], RATE_LINE,
+        "MET" if result["pooled_ok"] else "NOT MET"))
+    for fixture in FIXTURES:
+        f = fixtures[fixture]
+        print("  -- %s: %d/%d = %.1f%%, Wilson 95%% %.1f%% to %.1f%%, rate rule (fails only if upper bound < %d%%): %s" % (
+            fixture, f["caught"], len(f["ids"]), rate(f["caught"], len(f["ids"])), f["low"], f["high"], RATE_LINE,
+            "FAILS" if f["rate_fails"] else "ok"))
+        for state, ids, caught in f["states"]:
+            print("       state %-8s %d of %d seeded faults caught (%s): %s" % (
+                state, len(caught), len(ids), ", ".join(ids) or "none seeded",
+                "ok" if caught else "NOT MET" if ids else "NOT MEASURED"))
+        print("       wrong-field     %d of %d caught (%s): %s" % (
+            len(f["wf_caught"]), len(f["wf_ids"]), ", ".join(f["wf_ids"]) or "none seeded",
+            "ok" if f["wf_ok"] else "NOT MET" if f["wf_ids"] else "NOT MEASURED"))
+        print("       fixture: %s" % ("MET" if f["ok"] else "NOT MET" if f["ok"] is False else "NOT MEASURED"))
+    counts = result["counts"]
+    print("SECONDARY build/start broken, not passed: %d/%d break faults (FAILS-type %d, CANNOT RUN %d, other non-holds %d, holds %d, no result %d): %s" % (
+        result["not_passed"], len(result["breaks"]), counts["FAILS-type"], counts["CANNOT RUN"], counts["other"], counts["holds"],
+        counts["no result"], "MET" if result["secondary_ok"] else "NOT MET"))
+    for i in result["breaks"]:
+        print("       %-8s %s" % (i, result["classes"][i]))
+    reasons = []
+    if not result["pooled_ok"]:
+        reasons.append("pooled %.1f%% below %d%%" % (rate(result["caught"], len(behaviour)), RATE_LINE))
+    for fixture in FIXTURES:
+        f = fixtures[fixture]
+        why = []
+        if f["states_ok"] is False:
+            why.append("state faults not caught: %s" % ",".join(s for s, _, caught in f["states"] if not caught))
+        if f["wf_ok"] is False:
+            why.append("no wrong-field fault caught")
+        if f["rate_fails"]:
+            why.append("rate upper bound %.1f%% < %d%%" % (f["high"], RATE_LINE))
+        if why:
+            reasons.append("%s (%s)" % (fixture, "; ".join(why)))
+    detail = "pooled %d/%d = %.1f%% [Wilson 95%% %.1f to %.1f]; %s" % (
+        result["caught"], len(behaviour), rate(result["caught"], len(behaviour)), result["low"], result["high"],
+        "failing: " + ", ".join(reasons) if reasons else "all five fixtures satisfy the state, wrong-field and rate clauses")
+    if result["missing"]:
+        detail = "%d scored faults have no pass-1 result" % len(result["missing"])
+    print("PREREGISTERED VERDICT: %s (%s)" % (result["verdict"], detail))
+
+
+def fmt_cols(label, series):
+    cells = []
+    for name, kinds in series:
+        total, caught, missed, nosig = tally(kinds)
+        cells.append("%s n=%3d c=%3d m=%3d ns=%3d %5.1f%%" % (name, total, caught, missed, nosig, rate(caught, total)))
+    return "  %-40s %s" % (label, "   ".join(cells))
+
+
+def print_tables(title, names, series, entries, manifests):
+    common = [i for i in entries if all(i in s for s in series)]
+    behaviour = set(split_population(entries)[0])
+
+    def row(label, ids):
+        if ids:
+            print(fmt_cols(label, [(n, [s[i] for i in ids]) for n, s in zip(names, series)]))
+
+    print()
+    print("== %s: per fixture (n faults, c caught, m missed, ns no signal; rate = caught / n) ==" % title)
+    for fixture in FIXTURES:
+        row(fixture, [i for i in common if entries[i]["fixture"] == fixture])
+    row("all", common)
+    row("all without %s" % ",".join(sorted(NOT_A_DEFECT)), [i for i in common if i not in NOT_A_DEFECT])
+    print("  -- primary population (behaviour faults)")
+    for fixture in FIXTURES:
+        row(fixture, [i for i in common if i in behaviour and entries[i]["fixture"] == fixture])
+    row("pooled", [i for i in common if i in behaviour])
+    print()
+    print("== %s: per category, per fixture ==" % title)
+    for fixture in FIXTURES:
+        print("  -- %s" % fixture)
+        for cat in sorted({e["category"] for e in manifests[fixture]}):
+            row(cat, [e["id"] for e in manifests[fixture] if e["category"] == cat and e["id"] in common])
+    print()
+    print("== %s: per category, all fixtures ==" % title)
+    for cat in sorted({e["category"] for e in entries.values()}):
+        row(cat, [i for i in common if entries[i]["category"] == cat])
+
+
+def vector(row):
+    return row.get("detail", "") if row else ""
+
+
+def outcome_pairs(detail):
+    return [tuple(part.rsplit("=", 1)) for part in (detail or "").split(" | ") if "=" in part]
+
+
+def outcome_diff(left, right):
+    before, after = dict(outcome_pairs(vector(left))), dict(outcome_pairs(vector(right)))
+    names = list(after) + [n for n in before if n not in after]
+    return ["%s: %s -> %s" % (n, before.get(n, "-"), after.get(n, "-")) for n in names if before.get(n) != after.get(n)], len(names)
+
+
+def changed_ids(entries, left_kinds, right_kinds, left_rows=None, right_rows=None):
+    out = []
+    for i in entries:
+        if i not in left_kinds or i not in right_kinds:
+            continue
+        moved = left_kinds[i] != right_kinds[i]
+        if left_rows and right_rows and i in left_rows and i in right_rows:
+            moved = moved or vector(left_rows[i]) != vector(right_rows[i])
+        if moved:
+            out.append(i)
+    return out
+
+
+def print_changed(title, left_name, right_name, ids, entries, left_kinds, right_kinds, left_rows=None, right_rows=None):
+    print()
+    print("== %s: verdict changed, %s -> %s: %d ==" % (title, left_name, right_name, len(ids)))
+    for i in ids:
+        e = entries[i]
+        print("  %-8s %-5s [%s] %s" % (i, "break" if e["breaks_run"] else "live", e["category"], short(e["statement"], 110)))
+        print("           %s: %s   ->   %s: %s" % (left_name, left_kinds[i], right_name, right_kinds[i]))
+        if left_rows and right_rows and i in left_rows and i in right_rows:
+            diff, count = outcome_diff(left_rows[i], right_rows[i])
+            print("           outcomes that differ: %d of %d" % (len(diff), count))
+            for line in diff:
+                print("             %s" % short(line, 200))
+        elif right_rows and i in right_rows:
+            print("           %s: %s" % (right_name, short(vector(right_rows[i]), 200)))
+
+
+def print_repeats(entries, rows, repeat_rows, first_rows, expected, behaviour):
+    print()
+    print("== repeats: every fault whose verdict differs from the first G9 run, run again ==")
+    print("expected repeat set (%d): %s" % (len(expected), " ".join(expected) or "none"))
+    not_run = [i for i in expected if i not in repeat_rows]
+    if not_run:
+        print("NOT REPEATED: %s" % " ".join(not_run))
+    unstable = []
+    for i in [i for i in entries if i in repeat_rows and i in rows]:
+        a, b = rows[i], repeat_rows[i]
+        same_kind, same_vector = a["kind"] == b["kind"], vector(a) == vector(b)
+        if not same_vector:
+            unstable.append(i)
+        first = first_rows.get(i) if first_rows else None
+        print("  %-8s first-G9 %-9s pass-1 %-9s repeat %-9s %s" % (
+            i, first["kind"] if first else "-", a["kind"], b["kind"],
+            "stable" if same_vector else "UNSTABLE (same classification, different outcome verdicts)" if same_kind else "UNSTABLE (classification differs)"))
+        if not same_vector:
+            print("           pass-1: %s" % short(vector(a), 200))
+            print("           repeat: %s" % short(vector(b), 200))
+    flipped = [i for i in unstable if rows[i]["kind"] != repeat_rows[i]["kind"]]
+    print("repeated %d, stable %d, unstable %d (classification differs: %d)" % (
+        len([i for i in entries if i in repeat_rows and i in rows]), len([i for i in entries if i in repeat_rows and i in rows]) - len(unstable),
+        len(unstable), len(flipped)))
+    lost = [i for i in flipped if i in behaviour and rows[i]["kind"] == "caught"]
+    caught = sum(1 for i in behaviour if i in rows and rows[i]["kind"] == "caught") - len(lost)
+    low, high = wilson(caught, len(behaviour))
+    print("SENSITIVITY (not the verdict): pooled rate if pass-1 catches the repeat did not reproduce counted as not caught: %d/%d = %.1f%%, Wilson 95%% %.1f%% to %.1f%%" % (
+        caught, len(behaviour), rate(caught, len(behaviour)), low, high))
+
+
+def print_not_caught(entries, rows):
+    print()
+    print("== faults not caught in this run ==")
+    for kind, title in (("missed", "missed (false PASS)"), ("no_signal", "no signal (counted as not caught)")):
+        print()
+        print("%s:" % title)
+        for i in entries:
+            if i in rows and rows[i]["kind"] == kind:
+                e = entries[i]
+                print("  %-8s %-5s [%s] %s" % (i, "break" if e["breaks_run"] else "live", e["category"], short(e["statement"], 110)))
+                print("           %s" % short(vector(rows[i]), 230))
+
+
+def read_timing(out_dir):
+    timing = {}
+    path = os.path.join(out_dir, "timing.txt")
+    if os.path.exists(path):
+        for line in open(path):
+            key, _, value = line.partition(": ")
+            timing[key] = value.strip()
+    peaks = []
+    base = os.path.join(out_dir, "baseline.tsv")
+    if os.path.exists(base):
+        with open(base, newline="") as handle:
+            peaks = [int(r["peak_mb"]) for r in csv.DictReader(handle, delimiter="\t") if (r.get("peak_mb") or "").isdigit()]
+    return timing, peaks
 
 
 def main(argv):
-    if len(argv) < 2:
-        print("usage: g9_report.py G9_OUT [RESULTS.md]")
-        return 2
-    out_dir = argv[1]
-    results_md = argv[2] if len(argv) > 2 else os.path.join(FAULTS, "RESULTS.md")
+    ap = argparse.ArgumentParser(prog="g9_report.py")
+    ap.add_argument("out_dir")
+    ap.add_argument("results_md", nargs="?", default=os.path.join(FAULTS, "RESULTS.md"))
+    ap.add_argument("--first")
+    ap.add_argument("--repeat")
+    ap.add_argument("--hand-after")
+    ap.add_argument("--print-repeat-set", action="store_true")
+    args = ap.parse_args(argv[1:])
     manifests = load_manifests()
-    spec_rows = load_spec_results(out_dir)
-    g4_special, g4_table = parse_g4(results_md)
+    entries = {e["id"]: dict(e, fixture=f) for f in FIXTURES for e in manifests[f]}
+    rows = load_results(args.out_dir)
+    first_rows = load_results(args.first) if args.first else None
+    repeat_rows = load_results(args.repeat) if args.repeat else None
+    hand_after_rows = load_results(args.hand_after) if args.hand_after else None
+    kinds = {i: r["kind"] for i, r in rows.items()}
+    first_kinds = {i: r["kind"] for i, r in first_rows.items()} if first_rows else None
+    expected_repeat = changed_ids(entries, first_kinds, kinds, first_rows, rows) if first_rows else []
 
-    entries = {}
-    for fixture in FIXTURES:
-        for e in manifests[fixture]:
-            entries[e["id"]] = dict(e, fixture=fixture)
+    if args.print_repeat_set:
+        print(" ".join(expected_repeat))
+        return 0
 
-    g4 = {fid: g4_special.get(fid, "caught") for fid in entries}
+    g4_special, g4_table = parse_g4(args.results_md)
+    g4 = {i: g4_special.get(i, "caught") for i in entries}
     for fixture in FIXTURES:
         got = tally([g4[e["id"]] for e in manifests[fixture]])
         if g4_table.get(fixture) != got:
             print("WARNING: RESULTS.md table for %s says %s but its faults list gives %s" % (fixture, g4_table.get(fixture), got))
 
-    missing = [fid for fid in entries if fid not in spec_rows]
-    measured = not missing
-    spec = {fid: spec_rows[fid]["kind"] for fid in entries if fid in spec_rows}
-
-    print("G9 REPORT from %s" % out_dir)
-    print("faults in corpus: %d, with a saved SPEC result: %d%s" % (
-        len(entries), len(spec), "" if measured else "  MISSING: %s" % " ".join(missing)))
-    timing = {}
-    timing_path = os.path.join(out_dir, "timing.txt")
-    if os.path.exists(timing_path):
-        for line in open(timing_path):
-            key, _, value = line.partition(": ")
-            timing[key] = value.strip()
-    run_secs = sum(float(r["secs"]) for r in spec_rows.values())
-    print("wall time of the run (baseline + faults): %s s; summed verify time of the faults: %.0f s; peak memory of any run: %s MB" % (
-        timing.get("wall_seconds_total", "unknown"), run_secs,
-        max([int(r["peak_mb"]) for r in spec_rows.values()] or [0])))
-
+    result = preregistered(entries, manifests, rows)
+    timing, baseline_peaks = read_timing(args.out_dir)
+    run_secs = sum(float(r["secs"]) for r in rows.values() if r.get("secs"))
+    peak = max([int(r["peak_mb"]) for r in rows.values() if (r.get("peak_mb") or "").isdigit()] + baseline_peaks or [0])
+    print("G9 REPORT from %s" % args.out_dir)
+    print("faults in corpus: %d, with a saved result: %d" % (len(entries), sum(1 for i in entries if i in rows)))
+    print("wall time of the run (baseline + faults): %s s; summed verify time of the faults: %.0f s; peak memory of any run (baseline included): %s MB" % (
+        timing.get("wall_seconds_total", "unknown"), run_secs, peak))
     print()
-    print("== per fixture: SPEC vs HAND-WRITTEN (G4) ==")
-    for fixture in FIXTURES:
-        ids = [e["id"] for e in manifests[fixture] if e["id"] in spec]
-        print(fmt_row(fixture, [spec[i] for i in ids], [g4[i] for i in ids]))
-    all_ids = [i for i in entries if i in spec]
-    print(fmt_row("all", [spec[i] for i in all_ids], [g4[i] for i in all_ids]))
-    kept = [i for i in all_ids if i not in NOT_A_DEFECT]
-    print(fmt_row("all without nj-29", [spec[i] for i in kept], [g4[i] for i in kept]))
-    nj = [e["id"] for e in manifests["nextjs"] if e["id"] in spec and e["id"] not in NOT_A_DEFECT]
-    print(fmt_row("nextjs without nj-29", [spec[i] for i in nj], [g4[i] for i in nj]))
+    print_preregistered(result, state_map_digest())
 
-    print()
-    print("== false-PASS rate (missed / faults) and rate without break-marked faults ==")
-    for fixture in FIXTURES + ["all"]:
-        ids = [i for i in all_ids if fixture == "all" or entries[i]["fixture"] == fixture]
-        live = [i for i in ids if not entries[i]["breaks_run"]]
-        print("  %-9s false-PASS SPEC %4.1f%% (%d/%d) HAND %4.1f%% (%d/%d);  caught without break-marked faults: SPEC %4.1f%% (%d/%d) HAND %4.1f%% (%d/%d)" % (
-            fixture,
-            rate(sum(1 for i in ids if spec[i] == "missed"), len(ids)), sum(1 for i in ids if spec[i] == "missed"), len(ids),
-            rate(sum(1 for i in ids if g4[i] == "missed"), len(ids)), sum(1 for i in ids if g4[i] == "missed"), len(ids),
-            rate(sum(1 for i in live if spec[i] == "caught"), len(live)), sum(1 for i in live if spec[i] == "caught"), len(live),
-            rate(sum(1 for i in live if g4[i] == "caught"), len(live)), sum(1 for i in live if g4[i] == "caught"), len(live)))
-    uncaught = [i for i in all_ids if spec[i] != "caught"]
-    print("  SPEC not caught: %d = %d missed + %d no signal; of the no-signal ones %d are break-marked and %d live-marked (%s)" % (
-        len(uncaught), sum(1 for i in uncaught if spec[i] == "missed"), sum(1 for i in uncaught if spec[i] == "no_signal"),
-        sum(1 for i in uncaught if spec[i] == "no_signal" and entries[i]["breaks_run"]),
-        sum(1 for i in uncaught if spec[i] == "no_signal" and not entries[i]["breaks_run"]),
-        ", ".join(i for i in uncaught if spec[i] == "no_signal" and not entries[i]["breaks_run"])))
+    g9_names, g9_series = (["FIRST", "RERUN"], [first_kinds, kinds]) if first_kinds else (["RERUN"], [kinds])
+    print_tables("G9 spec contracts" + (", first run vs rerun" if first_kinds else ""), g9_names, g9_series, entries, manifests)
+    g4_names, g4_series = (["BEFORE", "AFTER"], [g4, {i: r["kind"] for i, r in hand_after_rows.items()}]) if hand_after_rows else (["BEFORE"], [g4])
+    print_tables("G4 hand-written contracts" + (", before vs after the probe fix" if hand_after_rows else ""), g4_names, g4_series, entries, manifests)
 
-    print()
-    print("== per category, per fixture ==")
-    for fixture in FIXTURES:
-        print("  -- %s" % fixture)
-        cats = sorted({e["category"] for e in manifests[fixture]})
-        for cat in cats:
-            ids = [e["id"] for e in manifests[fixture] if e["category"] == cat and e["id"] in spec]
-            if ids:
-                print(fmt_row(cat, [spec[i] for i in ids], [g4[i] for i in ids]))
-
-    print()
-    print("== per category, all fixtures ==")
-    for cat in sorted({e["category"] for e in entries.values()}):
-        ids = [i for i, e in entries.items() if e["category"] == cat and i in spec]
-        print(fmt_row(cat, [spec[i] for i in ids], [g4[i] for i in ids]))
-
-    def listing(title, ids):
-        print()
-        print("%s: %d" % (title, len(ids)))
-        for i in ids:
-            e = entries[i]
-            print("  %-8s %-5s [%s] %s | SPEC %s, HAND %s" % (
-                i, "break" if e["breaks_run"] else "live", e["category"], short(e["statement"], 110), spec.get(i), g4[i]))
-
-    print()
-    print("== differences ==")
-    listing("caught by SPEC, not caught by HAND (missed or no signal)",
-            [i for i in all_ids if spec[i] == "caught" and g4[i] != "caught"])
-    listing("caught by HAND, not caught by SPEC",
-            [i for i in all_ids if g4[i] == "caught" and spec[i] != "caught"])
-    listing("caught by neither", [i for i in all_ids if g4[i] != "caught" and spec[i] != "caught"])
-
-    print()
-    print("== SPEC faults not caught ==")
-    for kind, title in (("missed", "missed (false PASS)"), ("no_signal", "no signal (counted as not caught)")):
-        print()
-        print("%s:" % title)
-        for i in all_ids:
-            if spec[i] == kind:
-                e = entries[i]
-                print("  %-8s %-5s [%s] %s" % (i, "break" if e["breaks_run"] else "live", e["category"], short(e["statement"], 110)))
-                print("           %s" % short(spec_rows[i]["detail"], 230))
-
-    print()
-    print("== loading, empty, error and wrong-field faults ==")
-    fixture_state_ok = {}
-    fixture_field_ok = {}
-    for fixture in FIXTURES:
-        print("  -- %s" % fixture)
-        tagged_all = True
-        state_note = []
-        for state in ("loading", "empty", "error"):
-            ids = STATE_FAULTS.get(fixture, {}).get(state, [])
-            present = PRODUCT_STATES[fixture][state]
-            if not present and not ids:
-                print("    %-8s the product has no %s state (ticket); no fault seeded" % (state, state))
-                continue
-            if present and not ids:
-                print("    %-8s the product has this state but no fault is seeded in it: NOT MEASURED" % state)
-                tagged_all = False
-                state_note.append(state)
-                continue
-            results = [(i, kind_of(spec_rows, i)) for i in ids]
-            caught = [i for i, k in results if k == "caught"]
-            print("    %-8s %d of %d caught: %s" % (state, len(caught), len(ids),
-                  ", ".join("%s=%s" % (i, k) for i, k in results)))
-            if len(caught) != len(ids):
-                tagged_all = False
-                state_note.append(state)
-        shape = STATE_FAULTS.get(fixture, {}).get("shape", [])
-        for i in shape:
-            k = kind_of(spec_rows, i)
-            print("    %-8s %s=%s (labelled state by the fault author; a response-shape fault)" % ("shape", i, k))
-            if k != "caught":
-                tagged_all = False
-                state_note.append("shape")
-        fixture_state_ok[fixture] = (tagged_all, state_note)
-        wf = [e["id"] for e in manifests[fixture] if e["category"] in WRONG_FIELD_CATEGORIES]
-        wf_results = [(i, kind_of(spec_rows, i)) for i in wf]
-        wf_caught = [i for i, k in wf_results if k == "caught"]
-        print("    wrong-field: %d of %d caught: %s" % (len(wf_caught), len(wf),
-              ", ".join("%s(%s)=%s" % (i, entries[i]["category"].replace("wrong field ", ""), k) for i, k in wf_results)))
-        fixture_field_ok[fixture] = len(wf_caught) >= 1 if wf else None
-
-    print()
-    print("== G9 verdicts ==")
-    verdicts = {}
-    for fixture in FIXTURES:
-        ids = [e["id"] for e in manifests[fixture]]
-        if any(i not in spec for i in ids):
-            verdicts[fixture] = "NOT MEASURED"
-            print("  %-9s NOT MEASURED (faults missing)" % fixture)
-            continue
-        caught = sum(1 for i in ids if spec[i] == "caught")
-        r = rate(caught, len(ids))
-        kept_ids = [i for i in ids if i not in NOT_A_DEFECT]
-        r2 = rate(sum(1 for i in kept_ids if spec[i] == "caught"), len(kept_ids))
-        rate_ok = r >= RATE_LINE
-        state_ok, notes = fixture_state_ok[fixture]
-        field_ok = fixture_field_ok[fixture]
-        parts = [
-            "rate %.1f%% (%d/%d)%s %s" % (r, caught, len(ids),
-                  " [%.1f%% without nj-29]" % r2 if len(kept_ids) != len(ids) else "", "ok" if rate_ok else "below %d%%" % RATE_LINE),
-            "state faults %s" % ("all caught" if state_ok else "NOT all caught (%s)" % ",".join(notes)),
-            "wrong-field %s" % ("caught" if field_ok else "NOT caught" if field_ok is False else "none seeded"),
-        ]
-        ok = rate_ok and state_ok and bool(field_ok)
-        verdicts[fixture] = "MET" if ok else "NOT MET"
-        print("  %-9s %-8s %s" % (fixture, verdicts[fixture], "; ".join(parts)))
-    total = len(all_ids)
-    caught_all = sum(1 for i in all_ids if spec[i] == "caught")
-    agg = rate(caught_all, total)
-    kept_caught = sum(1 for i in kept if spec[i] == "caught")
-    agg2 = rate(kept_caught, len(kept))
-    print("  aggregate rate %.1f%% (%d/%d); without nj-29 %.1f%% (%d/%d)" % (agg, caught_all, total, agg2, kept_caught, len(kept)))
-    if not measured or "NOT MEASURED" in verdicts.values():
-        overall = "NOT MEASURED"
-    else:
-        overall = "MET" if agg >= RATE_LINE and all(v == "MET" for v in verdicts.values()) else "NOT MET"
-    if measured:
-        kind_ok = {}
-        for fixture in FIXTURES:
-            flags = []
-            for state, present in PRODUCT_STATES[fixture].items():
-                if present:
-                    ids = STATE_FAULTS.get(fixture, {}).get(state, [])
-                    flags.append(any(kind_of(spec_rows, i) == "caught" for i in ids))
-            kind_ok[fixture] = all(flags) and bool(fixture_field_ok[fixture])
-        strict_ok = all(fixture_state_ok[f][0] and bool(fixture_field_ok[f]) for f in FIXTURES)
-        agg_ok = agg >= RATE_LINE
-        print("  reading A (corpus-wide rate; each existing state has a caught seeded fault; a wrong-field fault caught per fixture): %s" % (
-            "MET" if agg_ok and all(kind_ok.values()) else "NOT MET"))
-        print("  reading B (corpus-wide rate; every seeded state fault caught; a wrong-field fault caught per fixture): %s" % (
-            "MET" if agg_ok and strict_ok else "NOT MET"))
-        print("  reading C (every fixture at least %d%% as well as reading B): %s" % (
-            RATE_LINE, "MET" if agg_ok and all(v == "MET" for v in verdicts.values()) else "NOT MET"))
-    print("G9 OVERALL: %s (reading C: aggregate at least %d%% and every fixture MET on rate, state faults and wrong-field)" % (overall, RATE_LINE))
+    if first_kinds:
+        print_changed("G9", "FIRST", "RERUN", expected_repeat, entries, first_kinds, kinds, first_rows, rows)
+    if hand_after_rows:
+        after_kinds = {i: r["kind"] for i, r in hand_after_rows.items()}
+        print_changed("G4", "BEFORE", "AFTER", changed_ids(entries, g4, after_kinds), entries, g4, after_kinds, None, hand_after_rows)
+    if repeat_rows is not None:
+        print_repeats(entries, rows, repeat_rows, first_rows, expected_repeat, result["behaviour"])
+    print_not_caught(entries, rows)
 
     summary = {
-        "overall": overall,
-        "aggregate": {"caught": caught_all, "total": total, "rate": round(agg, 1)},
-        "aggregate_without_nj29": {"caught": kept_caught, "total": len(kept), "rate": round(agg2, 1)},
-        "fixtures": verdicts,
-        "spec": spec,
-        "hand": g4,
+        "verdict": result["verdict"],
+        "pooled": {"caught": result["caught"], "total": len(result["behaviour"]), "rate": round(rate(result["caught"], len(result["behaviour"])), 1),
+                   "wilson95": [round(result["low"], 1), round(result["high"], 1)]},
+        "fixtures": {f: {"caught": r["caught"], "total": len(r["ids"]), "wilson95": [round(r["low"], 1), round(r["high"], 1)],
+                         "states_ok": r["states_ok"], "wrong_field_ok": r["wf_ok"], "rate_fails": r["rate_fails"], "ok": r["ok"]}
+                     for f, r in result["fixtures"].items()},
+        "secondary": {"not_passed": result["not_passed"], "total": len(result["breaks"]), "counts": result["counts"], "classes": result["classes"]},
+        "state_map_digest": state_map_digest(),
+        "repeat_set": expected_repeat,
+        "kinds": kinds,
     }
-    with open(os.path.join(out_dir, "summary.json"), "w") as handle:
+    with open(os.path.join(args.out_dir, "summary.json"), "w") as handle:
         json.dump(summary, handle, indent=1, sort_keys=True)
     return 0
 

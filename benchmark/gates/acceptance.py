@@ -649,6 +649,9 @@ def selftest():
     LISTEN = ("import os, socket, time\ns = socket.socket()\ns.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
               "s.bind(('127.0.0.1', int(os.environ['PORT'])))\ns.listen(8)\nopen('up', 'w').close()\ns.settimeout(60)\n"
               "while True:\n    c, _ = s.accept()\n    if c.recv(16) == b'crash':\n        os._exit(1)\n    c.close()\n")
+    SERVE = ("import http.server, os, socket\nsocket.getfqdn = lambda name='': name\n"
+             "class H(http.server.SimpleHTTPRequestHandler):\n    def log_message(self, *args):\n        pass\n"
+             "http.server.ThreadingHTTPServer(('127.0.0.1', int(os.environ['PORT'])), H).serve_forever()\n")
     CRASH = ("import os, socket\ns = socket.create_connection(('127.0.0.1', int(os.environ['PORT'])), timeout=5)\n"
              "s.sendall(b'crash')\ntry:\n    s.recv(1)\nexcept OSError:\n    pass\n")
     PROBE = ("import os, socket, sys\ntry:\n    socket.create_connection(('127.0.0.1', int(os.environ['PORT'])), timeout=1).close()\n"
@@ -659,7 +662,7 @@ def selftest():
     OCCUPY = "python3 listen.py >/dev/null 2>&1 & echo $! > occupier.pid; until python3 probe.py; do sleep 0.1; done"
 
     def scripts(d):
-        for fname, body in (("listen.py", LISTEN), ("probe.py", PROBE), ("stop.py", STOP), ("crash.py", CRASH)):
+        for fname, body in (("listen.py", LISTEN), ("probe.py", PROBE), ("stop.py", STOP), ("crash.py", CRASH), ("serve.py", SERVE)):
             with open(os.path.join(d, fname), "w") as fh:
                 fh.write(body)
         return d
@@ -673,14 +676,17 @@ def selftest():
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]
-        srv = subprocess.Popen([sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1", "--directory", d],
+        srv = subprocess.Popen([sys.executable, "serve.py"], cwd=d, env=dict(os.environ, PORT=str(port)),
                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         with open(os.path.join(d, "pid"), "w") as fh:
             fh.write(str(srv.pid))
-        for _ in range(100):
+        for _ in range(300):
             if answering(port):
                 break
             time.sleep(0.1)
+        else:
+            srv.kill()
+            raise RuntimeError("the stand-in server on port %d never answered" % port)
         try:
             return go(name, {"environments": {"ext": dict(environment, port=port)}, "outcomes": [out(check, "exit 1", env="ext")]})
         finally:
@@ -713,7 +719,7 @@ def selftest():
     chk("an app that exits by itself during its control FAILS, never holds: a product that dies on a legitimate request is broken",
         verdicts(run) == ["FAILS"] and run[0] == 1 and "the app exited with status 1 during the control (see .claude/evidence/server-local.log)" in run[1])
 
-    HTTP = "python3 -m http.server $PORT --bind 127.0.0.1 --directory $PWD"
+    HTTP = "python3 serve.py"
     lingering = lambda server, ready: {"start": "echo $$ > wrapper.pid; %s & echo $! > pid; wait $!; sleep 60" % server, "ready": ready}
     runs = [watched("outlives%d" % i, [out(check, control, env="local")], environment) for i, (environment, check, control) in enumerate([
         (lingering(HTTP, "/"), KILLED + " && python3 probe.py", "exit 1"), (lingering(HTTP, "/"), "python3 probe.py", "python3 stop.py; exit 1"),

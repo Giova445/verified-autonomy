@@ -35,17 +35,28 @@ ticket states it.
   exports `BASE_URL=http://localhost:$PORT`, runs `build` unless this tree is already built,
   starts the app, waits for `ready`, runs every outcome, and stops the app. A failed build is
   CANNOT RUN.
-- The environment can fail under a run, and none of these is a product verdict. A port that
-  already accepts connections just before `start` (taken during `build`, say) is CANNOT RUN,
-  and `start` is not run beside it. The harness watches the `start` process itself: if it has
-  exited before an outcome, or by the time that outcome's check returns, the outcome is CANNOT
-  RUN ("the app stopped during the check"), never FAILS or holds. What it cannot see: an
-  environment with no `start`, or with `"reuse": true` (that app is not the harness's to
-  watch, and `reuse` also skips the port check); a `start` wrapper that stays alive after the
-  app inside it died; an app that stops during a control or after the last outcome (a control
-  may take the app down on purpose, so the outcome keeps its verdict and the next outcome
-  reports the stop); and an app that crashes because of the check, which reads CANNOT RUN with
-  the exit status and `server-<env>.log` named. `start` must stay in the foreground.
+- The environment can fail under a run. A port that already accepts connections just before
+  `start` (taken during `build`, say) is CANNOT RUN, and `start` is not run beside it. The harness
+  watches the `start` process and the port it answered on. An outcome whose app is gone before
+  it runs, or by the time its check or its control returns, is never `holds`: a control that
+  fails against a dead app shows nothing. If the process was ended by a signal, or a shell
+  wrapper reports one (exit 128 plus the signal), or the port stopped accepting connections,
+  the outcome is CANNOT RUN ("the app stopped during the check", or "control"). If the process
+  exited by itself with a status, the product crashed and the outcome FAILS ("the app exited
+  with status N during the check", with `server-<env>.log` named). The outcomes after it are
+  CANNOT RUN, because there was no app to check. A port is watched once it has been seen
+  answering in this run, so `reuse` and port-only environments are covered, and an app that
+  never listens on `$PORT` is not.
+- What it cannot tell. A crash by a fault signal (SIGSEGV, SIGABRT) reads CANNOT RUN like any
+  signal. A wrapper that stays alive while its server dies by itself reads CANNOT RUN, because
+  only the port shows it. An app that exits by itself for a cause outside the product reads
+  FAILS, and one that exits on SIGTERM with status 0 after a control stopped it on purpose reads
+  FAILS too. A shell wrapper that reports 128 plus a signal for a product that called
+  `exit(137)` itself reads CANNOT RUN. A `reuse` or port-only app that never answered has
+  nothing to watch, and if another process takes over its port it looks alive. A crash that
+  comes after the request was answered is blamed on the outcome running then, and one that
+  comes after the last check or control has returned is not seen. `start` must stay in the
+  foreground.
 - `outcomes`: `name`, `expect` (the user's words), `check`, and optionally `control`, `needs`
   and `env`. A check exits 0 when the outcome holds and 75 when it cannot run. Any other exit
   fails. A control is a variant that must fail. If it passes, the check proves nothing.

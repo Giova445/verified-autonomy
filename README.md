@@ -34,9 +34,9 @@ Before a PR, say "prove it" (the `prove` skill), or run:
 | Verdict | Meaning |
 |---|---|
 | `holds` | the check passed, and its control, if any, failed |
-| `FAILS` | the check ran and the product did not do it |
+| `FAILS` | the check ran and the product did not do it, or the app exited by itself with a status during the run |
 | `NOT PROVEN` | the control passed too, so the check cannot tell broken from working |
-| `CANNOT RUN` | the check exited 75, the app would not start, or the app stopped during the run |
+| `CANNOT RUN` | the check exited 75, the app would not start, or the app was killed or lost its port during the run |
 | `BLOCKED` | an outcome declares a credential in `needs` and it is not set |
 | `NO VERDICT` | the check ran out of time |
 | `WRONG BUILD` | the environment runs another commit |

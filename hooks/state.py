@@ -205,55 +205,147 @@ class Ctx:
 
 ACTIVE = []
 
-def descendants(root):
+class MeterError(Exception):
+    pass
+
+def listing(argv, timeout=5):
     try:
-        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True, timeout=5).stdout
-    except (OSError, subprocess.SubprocessError):
-        return []
-    kids = {}
-    for line in out.splitlines():
-        parts = line.split()
-        if len(parts) == 2:
-            kids.setdefault(int(parts[1]), []).append(int(parts[0]))
-    found, stack = [], [root]
+        return subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              errors="replace", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise MeterError("%s timed out" % argv[0])
+    except OSError as exc:
+        raise MeterError("%s could not be run: %s" % (argv[0], exc.strerror or exc))
+
+def exited(name, proc):
+    lines = proc.stderr.strip().splitlines()
+    return "%s exited %d%s" % (name, proc.returncode, (": " + lines[0][:80]) if lines else "")
+
+def below(kids, root):
+    found, seen, stack = [], {root}, [root]
     while stack:
         for kid in kids.get(stack.pop(), []):
-            found.append(kid)
-            stack.append(kid)
+            if kid not in seen:
+                seen.add(kid)
+                found.append(kid)
+                stack.append(kid)
     return found
 
-def footprint_mb(pids):
-    if sys.platform == "darwin":
+def ps_descendants(root):
+    proc = listing(["ps", "-A", "-o", "pid=,ppid="])
+    if proc.returncode != 0:
+        raise MeterError(exited("ps", proc))
+    kids, listed = {}, set()
+    for line in proc.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and all(part.isdigit() for part in parts):
+            listed.add(int(parts[0]))
+            kids.setdefault(int(parts[1]), []).append(int(parts[0]))
+    if not listed:
+        raise MeterError("ps printed no processes")
+    if os.getpid() not in listed:
+        raise MeterError("ps did not list this process")
+    return below(kids, root)
+
+def pgrep_children(parents):
+    proc = listing(["pgrep", "-P", ",".join(str(p) for p in parents)])
+    if proc.returncode not in (0, 1):
+        raise MeterError(exited("pgrep", proc))
+    return [int(token) for token in proc.stdout.split() if token.isdigit()]
+
+def pgrep_descendants(root):
+    if not pgrep_children([1, os.getppid()]):
+        raise MeterError("pgrep listed no processes")
+    found, seen, level = [], {root}, [root]
+    while level:
+        level = [pid for pid in pgrep_children(level) if pid not in seen]
+        seen.update(level)
+        found.extend(level)
+    return found
+
+def list_descendants(root):
+    try:
+        return ps_descendants(root)
+    except MeterError as first:
         try:
-            out = subprocess.run(["footprint", "-f", "bytes"] + [a for p in pids for a in ("-p", str(p))],
-                                 capture_output=True, text=True, timeout=10).stdout
-            return sum(int(v) for v in re.findall(r"\]: \d+-bit\s+Footprint: (\d+) B", out)) / 1048576
-        except (OSError, subprocess.SubprocessError):
-            return 0.0
+            return pgrep_descendants(root)
+        except MeterError as second:
+            raise MeterError("%s; %s" % (first, second))
+
+def descendants(root):
+    try:
+        return list_descendants(root)
+    except MeterError:
+        return []
+
+def read_footprint_mb(pids, strict=False):
+    if sys.platform == "darwin":
+        proc = listing(["footprint", "-f", "bytes"] + [a for p in pids for a in ("-p", str(p))], timeout=10)
+        readings = re.findall(r"\]: \d+-bit\s+Footprint: (\d+) B", proc.stdout)
+        if not readings:
+            raise MeterError("%s and printed no reading" % exited("footprint", proc))
+        return sum(int(v) for v in readings) / 1048576
     total = 0.0
     for p in pids:
-        text = read_text("/proc/%d/smaps_rollup" % p) or ""
-        found = re.search(r"^Pss:\s+(\d+) kB", text, re.M)
-        total += int(found.group(1)) / 1024 if found else 0
+        found = re.search(r"^Pss:\s+(\d+) kB", read_text("/proc/%d/smaps_rollup" % p), re.M)
+        if found:
+            total += int(found.group(1)) / 1024
+        elif strict and p == pids[0]:
+            raise MeterError("cannot read /proc/%d/smaps_rollup" % p)
     return total
+
+def footprint_mb(pids):
+    try:
+        return read_footprint_mb(pids)
+    except MeterError:
+        return 0.0
 
 class Meter:
     def __init__(self):
         import threading
         self.phase, self.peak, self.peak_phase = "startup", 0.0, "startup"
+        self.measured, self.failed, self.failure = 0, 0, ""
         self.budget = env_number("VERIFY_MEMORY_MB", DEFAULT_MEMORY_MB)
+        self.sampled = threading.Event()
         self.stopped = threading.Event()
         self.thread = threading.Thread(target=self.run, daemon=True)
 
     def run(self):
-        while not self.stopped.is_set():
+        self.sample()
+        while not self.stopped.wait(0.5):
             self.sample()
-            self.stopped.wait(0.5)
+
+    def measure(self):
+        own = os.getpid()
+        try:
+            kids = list_descendants(own)
+        except MeterError as exc:
+            raise MeterError("could not list child processes (%s)" % exc)
+        try:
+            return read_footprint_mb([own] + kids, strict=True)
+        except MeterError as exc:
+            raise MeterError("could not read process memory (%s)" % exc)
 
     def sample(self):
-        used = footprint_mb([os.getpid()] + descendants(os.getpid()))
-        if used > self.peak:
-            self.peak, self.peak_phase = used, self.phase
+        try:
+            used = self.measure()
+        except MeterError as exc:
+            self.failed, self.failure = self.failed + 1, str(exc)
+        except Exception as exc:
+            self.failed, self.failure = self.failed + 1, "the meter failed (%s: %s)" % (type(exc).__name__, exc)
+        else:
+            self.measured += 1
+            if used > self.peak:
+                self.peak, self.peak_phase = used, self.phase
+        self.sampled.set()
+
+    def result(self):
+        self.sampled.wait(15)
+        if not self.measured:
+            return None, self.failure or "no sample was taken"
+        if self.failed:
+            return int(self.peak), "%d of %d samples failed: %s" % (self.failed, self.failed + self.measured, self.failure)
+        return int(self.peak), None
 
     def __enter__(self):
         self.thread.start()
@@ -262,15 +354,28 @@ class Meter:
     def __exit__(self, *_):
         self.stopped.set()
         self.thread.join(timeout=15)
-        if self.peak <= 0:
+        peak, reason = self.result()
+        if peak is None:
+            say("memory  : NOT MEASURED - %s" % reason)
             return
+        bound = "at least " if reason else ""
+        caveat = "; %s" % reason if reason else ""
         if self.peak > self.budget:
-            say("memory  : peak %d MB during %s, over the %d MB budget (VERIFY_MEMORY_MB)"
-                % (self.peak, self.peak_phase, self.budget))
+            say("memory  : peak %s%d MB during %s, over the %d MB budget (VERIFY_MEMORY_MB)%s"
+                % (bound, peak, self.peak_phase, self.budget, caveat))
         else:
-            say("memory  : peak %d MB (budget %d MB)" % (self.peak, self.budget))
+            say("memory  : peak %s%d MB (budget %d MB)%s" % (bound, peak, self.budget, caveat))
 
 METER = None
+
+def memory_fields():
+    if not METER:
+        return {"peak_memory_mb": None}
+    peak, reason = METER.result()
+    fields = {"peak_memory_mb": peak}
+    if reason:
+        fields["peak_memory_reason"] = reason
+    return fields
 
 def at_phase(label):
     if METER:
@@ -466,8 +571,7 @@ def write_bundle(ctx, tier, prod, kind):
     green = bool(gates) and all(g.get("exit_code") == 0 for g in executed) and not error \
         and prod["status"] in ("held", "not run")
     bundle = {"commit_sha": head_sha(ctx.root), "product": prod["status"], "verdict": kind,
-              "peak_memory_mb": int(METER.peak) if METER else None,
-              "generated_at": utc_now().isoformat(),
+              **memory_fields(), "generated_at": utc_now().isoformat(),
               "gates": gates, "all_green": green,
               "trust": "self-reported by the process under test; not a receipt", "verified_by": "producer"}
     if error:
@@ -582,8 +686,7 @@ def product_record(ctx, prod):
 def run_record(ctx, sub, begun, result):
     return {"started_at": begun["started_at"], "subcommand": sub, "commit": begun["commit"],
             "tree": begun["tree"], "wall_ms": int((time.monotonic() - begun["clock"]) * 1000),
-            "peak_memory_mb": int(METER.peak) if METER and METER.peak > 0 else None,
-            "exit_code": result["code"], "verdict": result["verdict"],
+            **memory_fields(), "exit_code": result["code"], "verdict": result["verdict"],
             "gates": [gate_record(g) for g in result["gates"]],
             "product": product_record(ctx, result["product"])}
 

@@ -117,6 +117,7 @@ async function navigate(page, url, timeout) {
 }
 
 const ROUTE_KEYS = ["match", "json", "body", "contentType", "status", "delay"];
+const MAX_DELAY_MS = 2 ** 31 - 1;
 const isRoute = (step) => Boolean(step) && typeof step === "object" && !Array.isArray(step) && "route" in step;
 const need = (ok, why) => { if (!ok) throw new Error(why); };
 
@@ -131,7 +132,7 @@ function routeSpec(arg, base) {
   need(body === undefined || typeof body === "string", "'body' must be a string; use 'json' for data");
   need(contentType === undefined || (typeof contentType === "string" && body !== undefined), "'contentType' must be a string and goes with 'body'");
   need(status === undefined || (Number.isInteger(status) && status >= 100 && status <= 599), "'status' must be an integer from 100 to 599");
-  need(Number.isFinite(delay) && delay >= 0, "'delay' must be a number of milliseconds, 0 or more");
+  need(Number.isFinite(delay) && delay >= 0 && delay <= MAX_DELAY_MS, `'delay' must be a number of milliseconds from 0 to ${MAX_DELAY_MS}`);
   const pattern = match.startsWith("/") && /^https?:/.test(base) ? new URL(base).origin + match : match;
   return { match, pattern, delay, response: { status, ...(json !== undefined ? { json, contentType: "application/json" } : { body: body ?? "", contentType }) } };
 }
@@ -443,8 +444,8 @@ async function selftest() {
     await run(items, stacked) === 0 && await run(items, stacked.filter((_, i) => i !== 2).map(quick)) === 1);
   const attempt = (arg) => runStep({ route: async () => {} }, { route: arg }, { base, routes: [] });
   const invalid = await Promise.all([undefined, [], {}, { match: "", json: [] }, { match: api }, { match: api, json: [], typo: 1 },
-    { match: api, json: [], body: "x" }, { match: api, status: 99 }, { match: api, json: [], delay: -1 }, { match: api, json: [], delay: "5" }].map(attempt));
-  const valid = await Promise.all([{ match: api, json: [], status: 404, delay: 10 }, { match: "/api/x", body: "text", contentType: "text/plain" }, { match: api, json: null }].map(attempt));
+    { match: api, json: [], body: "x" }, { match: api, status: 99 }, { match: api, json: [], delay: -1 }, { match: api, json: [], delay: "5" }, { match: api, json: [], delay: 2 ** 31 }].map(attempt));
+  const valid = await Promise.all([{ match: api, json: [], status: 404, delay: 10 }, { match: api, json: [], delay: 2 ** 31 - 1 }, { match: "/api/x", body: "text", contentType: "text/plain" }, { match: api, json: null }].map(attempt));
   chk("route: invalid arguments fail the step with a reason, and a valid one is accepted",
     invalid.every((v) => !v.ok && v.detail.startsWith("cannot route: ")) && valid.every((v) => v.ok) &&
     await run(items, [{ route: { match: api, status: "500" } }, { visible: "#loading" }]) === 1);

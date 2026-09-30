@@ -75,6 +75,36 @@ chk "run log: a red run logs exit code 1, verdict red and the gate's exit 3" "$r
 chk "run log: a run that skips the product check logs none, not an older product.json" "$(rec 1 'rec["product"]')" "{'status': 'not run', 'outcomes': []}"
 VERIFY_MEMORY_MB=0 rverify full >/dev/null
 chk "run log: with the meter off, peak memory is null" "$(rec 2 'rec["peak_memory_mb"]')" "None"
+printf '{"full":[{"name":"nap","cmd":"true"}]}' > "$rl/.claude/gates.json"
+bare="$(mktemp -d)"; mkdir "$bare/bin" "$bare/hooks"
+cp "$PLUGIN/bin/verify" "$bare/bin/"; cp "$PLUGIN/hooks/state.py" "$bare/hooks/"
+CLAUDE_PROJECT_DIR="$rl" bash "$bare/bin/verify" done >/dev/null 2>&1
+chk "run log: a product check that could not run logs no outcomes, not an older product.json" "$(rec 3 '"%s %s" % (rec["product"]["status"], rec["product"]["outcomes"])')" "open []"
+chk "run log: a run that held logs its outcome with a name and a verdict and no reason" "$(rec 0 '[sorted(o) for o in rec["product"]["outcomes"]]')" "[['name', 'verdict']]"
+printf '{"environments":{"local":{"build":"echo boom; exit 3","start":"exec sleep 60","ready":"/"}},"outcomes":[{"name":"Search results","expect":"searching a name lists only matching items","env":"local","check":"exit 0","control":"exit 1"}]}' > "$rl/.claude/acceptance.json"
+rverify product >/dev/null; rc=$?
+chk "run log: a build that exits 3 logs outcome CANNOT RUN, reason build_failed, status 3" "$rc $(rec 4 'rec["product"]["outcomes"]')" "1 [{'name': 'Search results', 'verdict': 'CANNOT RUN', 'reason': 'build_failed', 'status': 3}]"
+printf '{"full":[{"name":"nap","cmd":"exit 3"}]}' > "$rl/.claude/gates.json"
+rverify done >/dev/null
+chk "run log: a run that skips the product check logs no reason, though product.json holds an older CANNOT RUN" "$(grep -c build_failed "$rl/.claude/evidence/product.json") $(rec 5 'rec["product"]')" "1 {'status': 'not run', 'outcomes': []}"
+printf '{"full":[{"name":"nap","cmd":"true"}]}' > "$rl/.claude/gates.json"
+CLAUDE_PROJECT_DIR="$rl" bash "$bare/bin/verify" done >/dev/null 2>&1
+chk "run log: a product check that could not run logs no reason, though product.json holds an older CANNOT RUN" "$(grep -c build_failed "$rl/.claude/evidence/product.json") $(rec 6 'rec["product"]')" "1 {'status': 'open', 'outcomes': []}"
+printf '{"outcomes":[{"name":"a","expect":"e","check":"exit 0","control":"exit 1"},{"name":"b","expect":"e","check":"exit 1","control":"exit 1"},{"name":"c","expect":"e","check":"exit 75"},{"name":"d","expect":"e","check":"exit 0","control":"exit 0"}]}' > "$rl/.claude/acceptance.json"
+rverify product >/dev/null
+chk "run log: only a CANNOT RUN outcome carries a reason, and a check that exits 75 has no status to log" "$(rec 7 'rec["product"]["outcomes"]')" "[{'name': 'a', 'verdict': 'holds'}, {'name': 'b', 'verdict': 'FAILS'}, {'name': 'c', 'verdict': 'CANNOT RUN', 'reason': 'check_cannot_run'}, {'name': 'd', 'verdict': 'NOT PROVEN'}]"
+mkdir -p "$bare/benchmark/gates"
+cat > "$bare/benchmark/gates/acceptance.py" <<'PY'
+import json, sys
+if "--summarize" in sys.argv:
+    print("open"); print("product : stand-in")
+else:
+    path = sys.argv[sys.argv.index("--results") + 1]
+    json.dump({"contract": "ok", "outcomes": [{"name": "old", "verdict": "CANNOT RUN", "detail": "d"}]}, open(path, "w"))
+PY
+CLAUDE_PROJECT_DIR="$rl" bash "$bare/bin/verify" product >/dev/null 2>&1
+chk "run log: a CANNOT RUN that names no reason is logged as unspecified" "$(rec 8 'rec["product"]["outcomes"]')" "[{'name': 'old', 'verdict': 'CANNOT RUN', 'reason': 'unspecified'}]"
+find "$bare" -maxdepth 0 -exec rm -rf {} +
 rm -f "$runlog"; mkdir "$runlog"
 printf '{"full":[{"name":"ok","cmd":"true"}]}' > "$rl/.claude/gates.json"
 out="$(rverify full)"; rc=$?
@@ -133,6 +163,10 @@ chk "skills: only prove and setup ship" "$(ls "$PLUGIN/skills" | tr '\n' ' ')" "
 chk "docs: only how-it-works ships" "$(ls "$PLUGIN/docs" | tr '\n' ' ')" "how-it-works.md "
 missing=""; for v in $(sed -n '/^## Optional settings/,/^## Updating/p' "$PLUGIN/README.md" | grep -oE '`[A-Z][A-Z_]+' | tr -d '`' | sort -u); do grep -rqw "$v" "$PLUGIN/bin" "$PLUGIN/hooks" "$PLUGIN/benchmark/gates" || missing="$missing $v"; done
 chk "every setting the README names exists in the code" "${missing:-none}" "none"
+undocumented=""; for v in $(python3 -B -c 'import importlib.util, sys
+spec = importlib.util.spec_from_file_location("acceptance", sys.argv[1]); mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+print(" ".join(mod.REASONS))' "$PLUGIN/benchmark/gates/acceptance.py"); do grep -q "\`$v\`" "$PLUGIN/README.md" && grep -q "\`$v\`" "$PLUGIN/docs/how-it-works.md" || undocumented="$undocumented $v"; done
+chk "every CANNOT RUN reason the code sets is documented in the README and the docs" "${undocumented:-none}" "none"
 
 echo
 suite "arm"             bash    "$PLUGIN/bin/arm"             selftest

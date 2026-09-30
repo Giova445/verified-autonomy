@@ -1,7 +1,7 @@
 {
   "name": "verified-autonomy",
   "description": "Proves a change works for its user before a PR: declared outcomes checked against the running app, each with a control that must fail. No hooks.",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "license": "MIT",
   "keywords": [
     "gates",

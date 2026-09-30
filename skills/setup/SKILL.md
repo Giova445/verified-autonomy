@@ -69,9 +69,12 @@ you: take them from the user's request, open issues and the README, quote the so
 Page outcomes need `npm i -D playwright` (if missing) and `npx playwright install chromium`, else they
 read CANNOT RUN. Then `./bin/verify product`: every outcome must read `holds`, every control must fail.
 Each check's output is `.claude/evidence/<name>.log`. `NOT PROVEN`: sharpen the control. `CANNOT RUN`:
-app, browser or network; fix `start`/`ready`, read `evidence/server-*.log`. `BLOCKED`: a `needs`
-variable is unset. `FAILS`: fix a wrong check; a real defect stays and goes in your report. Never
-weaken an `expect` to pass.
+read its `reason=`. `build_failed`, `start_failed`: fix `build`, `start` or `ready`, reading
+`evidence/build-*.log` or `server-*.log`; a build that fails on a clean checkout is inherited debt,
+report it. `environment`: the machine or the port, not the contract; report it, rerun once.
+`check_cannot_run`: a dependency the check needs is missing (the browser, above). `contract_invalid`:
+give `start` a `ready`. `harness_error`: report the exception. `BLOCKED`: a `needs` variable is unset.
+`FAILS`: fix a wrong check; a real defect stays and goes in your report. Never weaken an `expect` to pass.
 
 ## 5. Commit
 

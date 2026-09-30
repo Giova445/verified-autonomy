@@ -36,8 +36,8 @@ contract "$d" '{"environments":{'"$LOCAL"'},"outcomes":[
  {"name":"second","expect":"e","env":"local","check":"'"$SEED"'","control":"'"$ABSENT"'"},
  {"name":"third","expect":"e","env":"local","check":"'"$SEED"'","control":"'"$ABSENT"'"}]}'
 run "$d"; PORTS="$PORTS $(portof "$d")"
-chk "the server dies between outcomes: the first holds, the next two are CANNOT RUN, never FAILS" \
-  "$(verdicts "$d") $(closed "$(portof "$d")")" "holds CANNOT RUN CANNOT RUN closed"
+chk "the server dies during the first outcome's control: that outcome never holds, and the next two are CANNOT RUN, never FAILS" \
+  "$(verdicts "$d") $(closed "$(portof "$d")")" "CANNOT RUN CANNOT RUN CANNOT RUN closed"
 show "$d"
 
 d="$(dead_server_repo)"
@@ -54,6 +54,67 @@ contract "$d" '{"environments":{'"$LOCAL"'},"outcomes":[
 run "$d"; PORTS="$PORTS $(portof "$d")"
 chk "the server dies after the check passed, before its control: CANNOT RUN, never holds" \
   "$(verdicts "$d") rc$(cat "$d/rc") $(closed "$(portof "$d")")" "CANNOT RUN rc1 closed"
+show "$d"
+
+d="$(dead_server_repo)"
+contract "$d" '{"environments":{'"$LOCAL"'},"outcomes":[
+ {"name":"dies during its control","expect":"e","env":"local","check":"'"$SEED"'","control":"'"$KILL"'; exit 1"}]}'
+run "$d"; PORTS="$PORTS $(portof "$d")"
+chk "the server dies during the control, the only outcome: CANNOT RUN, never holds, and the run is not green" \
+  "$(verdicts "$d") rc$(cat "$d/rc") $(closed "$(portof "$d")")" "CANNOT RUN rc1 closed"
+show "$d"
+
+WRAPPED='"wrapped":{"start":"echo $PORT > port; '"$SERVE"' & echo $! > server.pid; wait $!; sleep 60","ready":"/"}'
+wrapper_case(){ local kind="$1" check="$2" ctl="$3" d; d="$(dead_server_repo)"
+  contract "$d" '{"environments":{'"$WRAPPED"'},"outcomes":[
+   {"name":"wrapper outlives the server, killed in the '"$kind"'","expect":"e","env":"wrapped","check":"'"$check"'","control":"'"$ctl"'"}]}'
+  run "$d"; PORTS="$PORTS $(portof "$d")"
+  chk "a start wrapper stays alive after its killed server, killed during the $kind: the port stops answering, CANNOT RUN, never FAILS or holds" \
+    "$(verdicts "$d") $(grep -c "stopped during the $kind" "$d/out.txt") $(closed "$(portof "$d")")" "CANNOT RUN 1 closed"
+  show "$d"; }
+wrapper_case check "$SEED && $KILL && $SEED" "exit 1"
+wrapper_case control "$SEED" "$KILL; exit 1"
+
+for shape in adopted:'"reuse":true,"start":"touch started","ready":"/",' bare:''; do
+  pin="$(free_port)"; d="$(dead_server_repo)"; occupy_http "$pin"; echo "$OCC" > "$d/server.pid"
+  contract "$d" '{"environments":{"ext":{"port":'"$pin"','"${shape#*:}"'"vars":{}}},
+   "outcomes":[{"name":"'"${shape%%:*}"' app killed mid-check","expect":"e","env":"ext","check":"curl -fsS $BASE_URL/other-app && '"$KILL"' && curl -fsS $BASE_URL/other-app","control":"exit 1"}]}'
+  run "$d"
+  chk "an app the harness did not start (${shape%%:*}) is killed during its check: CANNOT RUN, never FAILS, and nothing was started" \
+    "$(verdicts "$d") $([ ! -e "$d/started" ] && echo nothing-started) $(closed "$pin")" "CANNOT RUN nothing-started closed"
+  show "$d"
+done
+
+echo "the app crashes by itself"
+
+CRASHY='import http.server, os
+class H(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/crash":
+            os._exit(1)
+        super().do_GET()
+    def log_message(self, *a):
+        pass
+http.server.ThreadingHTTPServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever()'
+CRASHER='"local":{"start":"echo $PORT > port; exec python3 crashy.py","ready":"/"}'
+CRASH='curl -sS $BASE_URL/crash'
+crashy_repo(){ local d; d="$(repo)"; printf '%s' "$CRASHY" > "$d/crashy.py"; printf '%s' "$d"; }
+
+d="$(crashy_repo)"
+contract "$d" '{"environments":{'"$CRASHER"'},"outcomes":[
+ {"name":"crashes on a request during its check","expect":"e","env":"local","check":"'"$SEED"'; '"$CRASH"'","control":"exit 1"},
+ {"name":"next","expect":"e","env":"local","check":"'"$SEED"'","control":"exit 1"}]}'
+run "$d"; PORTS="$PORTS $(portof "$d")"
+chk "the product exits by itself on a request during the check: FAILS, not CANNOT RUN; the outcome after it did not run" \
+  "$(verdicts "$d") $(closed "$(portof "$d")") $(grep -c 'exited with status 1 during the check' "$d/out.txt")" "FAILS CANNOT RUN closed 1"
+show "$d"
+
+d="$(crashy_repo)"
+contract "$d" '{"environments":{'"$CRASHER"'},"outcomes":[
+ {"name":"crashes on a request during its control","expect":"e","env":"local","check":"curl -fsS $BASE_URL/crashy.py >/dev/null","control":"'"$CRASH"'; exit 1"}]}'
+run "$d"; PORTS="$PORTS $(portof "$d")"
+chk "the product exits by itself on a request during the control: FAILS, never holds" \
+  "$(verdicts "$d") rc$(cat "$d/rc") $(closed "$(portof "$d")") $(grep -c 'exited with status 1 during the control' "$d/out.txt")" "FAILS rc1 closed 1"
 show "$d"
 
 echo "occupy the port"
@@ -81,7 +142,7 @@ release "$OCC" "$pin"
 mkdir -p "$TMP/other"; echo other > "$TMP/other/other-app"
 d="$(repo)"; echo built > "$d/id"
 contract "$d" '{"environments":{"local":{
-  "build":"python3 -m http.server $PORT --bind 127.0.0.1 --directory '"$TMP"'/other >/dev/null 2>&1 & echo $! > occupier.pid; until curl -fsS -o /dev/null $BASE_URL/; do sleep 0.1; done",
+  "build":"echo $PORT > port; python3 -m http.server $PORT --bind 127.0.0.1 --directory '"$TMP"'/other >/dev/null 2>&1 & echo $! > occupier.pid; until curl -fsS -o /dev/null $BASE_URL/; do sleep 0.1; done",
   "start":"echo $PORT > port; exec '"$SERVE"'","ready":"/"}},
  "outcomes":[
   {"name":"page loads","expect":"e","env":"local","check":"curl -fsS $BASE_URL/ >/dev/null","control":"'"$ABSENT"'"},

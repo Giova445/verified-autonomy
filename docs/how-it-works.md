@@ -35,17 +35,40 @@ ticket states it.
   exports `BASE_URL=http://localhost:$PORT`, runs `build` unless this tree is already built,
   starts the app, waits for `ready`, runs every outcome, and stops the app. A failed build is
   CANNOT RUN.
-- The environment can fail under a run, and none of these is a product verdict. A port that
-  already accepts connections just before `start` (taken during `build`, say) is CANNOT RUN,
-  and `start` is not run beside it. The harness watches the `start` process itself: if it has
-  exited before an outcome, or by the time that outcome's check returns, the outcome is CANNOT
-  RUN ("the app stopped during the check"), never FAILS or holds. What it cannot see: an
-  environment with no `start`, or with `"reuse": true` (that app is not the harness's to
-  watch, and `reuse` also skips the port check); a `start` wrapper that stays alive after the
-  app inside it died; an app that stops during a control or after the last outcome (a control
-  may take the app down on purpose, so the outcome keeps its verdict and the next outcome
-  reports the stop); and an app that crashes because of the check, which reads CANNOT RUN with
-  the exit status and `server-<env>.log` named. `start` must stay in the foreground.
+- The environment can fail under a run. A port that already accepts connections just before
+  `start` (taken during `build`, say) is CANNOT RUN, and `start` is not run beside it. The harness
+  watches the `start` process and the port it answered on. An outcome whose app is gone before
+  it runs, or by the time its check or its control returns, is never `holds`: a control that
+  fails against a dead app shows nothing. If the process was ended by a signal, or a shell
+  wrapper reports one (exit 128 plus the signal), or the port stopped accepting connections,
+  the outcome is CANNOT RUN ("the app stopped during the check", or "control"). If the process
+  exited by itself with a status, the product crashed and the outcome FAILS ("the app exited
+  with status N during the check", with `server-<env>.log` named). The outcomes after it are
+  CANNOT RUN, because there was no app to check. A port is watched once it has been seen
+  answering in this run, so `reuse` and port-only environments are covered, and an app that
+  never listens on `$PORT` is not.
+- What it cannot tell. A crash by a fault signal (SIGSEGV, SIGABRT) reads CANNOT RUN like any
+  signal. A wrapper that stays alive while its server dies by itself reads CANNOT RUN, because
+  only the port shows it. An app that exits by itself for a cause outside the product reads
+  FAILS, and one that exits on SIGTERM with status 0 after a control stopped it on purpose reads
+  FAILS too. A shell wrapper that reports 128 plus a signal for a product that called
+  `exit(137)` itself reads CANNOT RUN. A `reuse` or port-only app that never answered has
+  nothing to watch, and if another process takes over its port it looks alive. A crash that
+  comes after the request was answered is blamed on the outcome running then, and one that
+  comes after the last check or control has returned is not seen. `start` must stay in the
+  foreground.
+- Why a CANNOT RUN. Each one carries a `reason` in `.claude/evidence/product.json`, on its
+  printed line (`reason=build_failed`) and in a count (`2 could not be checked: 1 build_failed,
+  1 environment`), so a broken build reads differently from a broken machine. `build_failed`: the
+  environment's `build` exited non-zero, or gave no answer in time (`command` and `status` or
+  `timeout` are recorded). `start_failed`: `start` exited before `ready` passed, or `ready` never
+  passed (`status` or `timeout`). `environment`: the port was already served or taken, the app was
+  ended by a signal (before `ready`, between outcomes, or during a check or control), or its port
+  stopped answering. `check_cannot_run`: the check or the control exited 75 (`stage` says which).
+  `contract_invalid`: `start` is declared with no `ready`. `harness_error`: `acceptance.py` itself
+  raised. The reason names the step that could not run, not a proven cause: a signal can be an
+  out-of-memory kill or a crash, and a `start` that dies binding a port taken a moment earlier
+  reads `start_failed`. It changes no verdict and no exit code.
 - `outcomes`: `name`, `expect` (the user's words), `check`, and optionally `control`, `needs`
   and `env`. A check exits 0 when the outcome holds and 75 when it cannot run. Any other exit
   fails. A control is a variant that must fail. If it passes, the check proves nothing.
@@ -77,8 +100,10 @@ screenshots to `.claude/evidence/shots/`.
 `exit_code`, `verdict` (`green`, `red`, `config`, `noverdict`, `product` or `empty`), `gates`
 (`name`, `exit_code`, `duration_ms`, `skipped` for each; `null` where a gate did not run or gave
 no answer) and `product` (`status`, and each outcome's `name` and `verdict` when the product
-check ran). Every value is measured by the run. A run killed by a signal writes no line, and a
-log that cannot be written warns and does not change the run.
+check ran; a `CANNOT RUN` outcome also carries its `reason`, `unspecified` when the harness named
+none, and its `status` when the step exited with one; no other verdict carries either). Every
+value is measured by the run: an older `product.json` is never read into it. A run killed by a
+signal writes no line, and a log that cannot be written warns and does not change the run.
 
 ## Limits
 

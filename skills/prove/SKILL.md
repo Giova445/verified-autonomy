@@ -20,9 +20,20 @@ fix it once and re-run; if it still fails, say what failed and hand it back.
 | `holds` | the check passed, and its control failed | nothing |
 | `FAILS` | the app did not do what the user expects | fix the code, not the check or the expectation |
 | `NOT PROVEN` | the control passed too | the check cannot tell broken from working; sharpen it |
-| `CANNOT RUN` | the app would not start, or the check exited 75 | read `.claude/evidence/server-*.log` |
+| `CANNOT RUN` | it could not be checked; the line's `reason=` says why | act on the reason below |
 | `BLOCKED` | a credential in `needs` is not set | say which; a person supplies it |
 | `NO VERDICT` | it ran out of time | say so; do not raise the timeout to get a pass |
+
+A `reason` names the step that could not run, not a proven cause. The fix-once rule applies to all of them.
+
+| `reason` | Do |
+|---|---|
+| `build_failed`, `start_failed` | the change broke the project's own build or start: read `.claude/evidence/build-*.log` or `server-*.log`, fix the code, never retry blindly |
+| `environment` | the machine or the port, not the change: report it, rerun once |
+| `check_cannot_run` | the check's own dependency is missing (a browser, a tool): install it or report it |
+| `contract_invalid` | fix `.claude/acceptance.json` |
+| `harness_error` | report the exception in its detail line |
+| `unspecified` | the harness named no known reason: read the detail line, report it |
 
 ## Where expectations come from
 

@@ -11,6 +11,17 @@ it was removed. What is left is the part other tools do not do: declared, user-v
 each with a control that must fail, checked against the running app. Details and limits:
 [docs/how-it-works.md](docs/how-it-works.md).
 
+## Status and results
+
+The measured evidence does not show ticket-sourced outcomes catching real escaped defects.
+Outcomes written from the descriptions of real pull requests caught 0 of 10 confirmed defects
+when replayed on a private production web app's history (Wilson 95% 0 to 28%), and 0 of 4 when
+the ticket also carried a data contract. What the evidence does support: the checker is
+mechanically sound, and outcomes a spec agent wrote from a ticket caught 128 of 138 planted
+faults in small fixture apps (92.8%). Numbers, sources and limits:
+[docs/results.md](docs/results.md). Rules a built-in /verify could take from this:
+[docs/verify-recipe.md](docs/verify-recipe.md).
+
 ## Install
 
 ```

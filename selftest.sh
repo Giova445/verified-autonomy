@@ -218,7 +218,7 @@ suite() {
 leak="$(git -C "$PLUGIN" grep -n -I -E '(/Users/|/home/)[A-Za-z0-9_.-]+/' -- . ':!selftest.sh' 2>/dev/null | head -3)"
 chk "no absolute machine paths in tracked files" "${leak:-none}" "none"
 chk "skills: only prove and setup ship" "$(ls "$PLUGIN/skills" | tr '\n' ' ')" "prove setup "
-chk "docs: only how-it-works ships" "$(ls "$PLUGIN/docs" | tr '\n' ' ')" "how-it-works.md "
+chk "docs: only how-it-works, results and the verify recipe ship" "$(ls "$PLUGIN/docs" | tr '\n' ' ')" "how-it-works.md results.md verify-recipe.md "
 missing=""; for v in $(sed -n '/^## Optional settings/,/^## Updating/p' "$PLUGIN/README.md" | grep -oE '`[A-Z][A-Z_]+' | tr -d '`' | sort -u); do grep -rqw "$v" "$PLUGIN/bin" "$PLUGIN/hooks" "$PLUGIN/benchmark/gates" || missing="$missing $v"; done
 chk "every setting the README names exists in the code" "${missing:-none}" "none"
 undocumented=""; for v in $(python3 -B -c 'import importlib.util, sys

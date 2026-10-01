@@ -95,22 +95,35 @@ it does not fail the run. Measured on a Next.js app: a full `verify done` (typec
 one-worker build, the product check on the production server) peaks near 360 MB; a `next dev`
 server alone is about 480 MB and an uncapped `next build` about 830 MB.
 
+The meter reads the process tree from `ps`. Where `ps` cannot run (a macOS `sandbox-exec` profile
+cannot execute the setuid `/bin/ps`; a minimal container may have none) it walks `pgrep -P`
+instead, which returned the same tree in the same sandbox. A meter that cannot see the tree would
+report only its own process, a small number that looks like a pass, so it never does. When
+neither tool can list the child processes, or the memory reading itself fails, it prints
+`memory  : NOT MEASURED - could not list child processes (ps exited 1; pgrep listed no
+processes)` (or `could not read process memory (...)`) in place of a peak. The budget is then
+unchecked, not met. When only some samples fail, the line reads `peak at least N MB` and counts
+the failed samples: a lower bound, not a measurement.
+
 ## Evidence
 
-`.claude/evidence/latest.json` records the commit, each gate's command and exit code, and the
-product status. Each check's output is in `.claude/evidence/<name>.log`; browser checks save
-screenshots to `.claude/evidence/shots/`.
+`.claude/evidence/latest.json` records the commit, each gate's command and exit code, the
+product status, and `peak_memory_mb` with the same `peak_memory_reason`. Each check's output is
+in `.claude/evidence/<name>.log`; browser checks save screenshots to `.claude/evidence/shots/`.
 
 `.claude/evidence/runs.jsonl` gets one line per `done`, `product`, `full` or `fast` run:
 `started_at` (UTC), `subcommand`, `commit` (HEAD), `tree` (the fingerprint when the run began),
-`wall_ms`, `peak_memory_mb` (the highest sample; `null` when the meter is off or cannot measure),
-`exit_code`, `verdict` (`green`, `red`, `config`, `noverdict`, `product` or `empty`), `gates`
-(`name`, `exit_code`, `duration_ms`, `skipped` for each; `null` where a gate did not run or gave
-no answer) and `product` (`status`, and each outcome's `name` and `verdict` when the product
-check ran; a `CANNOT RUN` outcome also carries its `reason`, `unspecified` when the harness named
-none, and its `status` when the step exited with one; no other verdict carries either). Every
-value is measured by the run: an older `product.json` is never read into it. A run killed by a
-signal writes no line, and a log that cannot be written warns and does not change the run.
+`wall_ms`, `peak_memory_mb` (the highest sample; `null` when the meter is off or could not measure),
+`peak_memory_reason` (only when the meter ran but could not take every sample: beside a `null` peak
+nothing was measured, beside a number the peak is a lower bound; a `null` peak without a reason
+means the meter was off), `exit_code`, `verdict` (`green`, `red`, `config`, `noverdict`, `product`
+or `empty`), `gates` (`name`, `exit_code`, `duration_ms`, `skipped` for each; `null` where a gate
+did not run or gave no answer) and `product` (`status`, and each outcome's `name` and `verdict`
+when the product check ran; a `CANNOT RUN` outcome also carries its `reason`, `unspecified` when
+the harness named none, and its `status` when the step exited with one; no other verdict carries
+either). Every value is measured by the run: an older `product.json` is never read into it. A run
+killed by a signal writes no line, and a log that cannot be written warns and does not change the
+run.
 
 ## Limits
 

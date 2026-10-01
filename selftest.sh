@@ -111,6 +111,64 @@ out="$(rverify full)"; rc=$?
 chk "run log: an unwritable log warns in one line and does not change the run" "$rc $(printf '%s\n' "$out" | grep -c 'run log not written')" "0 1"
 find "$rl" -maxdepth 0 -exec rm -rf {} +
 
+mm="$(mktemp -d)"; mkdir -p "$mm/.claude"
+( cd "$mm" && git init -q . && git config user.email t@t && git config user.name t && echo a > app.txt && git add -A && git commit -qm init ) >/dev/null 2>&1
+printf '{"full":[{"name":"hog","cmd":"python3 -c \\"b=b\x27x\x27*(300<<20); import time; time.sleep(2)\\""}]}' > "$mm/.claude/gates.json"
+mverify(){ CLAUDE_PROJECT_DIR="$mm" bash "$PLUGIN/bin/verify" "$@" 2>&1; }
+runlog="$mm/.claude/evidence/runs.jsonl"
+latest(){ python3 - "$mm/.claude/evidence/latest.json" "$1" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(eval(sys.argv[2]))
+PY
+}
+real_ps="$(command -v ps)"
+shim_exit1(){ local dir="$1" tool; shift; mkdir -p "$dir"; for tool in "$@"; do printf '#!/bin/sh\nexit 1\n' > "$dir/$tool"; chmod +x "$dir/$tool"; done; }
+blind="could not list child processes (ps exited 1; pgrep listed no processes)"
+shim="$mm/shim-blind"; shim_exit1 "$shim" ps pgrep
+out="$(PATH="$shim:$PATH" mverify full)"
+printf '%s' "$out" | grep -qxF "memory  : NOT MEASURED - $blind" \
+  && ! printf '%s' "$out" | grep -q '^memory  : peak' && r=named || r="silent: $(printf '%s' "$out" | grep memory)"
+chk "memory: no way to list child processes -> NOT MEASURED, not a small peak" "$r" "named"
+chk "memory: NOT MEASURED -> runs.jsonl holds a null peak and the reason" "$(rec -1 '"%s | %s" % (rec["peak_memory_mb"], rec.get("peak_memory_reason"))')" "None | $blind"
+chk "memory: NOT MEASURED -> latest.json holds a null peak and the reason" "$(latest '"%s | %s" % (d["peak_memory_mb"], d.get("peak_memory_reason"))')" "None | $blind"
+shim="$mm/shim-ps"; shim_exit1 "$shim" ps
+out="$(PATH="$shim:$PATH" mverify full)"
+n="$(printf '%s' "$out" | sed -n 's/^memory  : peak \([0-9]*\) MB (budget 600 MB)$/\1/p')"
+[ "${n:-0}" -ge 250 ] && r=measured || r="not: $(printf '%s' "$out" | grep memory)"
+chk "memory: ps failing but pgrep working -> the hog's 300 MB is measured" "$r" "measured"
+chk "memory: the fallback logs the peak and no reason" "$(rec -1 'rec["peak_memory_mb"] >= 250 and "peak_memory_reason" not in rec')" "True"
+shim="$mm/shim-flaky"; shim_exit1 "$shim" pgrep
+cat > "$shim/ps" <<SH
+#!/bin/sh
+n=\$(cat "$shim/count" 2>/dev/null || echo 0); n=\$((n + 1)); echo \$n > "$shim/count"
+[ \$((n % 2)) -eq 0 ] && exit 1
+exec "$real_ps" "\$@"
+SH
+chmod +x "$shim/ps"
+out="$(PATH="$shim:$PATH" mverify full)"
+printf '%s' "$out" | grep -q '^memory  : peak at least [0-9]* MB (budget 600 MB); [0-9]* of [0-9]* samples failed: could not list child processes (' && r=named || r="silent: $(printf '%s' "$out" | grep memory)"
+chk "memory: some samples failing -> the peak is reported as a lower bound" "$r" "named"
+chk "memory: a lower bound is logged as a number with the reason" "$(rec -1 '"%s %s" % (type(rec["peak_memory_mb"]).__name__, "samples failed" in rec.get("peak_memory_reason", ""))')" "int True"
+sbp='(version 1)(allow default)(deny process-exec (literal "/bin/ps"))'
+if command -v sandbox-exec >/dev/null 2>&1 && sandbox-exec -p "$sbp" true >/dev/null 2>&1 && ! sandbox-exec -p "$sbp" /bin/ps -A >/dev/null 2>&1; then
+  CLAUDE_PROJECT_DIR="$mm" sandbox-exec -p "$sbp" bash "$PLUGIN/bin/verify" full >/dev/null 2>&1
+  chk "memory: under sandbox-exec with /bin/ps denied, the hog is still measured" "$(rec -1 'rec["peak_memory_mb"] >= 250 and "peak_memory_reason" not in rec')" "True"
+else
+  printf '  skip  %-52s (sandbox-exec is unavailable or does not deny /bin/ps here)\n' "memory: under sandbox-exec with /bin/ps denied"
+fi
+if [ "$(uname -s)" = Darwin ]; then
+  shim="$mm/shim-footprint"; shim_exit1 "$shim" footprint
+  out="$(PATH="$shim:$PATH" mverify full)"
+  printf '%s' "$out" | grep -qxF "memory  : NOT MEASURED - could not read process memory (footprint exited 1 and printed no reading)" \
+    && r=named || r="silent: $(printf '%s' "$out" | grep memory)"
+  chk "memory: footprint failing -> NOT MEASURED, not a zero or a small peak" "$r" "named"
+  chk "memory: footprint failing -> latest.json holds a null peak, not 0" "$(latest '"%s" % d["peak_memory_mb"]')" "None"
+else
+  printf '  skip  %-52s (footprint is macOS only)\n' "memory: footprint failing"
+fi
+find "$mm" -maxdepth 0 -exec rm -rf {} +
+
 fc(){ printf '%s' "$2" > "$tmp/.claude/gates.json"; verify done >/dev/null; chk "$1" "$?" "1"; }
 fc "unparseable config -> refuse"   '{"full":[{"name":"u","cmd":"exit 0"},]}'
 fc "empty full tier -> refuse"      '{"full":[]}'
